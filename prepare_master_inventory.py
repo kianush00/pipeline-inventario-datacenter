@@ -1,5 +1,5 @@
 """
-preparar_inventario_padre.py
+prepare_master_inventory.py
 ============================
 Convierte un inventario padre en formato ODS a CSV limpio,
 validando que las columnas definidas en header_list.txt aparezcan
@@ -10,7 +10,7 @@ relevante. Pueden existir columnas adicionales en el ODS; éstas
 se conservan sin tocar.
 
 Uso:
-    python3 preparar_inventario_padre.py inventario.ods [header_list.txt]
+    python3 prepare_master_inventory.py master_inventory.ods [header_list.txt]
 
 Si no se indica la ruta de header_list.txt, se busca un archivo
 llamado "header_list.txt" en el mismo directorio que este script.
@@ -25,7 +25,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from inventario_base import (
+from base_inventory import (
     clean_value,
     error,
     load_header_list,

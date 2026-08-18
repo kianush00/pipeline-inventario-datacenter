@@ -1,5 +1,5 @@
 """
-fusionar_inventarios.py
+merge_inventories.py
 =======================
 Fusiona un inventario "parseado" sobre un inventario "padre"
 (source of truth), usando como clave de fusión la columna cuyo
@@ -46,10 +46,10 @@ La unión se comporta como un LEFT JOIN:
   inventarios.
 
 Uso:
-    python3 fusionar_inventarios.py \
-        inventario_parseado.csv \
-        inventario_padre.csv \
-        inventario_fusionado.csv \
+    python3 merge_inventories.py \
+        parsed_inventory.csv \
+        master_inventory.csv \
+        merged_inventory.csv \
         [header_list.txt]
 
 Si no se indica la ruta de header_list.txt, se busca un archivo
@@ -59,7 +59,7 @@ llamado "header_list.txt" en el mismo directorio que este script.
 import sys
 from pathlib import Path
 
-from inventario_base import (
+from base_inventory import (
     error,
     is_empty_or_na,
     load_header_list,

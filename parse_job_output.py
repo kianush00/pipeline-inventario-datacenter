@@ -1,5 +1,5 @@
 """
-parsear_salida_job.py
+parse_job_output.py
 =====================
 Normaliza la salida cruda del job de Rundeck a un CSV con el layout de
 columnas definido en header_list.txt.
@@ -33,7 +33,7 @@ exactamente en header_list.txt provoca un error fatal y el script
 termina con código de salida 1.
 
 Uso:
-    python3 parsear_salida_job.py archivo_entrada.log archivo_salida.csv [header_list.txt]
+    python3 parse_job_output.py job_output.txt parsed_job_output.csv [header_list.txt]
 
 Si no se indica la ruta de header_list.txt, se busca un archivo
 llamado "header_list.txt" en el mismo directorio que este script.
@@ -42,7 +42,7 @@ llamado "header_list.txt" en el mismo directorio que este script.
 import sys
 from pathlib import Path
 
-from inventario_base import (
+from base_inventory import (
     error,
     load_header_list,
     split_quoted_csv_line,
