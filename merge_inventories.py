@@ -1,7 +1,7 @@
 """
 merge_inventories.py
 =======================
-Fusiona un inventario "parseado" sobre un inventario "padre"
+Fusiona un inventario "parseado" sobre un inventario "maestro"
 (source of truth), usando como clave de fusión la columna cuyo
 FLAG en header_list.txt sea 2.
 
@@ -11,21 +11,21 @@ header_list.txt con formato:
     NOMBRE_COLUMNA|FLAG
 
 donde FLAG indica:
-    0 → conservar el valor del inventario padre
+    0 → conservar el valor del inventario maestro
     1 → permitir que el valor del inventario parseado
-        sobrescriba al del padre (si no está vacío ni es "N/A")
+        sobrescriba al del maestro (si no está vacío ni es "N/A")
     2 → columna utilizada como clave de unión
 
 Debe existir exactamente una columna con FLAG 2.
 
 La columna con FLAG 2 puede tener cualquier nombre. Ese nombre
-se utiliza como clave de unión tanto en el inventario padre
+se utiliza como clave de unión tanto en el inventario maestro
 como en el inventario parseado.
 
 Las posiciones de las columnas se detectan automáticamente
 leyendo los headers de ambos CSV.
 
-El inventario padre es la base:
+El inventario maestro es la base:
 - Todas sus filas se conservan en el CSV de salida.
 - Las columnas adicionales no definidas en header_list.txt
   se conservan sin fusionar.
@@ -36,10 +36,10 @@ El inventario padre es la base:
   de unión y nunca se sobrescribe.
 
 La unión se comporta como un LEFT JOIN:
-- Si la clave del padre no existe en el parseado, la fila del
-  padre se conserva sin modificar.
-- Si la clave del padre es vacía, N/A o "Not Settable", la fila
-  del padre se conserva sin fusionar.
+- Si la clave del maestro no existe en el parseado, la fila del
+  maestro se conserva sin modificar.
+- Si la clave del maestro es vacía, N/A o "Not Settable", la fila
+  del maestro se conserva sin fusionar.
 - Si una clave aparece más de una vez en cualquiera de los dos
   inventarios, las filas afectadas se conservan sin fusionar.
 - Solo se fusionan filas cuya clave sea válida y única en ambos
@@ -265,7 +265,7 @@ def load_parsed_data(
 
 
 # ============================================================
-# VALIDAR UNICIDAD DE CLAVES EN EL INVENTARIO PADRE
+# VALIDAR UNICIDAD DE CLAVES EN EL INVENTARIO MAESTRO
 # ============================================================
 
 def validate_parent_keys(
@@ -274,7 +274,7 @@ def validate_parent_keys(
     key_idx: int,
 ) -> set[str]:
     """
-    Recorre el inventario padre y detecta claves duplicadas.
+    Recorre el inventario maestro y detecta claves duplicadas.
 
     Retorna el conjunto de claves duplicadas.
 
@@ -300,7 +300,7 @@ def validate_parent_keys(
 
             if fields is None:
                 print(
-                    f"[ERROR] Línea {line_number} del inventario padre: "
+                    f"[ERROR] Línea {line_number} del inventario maestro: "
                     "comillas desbalanceadas.",
                     file=sys.stderr
                 )
@@ -308,7 +308,7 @@ def validate_parent_keys(
 
             if len(fields) != parent_total_columns:
                 print(
-                    f"[ERROR] Línea {line_number} del inventario padre: "
+                    f"[ERROR] Línea {line_number} del inventario maestro: "
                     f"se esperaban {parent_total_columns} campos, "
                     f"pero se encontraron {len(fields)}.",
                     file=sys.stderr
@@ -327,7 +327,7 @@ def validate_parent_keys(
 
     for key in sorted(duplicated_keys):
         print(
-            f"[WARNING] Clave duplicada en el inventario padre: "
+            f"[WARNING] Clave duplicada en el inventario maestro: "
             f"'{key}'. Las filas con esta clave no serán fusionadas.",
             file=sys.stderr
         )
@@ -344,7 +344,7 @@ def main() -> None:
         print(
             f"Uso: {sys.argv[0]} "
             "inventario_parseado.csv "
-            "inventario_padre.csv "
+            "inventario_maestro.csv "
             "inventario_fusionado.csv "
             "[header_list.txt]"
         )
@@ -360,7 +360,7 @@ def main() -> None:
 
     for path, label in (
         (input_parsed_path, "inventario parseado"),
-        (input_parent_path, "inventario padre"),
+        (input_parent_path, "inventario maestro"),
     ):
         if not path.is_file():
             error(f"No se encontró el {label}: {path}")
@@ -392,7 +392,7 @@ def main() -> None:
     key_parsed_idx = parsed_positions[key_name]
 
     # --------------------------------------------------------
-    # Leer y validar header del inventario padre.
+    # Leer y validar header del inventario maestro.
     # --------------------------------------------------------
     parent_header_line, parent_header_fields = read_header(
         input_parent_path
@@ -447,13 +447,13 @@ def main() -> None:
     # Resumen informativo.
     # --------------------------------------------------------
     print(f"Columnas definidas en header_list : {defined_fields}")
-    print(f"Columnas totales en el padre      : {parent_total_columns}")
+    print(f"Columnas totales en el maestro    : {parent_total_columns}")
 
     if extra_columns > 0:
-        print(f"Columnas adicionales del padre    : {extra_columns}")
+        print(f"Columnas adicionales del maestro  : {extra_columns}")
 
     print(f"Clave de unión                    : {key_name}")
-    print(f"Posición de clave en el padre     : {key_parent_idx + 1}")
+    print(f"Posición de clave en el maestro   : {key_parent_idx + 1}")
     print(f"Posición de clave en el parseado  : {key_parsed_idx + 1}")
     print(f"Claves válidas en el parseado     : {len(parsed_data)}")
     print(
@@ -461,22 +461,22 @@ def main() -> None:
         f"{len(parsed_duplicated_keys)}"
     )
     print(
-        f"Claves duplicadas en el padre     : "
+        f"Claves duplicadas en el maestro   : "
         f"{len(parent_duplicated_keys)}"
     )
 
     # --------------------------------------------------------
-    # Leer inventario padre, realizar LEFT JOIN y escribir salida.
+    # Leer inventario maestro, realizar LEFT JOIN y escribir salida.
     #
-    # TODAS las filas del padre se conservan.
+    # TODAS las filas del maestro se conservan.
     #
     # Una fila solamente se modifica si:
     #   1. Tiene una clave válida.
-    #   2. La clave es única en el padre.
+    #   2. La clave es única en el maestro.
     #   3. La clave existe en el parseado.
     #   4. La clave es única en el parseado.
     #
-    # Si alguna condición falla, la fila del padre se escribe
+    # Si alguna condición falla, la fila del maestro se escribe
     # sin fusionar.
     # --------------------------------------------------------
     with (
@@ -491,7 +491,7 @@ def main() -> None:
             errors="replace",
         ) as in_f,
     ):
-        # Header del padre sin modificar.
+        # Header del maestro sin modificar.
         out_f.write(parent_header_line + "\n")
         next(in_f, None)
 
@@ -505,7 +505,7 @@ def main() -> None:
 
             if fields is None:
                 print(
-                    f"[ERROR] Línea {line_number} del inventario padre: "
+                    f"[ERROR] Línea {line_number} del inventario maestro: "
                     "comillas desbalanceadas.",
                     file=sys.stderr
                 )
@@ -513,7 +513,7 @@ def main() -> None:
 
             if len(fields) != parent_total_columns:
                 print(
-                    f"[ERROR] Línea {line_number} del inventario padre: "
+                    f"[ERROR] Línea {line_number} del inventario maestro: "
                     f"se esperaban {parent_total_columns} campos, "
                     f"pero se encontraron {len(fields)}.",
                     file=sys.stderr
@@ -524,14 +524,14 @@ def main() -> None:
 
             # ------------------------------------------------
             # Clave inválida:
-            # conservar la fila del padre sin fusionar.
+            # conservar la fila del maestro sin fusionar.
             # ------------------------------------------------
             if key in ("", "N/A", "Not Settable"):
                 out_f.write(",".join(fields) + "\n")
                 continue
 
             # ------------------------------------------------
-            # Clave duplicada en el padre:
+            # Clave duplicada en el maestro:
             # conservar la fila sin fusionar.
             # ------------------------------------------------
             if key in parent_duplicated_keys:
@@ -540,11 +540,11 @@ def main() -> None:
 
             # ------------------------------------------------
             # La clave no existe en el parseado:
-            # LEFT JOIN -> conservar la fila del padre.
+            # LEFT JOIN -> conservar la fila del maestro.
             # ------------------------------------------------
             if key not in parsed_data:
                 print(
-                    f"[WARNING] Línea {line_number} del inventario padre: "
+                    f"[WARNING] Línea {line_number} del inventario maestro: "
                     f"la clave '{key}' no existe en el inventario "
                     "parseado. La fila se conservará sin fusionar.",
                     file=sys.stderr
@@ -574,7 +574,7 @@ def main() -> None:
     print()
     print("[OK] Inventarios fusionados correctamente.")
     print(f"Inventario parseado : {input_parsed_path}")
-    print(f"Inventario padre    : {input_parent_path}")
+    print(f"Inventario maestro  : {input_parent_path}")
     print(f"Inventario salida   : {output_path}")
 
 

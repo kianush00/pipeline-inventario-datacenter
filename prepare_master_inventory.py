@@ -1,7 +1,7 @@
 """
 prepare_master_inventory.py
 ============================
-Convierte un inventario padre en formato ODS a CSV limpio,
+Convierte un inventario maestro en formato ODS a CSV limpio,
 validando que las columnas definidas en header_list.txt aparezcan
 en el header del ODS con sus nombres exactos.
 
@@ -260,7 +260,7 @@ def process_csv(
         )
 
     print(
-        f"Columnas encontradas en el inventario padre: "
+        f"Columnas encontradas en el inventario maestro: "
         f"{len(source_header)}"
     )
 
@@ -275,7 +275,7 @@ def process_csv(
 
     if unnamed_columns:
         error(
-            "El header del inventario padre contiene "
+            "El header del inventario maestro contiene "
             "columnas sin nombre en las siguientes posiciones:\n"
             + "\n".join(
                 f"  - posición {position}"
@@ -296,7 +296,7 @@ def process_csv(
 
     if duplicated_headers:
         error(
-            "El header del inventario padre contiene columnas "
+            "El header del inventario maestro contiene columnas "
             "duplicadas:\n"
             + "\n".join(f"  - {name}" for name in duplicated_headers)
         )

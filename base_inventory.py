@@ -12,12 +12,13 @@ No se ejecuta directamente.
 
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 # ============================================================
 # SALIDA DE ERROR FATAL
 # ============================================================
 
-def error(message: str) -> None:
+def error(message: str) -> NoReturn:
     """Imprime un mensaje de error en stderr y termina con exit 1."""
     print(f"[ERROR] {message}", file=sys.stderr)
     sys.exit(1)
@@ -39,7 +40,7 @@ def error(message: str) -> None:
 #
 # El orden de las líneas define el orden lógico de las columnas
 # que interesan al pipeline. Las columnas intermedias del
-# inventario padre que no aparezcan en header_list.txt se
+# inventario maestro que no aparezcan en header_list.txt se
 # conservan sin tocar y nunca se fusionan.
 # ============================================================
 
@@ -55,6 +56,7 @@ def load_header_list(path: Path) -> list[tuple[str, int]]:
     - NOMBRE no puede estar vacío.
     - FLAG debe ser '0', '1' o '2'.
     - No puede haber nombres duplicados.
+    - Debe existir exactamente una columna con FLAG 2.
 
     Parámetros
     ----------
@@ -123,6 +125,24 @@ def load_header_list(path: Path) -> list[tuple[str, int]]:
     if not entries:
         error("header_list está vacío (sin entradas válidas).")
 
+    key_entries = [
+        name
+        for name, flag in entries
+        if flag == 2
+    ]
+
+    if len(key_entries) != 1:
+        error(
+            "header_list debe contener exactamente una columna "
+            f"con FLAG 2, pero se encontraron {len(key_entries)}.\n"
+            + (
+                "Columnas con FLAG 2:\n"
+                + "\n".join(f"  - {name}" for name in key_entries)
+                if key_entries
+                else "No existe ninguna columna con FLAG 2."
+            )
+        )
+
     return entries
 
 
@@ -141,11 +161,16 @@ def split_quoted_csv_line(line: str) -> list[str] | None:
     """
     Divide una línea CSV respetando campos entrecomillados.
 
+    Se elimina defensivamente cualquier terminador de línea
+    residual (CR, LF o CRLF) antes de procesar la línea.
+
     Cada campo se devuelve tal como aparece en el texto, comillas
     incluidas. No des-escapa comillas dobles internas.
 
     Retorna None si las comillas están desbalanceadas.
     """
+    line = line.rstrip("\r\n")
+
     fields: list[str] = []
     field_chars: list[str] = []
     in_quotes = False
@@ -174,7 +199,7 @@ def split_quoted_csv_line(line: str) -> list[str] | None:
     fields.append("".join(field_chars))
 
     if in_quotes:
-        return None  # comillas desbalanceadas
+        return None
 
     return fields
 
@@ -186,6 +211,10 @@ def split_quoted_csv_line(line: str) -> list[str] | None:
 def strip_quotes(value: str) -> str:
     """Elimina las comillas externas de un campo CSV y des-escapa
     las comillas dobles internas.
+
+    Asume que el valor proviene de split_quoted_csv_line() y que
+    las comillas del campo ya fueron validadas allí. Esta función
+    no valida por sí misma si existen comillas desbalanceadas.
 
     Ejemplos:
         '"hello"' -> 'hello'
@@ -202,16 +231,19 @@ def strip_quotes(value: str) -> str:
 
 
 def is_empty_or_na(value: str) -> bool:
-    """Retorna True si el valor, con o sin comillas, es vacío o 'N/A'.
+    """Retorna True si el valor, con o sin comillas, es vacío,
+    contiene solamente espacios en blanco o es 'N/A'.
 
     Ejemplos:
         '' -> True
+        '   ' -> True
         'N/A' -> True
         '""' -> True
         '"N/A"' -> True
+        '"   "' -> True
         'hello' -> False
     """
-    return strip_quotes(value) in ("", "N/A")
+    return strip_quotes(value).strip() in ("", "N/A")
 
 
 def clean_value(value: str) -> str:
@@ -219,6 +251,9 @@ def clean_value(value: str) -> str:
 
     Los saltos de línea se reemplazan por un espacio para evitar
     concatenar palabras artificialmente.
+
+    El orden de los reemplazos es deliberado: CRLF se procesa
+    primero para evitar que '\\r\\n' sea convertido en dos espacios.
 
     Ejemplos:
         'hello\\nworld' -> 'hello world'
