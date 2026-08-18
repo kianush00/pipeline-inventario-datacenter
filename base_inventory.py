@@ -1,11 +1,11 @@
 """
-inventario_base.py
+base_inventory.py
 ==================
 Módulo de utilidades compartido por los tres scripts de inventario:
 
-    preparar_inventario_padre.py
-    parsear_salida_job.py
-    fusionar_inventarios.py
+    prepare_master_inventory.py
+    parse_job_output.py
+    merge_inventories.py
 
 No se ejecuta directamente.
 """

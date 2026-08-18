@@ -19,6 +19,7 @@ El CSV de salida se genera automáticamente en el mismo directorio
 del ODS, utilizando el mismo nombre y cambiando la extensión a .csv.
 """
 
+import csv
 import shutil
 import subprocess
 import sys
@@ -125,13 +126,40 @@ def process_csv(
     # Leer todas las filas del CSV.
     # --------------------------------------------------------
     try:
-        with source_csv.open("r", encoding="utf-8-sig", newline="") as file:
-            import csv
+        file = source_csv.open(
+            "r",
+            encoding="utf-8-sig",
+            newline="",
+        )
+    except OSError as exc:
+        error(
+            f"No se pudo abrir el CSV generado por LibreOffice:\n"
+            f"  {source_csv}\n"
+            f"Motivo: {exc}"
+        )
 
-            reader = csv.reader(file, delimiter=",", quotechar='"')
+    try:
+        with file:
+            reader = csv.reader(
+                file,
+                delimiter=",",
+                quotechar='"',
+            )
             rows = list(reader)
-    except Exception as exc:
-        error(f"No se pudo leer el CSV generado por LibreOffice: {exc}")
+    except UnicodeDecodeError as exc:
+        error(
+            f"El CSV generado por LibreOffice contiene "
+            f"datos con una codificación inválida:\n"
+            f"  {source_csv}\n"
+            f"Motivo: {exc}"
+        )
+    except csv.Error as exc:
+        error(
+            f"Error al interpretar el formato CSV generado "
+            f"por LibreOffice:\n"
+            f"  {source_csv}\n"
+            f"Motivo: {exc}"
+        )
 
     # --------------------------------------------------------
     # Validar cantidad mínima de filas.
