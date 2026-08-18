@@ -15,14 +15,16 @@ El orden de las claves en la salida de Rundeck NO importa. Cada valor
 se asigna a la columna correspondiente según el nombre de la clave
 definido en header_list.txt.
 
-El segundo valor de cada entrada de header_list.txt determina si la
-columna participa en este proceso:
+El segundo valor de cada entrada de header_list.txt determina el
+comportamiento de la columna:
 
     0 -> la columna queda vacía en el CSV de salida.
     1 -> la columna se procesa normalmente.
+    2 -> la columna se procesa normalmente y corresponde a la clave
+         utilizada para identificar la fila en el proceso de fusión.
 
-Si una clave definida en header_list.txt tiene flag 1 pero no aparece
-en una línea válida, su valor se establece como "N/A".
+Si una clave definida en header_list.txt tiene flag 1 o 2 pero no
+aparece en una línea válida, su valor se establece como "N/A".
 
 Las líneas que no correspondan a una fila válida son ignoradas.
 
@@ -128,6 +130,7 @@ def main() -> None:
     #
     #   0 -> columna vacía
     #   1 -> procesamiento normal
+    #   2 -> procesamiento normal y clave de fusión
     #
     # El orden de header_list determina el orden de las
     # columnas del CSV de salida.
@@ -180,8 +183,8 @@ def main() -> None:
     #
     # Las claves con flag 0 quedan vacías.
     #
-    # Las claves con flag 1 que no aparezcan en una línea válida
-    # se rellenan automáticamente con "N/A".
+    # Las claves con flag 1 o 2 que no aparezcan en una línea
+    # válida se rellenan automáticamente con "N/A".
     #
     # Una clave desconocida o una clave duplicada provoca
     # un error fatal y termina el script con exit 1.
@@ -204,23 +207,37 @@ def main() -> None:
                 # ------------------------------------------------
                 # Ignorar líneas que claramente no corresponden
                 # a una fila de datos de Rundeck.
+                #
+                # Primero se intenta separar la línea como CSV.
+                # Si contiene al menos una clave conocida, se
+                # considera una posible fila de inventario.
                 # ------------------------------------------------
-                if "=" not in line:
-                    continue
-
                 fields = split_quoted_csv_line(line)
 
                 if fields is None:
-                    error(
-                        f"Línea {line_number}: "
-                        "comillas desbalanceadas."
-                    )
+                    continue
+
+                is_inventory_line = False
+
+                for field in fields:
+                    parsed = parse_key_value_field(field)
+
+                    if parsed is not None:
+                        key, _value = parsed
+
+                        if key in header_positions:
+                            is_inventory_line = True
+                            break
+
+                if not is_inventory_line:
+                    continue
 
                 # ------------------------------------------------
                 # Inicializar las columnas según su flag.
                 #
                 #   flag 0 -> vacío
                 #   flag 1 -> N/A
+                #   flag 2 -> N/A
                 #
                 # De esta forma, una clave con flag 0 nunca
                 # recibirá un valor desde la salida de Rundeck.
@@ -280,8 +297,8 @@ def main() -> None:
                         continue
 
                     # ------------------------------------------------
-                    # Si la columna tiene flag 1, colocar el valor
-                    # en la posición correspondiente según
+                    # Si la columna tiene flag 1 o 2, colocar el
+                    # valor en la posición correspondiente según
                     # header_list.txt.
                     # ------------------------------------------------
                     position = header_positions[key]
@@ -310,4 +327,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

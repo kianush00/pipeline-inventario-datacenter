@@ -24,6 +24,6 @@ Modelo|0
 P/N|0
 Serial Number|0
 Service Tag|0
-UUID|0
+UUID|2
 Version BIOS|1
 Fecha BIOS|1

@@ -30,7 +30,12 @@ def error(message: str) -> None:
 #
 #     NOMBRE_COLUMNA|FLAG
 #
-# donde FLAG es 0 o 1.
+# donde FLAG puede ser:
+#
+#     0 -> columna no participa del procesamiento.
+#     1 -> columna participa normalmente.
+#     2 -> columna participa normalmente y corresponde a la
+#          clave utilizada para identificar una fila.
 #
 # El orden de las líneas define el orden lógico de las columnas
 # que interesan al pipeline. Las columnas intermedias del
@@ -48,7 +53,7 @@ def load_header_list(path: Path) -> list[tuple[str, int]]:
     - El archivo debe existir y no estar vacío.
     - Cada línea debe tener exactamente dos campos separados por '|'.
     - NOMBRE no puede estar vacío.
-    - FLAG debe ser '0' o '1'.
+    - FLAG debe ser '0', '1' o '2'.
     - No puede haber nombres duplicados.
 
     Parámetros
@@ -59,7 +64,7 @@ def load_header_list(path: Path) -> list[tuple[str, int]]:
     Retorna
     -------
     list[tuple[str, int]]
-        Lista de (nombre_columna, flag_fusión).
+        Lista de (nombre_columna, flag).
     """
     if not path.is_file():
         error(
@@ -88,7 +93,8 @@ def load_header_list(path: Path) -> list[tuple[str, int]]:
                     f"  {line}\n"
                     f"Formato esperado:\n"
                     f"  NOMBRE_COLUMNA|0\n"
-                    f"  NOMBRE_COLUMNA|1"
+                    f"  NOMBRE_COLUMNA|1\n"
+                    f"  NOMBRE_COLUMNA|2"
                 )
 
             name, flag_str = parts
@@ -99,10 +105,10 @@ def load_header_list(path: Path) -> list[tuple[str, int]]:
                     f"el nombre de columna está vacío."
                 )
 
-            if flag_str not in ("0", "1"):
+            if flag_str not in ("0", "1", "2"):
                 error(
                     f"header_list línea {line_number}: "
-                    f"el flag debe ser 0 o 1, se encontró '{flag_str}'."
+                    f"el flag debe ser 0, 1 o 2, se encontró '{flag_str}'."
                 )
 
             if name in seen_names:
