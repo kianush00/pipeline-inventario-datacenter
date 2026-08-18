@@ -45,7 +45,7 @@ def find_libreoffice() -> str:
         "No se encontró LibreOffice.\n"
         "Se necesita 'libreoffice' o 'soffice' en el PATH."
     )
-    return ""  # nunca se alcanza; satisface al type-checker
+    return ""
 
 
 # ============================================================
@@ -115,6 +115,8 @@ def process_csv(
     - El orden de los nombres NO importa.
     - No se permiten nombres de header_list.txt que falten en el ODS.
     - Las columnas adicionales del ODS se conservan sin modificar.
+    - Las columnas sin nombre se reportan como un problema independiente
+      de las columnas duplicadas.
     - El FLAG asociado a cada columna de header_list.txt no afecta
       este proceso; solamente se utiliza el nombre de la columna
       para validarla.
@@ -202,8 +204,38 @@ def process_csv(
         )
 
     # --------------------------------------------------------
+    # Validar columnas sin nombre.
+    #
+    # Una columna cuyo nombre sea "" se reporta separadamente
+    # de las columnas duplicadas, evitando un mensaje ambiguo
+    # como:
+    #
+    #   columna duplicada: ''
+    #
+    # Se informa además de su posición 1-based en el header.
+    # --------------------------------------------------------
+    unnamed_columns = [
+        index + 1
+        for index, name in enumerate(source_header)
+        if name == ""
+    ]
+
+    if unnamed_columns:
+        error(
+            "El header del inventario padre contiene "
+            "columnas sin nombre en las siguientes posiciones:\n"
+            + "\n".join(
+                f"  - posición {position}"
+                for position in unnamed_columns
+            )
+        )
+
+    # --------------------------------------------------------
     # Validar que no existan columnas duplicadas en el header
     # del ODS, ya que producirían ambigüedad para el pipeline.
+    #
+    # Las columnas sin nombre ya fueron validadas anteriormente,
+    # por lo que aquí solamente se consideran nombres no vacíos.
     # --------------------------------------------------------
     seen_headers: set[str] = set()
     duplicated_headers: list[str] = []
@@ -243,12 +275,10 @@ def process_csv(
                 lineterminator="\n",
             )
 
-            # Header: limpiar y escribir.
             writer.writerow(
                 [clean_value(v) for v in source_header]
             )
 
-            # Datos: rows[0] es el header; procesamos rows[1:].
             for row_number, row in enumerate(rows[1:], start=3):
                 if len(row) != len(source_header):
                     error(
