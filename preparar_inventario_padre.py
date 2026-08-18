@@ -3,12 +3,14 @@ preparar_inventario_padre.py
 ============================
 Convierte un inventario padre en formato ODS a CSV limpio,
 validando que las columnas definidas en header_list.txt aparezcan
-en el header del ODS con sus nombres exactos y en el mismo orden
-relativo (pueden existir columnas intermedias no definidas en
-header_list.txt; éstas se conservan sin tocar).
+en el header del ODS con sus nombres exactos.
+
+El orden de las columnas del ODS no importa. Pueden existir
+columnas adicionales no definidas en header_list.txt; éstas se
+conservan sin tocar.
 
 Uso:
-    python3 preparar_inventario_padre.py inventario.ods \\
+    python3 preparar_inventario_padre.py inventario.ods \
         [-H header_list.txt] [-o salida.csv]
 
 Si no se indican -H ni -o, se busca header_list.txt junto al
@@ -64,10 +66,11 @@ def convert_ods_to_csv(
         str(ods_path),
     ]
 
-    result = subprocess.run(  # noqa: PLW1510
+    result = subprocess.run(
         command,
         capture_output=True,
         text=True,
+        check=False,
     )
 
     if result.returncode != 0:
@@ -107,11 +110,11 @@ def process_csv(
     - Cada nombre definido en header_list.txt debe aparecer en el
       header del ODS con nombre exacto (comparación sensible a
       mayúsculas/minúsculas y espacios).
-    - Los nombres deben aparecer en el mismo orden relativo que
-      en header_list.txt; puede haber columnas intermedias en el
-      ODS que no estén en header_list.txt (se conservan tal cual).
+    - El orden de las columnas no importa.
+    - Pueden existir columnas adicionales en el ODS que no estén
+      definidas en header_list.txt; éstas se conservan sin tocar.
     - No se permiten nombres de header_list.txt que falten en el
-      ODS ni que estén fuera de orden.
+      ODS.
     """
     print()
     print("Procesando CSV...")
@@ -147,30 +150,25 @@ def process_csv(
 
     # --------------------------------------------------------
     # Validar que cada nombre de header_list esté en el header
-    # del ODS, con nombre exacto y en el mismo orden relativo.
+    # del ODS con nombre exacto.
     #
-    # Se recorre el header del ODS de izquierda a derecha,
-    # avanzando un "cursor" sobre header_list cada vez que se
-    # encuentra una coincidencia.
+    # El orden de las columnas no importa.
     # --------------------------------------------------------
-    cursor = 0                        # posición actual en header_list
-    required = header_list            # [(nombre, flag), ...]
-    ods_positions: dict[str, int] = {}  # nombre -> índice 0-based en source_header
+    ods_positions = {
+        col_name: col_index
+        for col_index, col_name in enumerate(source_header)
+    }
 
-    for col_index, col_name in enumerate(source_header):
-        if cursor >= len(required):
-            break  # ya encontramos todos los nombres requeridos
-        if col_name == required[cursor][0]:
-            ods_positions[required[cursor][0]] = col_index
-            cursor += 1
+    missing = [
+        name
+        for name, _flag in header_list
+        if name not in ods_positions
+    ]
 
-    # ¿Quedaron nombres sin encontrar?
-    if cursor < len(required):
-        missing = [name for name, _flag in required[cursor:]]
+    if missing:
         error(
             "El header del inventario padre no contiene las "
-            "siguientes columnas definidas en header_list.txt "
-            "(o están fuera de orden):\n"
+            "siguientes columnas definidas en header_list.txt:\n"
             + "\n".join(f"  - {m}" for m in missing)
         )
 
@@ -224,8 +222,9 @@ def main() -> None:
         description=(
             "Convierte un inventario padre ODS a CSV, "
             "valida que los headers definidos en header_list.txt "
-            "estén presentes en orden, conserva todas las columnas "
-            "y elimina saltos de línea internos."
+            "estén presentes independientemente de su posición, "
+            "conserva todas las columnas y elimina saltos de línea "
+            "internos."
         )
     )
     parser.add_argument(

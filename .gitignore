@@ -2,8 +2,11 @@
 # Data / generated files
 # =========================
 
-# CSV files
+# CSV/ODS files
 *.csv
+*.ods
+*.xlsx
+*.xls
 
 # Files starting with "salida"
 salida*
