@@ -128,11 +128,9 @@ def find_real_header(
     for row_index, row in enumerate(rows):
         row_names = set(row)
 
-        # La fila debe contener todos los nombres requeridos.
         if not required_set.issubset(row_names):
             continue
 
-        # Cada nombre requerido debe aparecer exactamente una vez.
         duplicated_required = [
             name
             for name in required_names
@@ -353,10 +351,21 @@ def process_csv(
                         f"{len(row)} columnas, pero se esperaban "
                         f"{len(source_header)}."
                     )
+
                 writer.writerow([clean_value(v) for v in row])
 
     except OSError as exc:
-        error(f"No se pudo escribir el CSV de salida: {exc}")
+        error(
+            f"No se pudo escribir el CSV de salida:\n"
+            f"  {output_csv}\n"
+            f"Motivo: {exc}"
+        )
+    except csv.Error as exc:
+        error(
+            f"Error al escribir el CSV de salida:\n"
+            f"  {output_csv}\n"
+            f"Motivo: {exc}"
+        )
 
 
 # ============================================================
@@ -389,6 +398,21 @@ def main() -> None:
     if ods_path.suffix.lower() != ".ods":
         error(
             f"El archivo de entrada no parece ser un ODS:\n"
+            f"  {ods_path}"
+        )
+
+    try:
+        ods_size = ods_path.stat().st_size
+    except OSError as exc:
+        error(
+            f"No se pudo obtener el tamaño del archivo ODS:\n"
+            f"  {ods_path}\n"
+            f"Motivo: {exc}"
+        )
+
+    if ods_size == 0:
+        error(
+            f"El archivo ODS está vacío (0 bytes):\n"
             f"  {ods_path}"
         )
 
