@@ -236,7 +236,7 @@ def load_parsed_data(
                     f"[ERROR] Línea {line_number} del inventario parseado: "
                     f"se esperaban {defined_fields} campos, "
                     f"pero se encontraron {len(fields)}.",
-                    file=sys.stderr,
+                    file=sys.stderr
                 )
                 continue
 
@@ -253,7 +253,7 @@ def load_parsed_data(
                     f"[WARNING] Clave duplicada en el inventario "
                     f"parseado: '{key}'. Las filas con esta clave "
                     "no serán fusionadas.",
-                    file=sys.stderr,
+                    file=sys.stderr
                 )
                 del parsed_data[key]
                 duplicated_keys.add(key)
@@ -302,7 +302,7 @@ def validate_parent_keys(
                 print(
                     f"[ERROR] Línea {line_number} del inventario padre: "
                     "comillas desbalanceadas.",
-                    file=sys.stderr,
+                    file=sys.stderr
                 )
                 continue
 
@@ -311,7 +311,7 @@ def validate_parent_keys(
                     f"[ERROR] Línea {line_number} del inventario padre: "
                     f"se esperaban {parent_total_columns} campos, "
                     f"pero se encontraron {len(fields)}.",
-                    file=sys.stderr,
+                    file=sys.stderr
                 )
                 continue
 
@@ -329,7 +329,7 @@ def validate_parent_keys(
         print(
             f"[WARNING] Clave duplicada en el inventario padre: "
             f"'{key}'. Las filas con esta clave no serán fusionadas.",
-            file=sys.stderr,
+            file=sys.stderr
         )
 
     return duplicated_keys
@@ -507,7 +507,7 @@ def main() -> None:
                 print(
                     f"[ERROR] Línea {line_number} del inventario padre: "
                     "comillas desbalanceadas.",
-                    file=sys.stderr,
+                    file=sys.stderr
                 )
                 continue
 
@@ -516,7 +516,7 @@ def main() -> None:
                     f"[ERROR] Línea {line_number} del inventario padre: "
                     f"se esperaban {parent_total_columns} campos, "
                     f"pero se encontraron {len(fields)}.",
-                    file=sys.stderr,
+                    file=sys.stderr
                 )
                 continue
 
@@ -543,6 +543,12 @@ def main() -> None:
             # LEFT JOIN -> conservar la fila del padre.
             # ------------------------------------------------
             if key not in parsed_data:
+                print(
+                    f"[WARNING] Línea {line_number} del inventario padre: "
+                    f"la clave '{key}' no existe en el inventario "
+                    "parseado. La fila se conservará sin fusionar.",
+                    file=sys.stderr
+                )
                 out_f.write(",".join(fields) + "\n")
                 continue
 

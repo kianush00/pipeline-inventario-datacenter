@@ -5,22 +5,23 @@ Convierte un inventario padre en formato ODS a CSV limpio,
 validando que las columnas definidas en header_list.txt aparezcan
 en el header del ODS con sus nombres exactos.
 
-El orden de las columnas del ODS no importa. Pueden existir
-columnas adicionales no definidas en header_list.txt; éstas se
-conservan sin tocar.
+El orden de las columnas definidas en header_list.txt NO es
+relevante. Pueden existir columnas adicionales en el ODS; éstas
+se conservan sin tocar.
 
 Uso:
-    python3 preparar_inventario_padre.py inventario.ods \
-        [-H header_list.txt] [-o salida.csv]
+    python3 preparar_inventario_padre.py inventario.ods [header_list.txt]
 
-Si no se indican -H ni -o, se busca header_list.txt junto al
-script y se genera el CSV con el mismo nombre del ODS.
+Si no se indica la ruta de header_list.txt, se busca un archivo
+llamado "header_list.txt" en el mismo directorio que este script.
+
+El CSV de salida se genera automáticamente en el mismo directorio
+del ODS, utilizando el mismo nombre y cambiando la extensión a .csv.
 """
 
-import argparse
-import csv
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -110,11 +111,12 @@ def process_csv(
     - Cada nombre definido en header_list.txt debe aparecer en el
       header del ODS con nombre exacto (comparación sensible a
       mayúsculas/minúsculas y espacios).
-    - El orden de las columnas no importa.
-    - Pueden existir columnas adicionales en el ODS que no estén
-      definidas en header_list.txt; éstas se conservan sin tocar.
-    - No se permiten nombres de header_list.txt que falten en el
-      ODS.
+    - El orden de los nombres NO importa.
+    - No se permiten nombres de header_list.txt que falten en el ODS.
+    - Las columnas adicionales del ODS se conservan sin modificar.
+    - El FLAG asociado a cada columna de header_list.txt no afecta
+      este proceso; solamente se utiliza el nombre de la columna
+      para validarla.
     """
     print()
     print("Procesando CSV...")
@@ -124,6 +126,8 @@ def process_csv(
     # --------------------------------------------------------
     try:
         with source_csv.open("r", encoding="utf-8-sig", newline="") as file:
+            import csv
+
             reader = csv.reader(file, delimiter=",", quotechar='"')
             rows = list(reader)
     except Exception as exc:
@@ -150,26 +154,42 @@ def process_csv(
 
     # --------------------------------------------------------
     # Validar que cada nombre de header_list esté en el header
-    # del ODS con nombre exacto.
+    # del ODS.
     #
-    # El orden de las columnas no importa.
+    # El orden NO importa.
     # --------------------------------------------------------
-    ods_positions = {
-        col_name: col_index
-        for col_index, col_name in enumerate(source_header)
-    }
+    source_header_names = set(source_header)
 
     missing = [
         name
         for name, _flag in header_list
-        if name not in ods_positions
+        if name not in source_header_names
     ]
 
     if missing:
         error(
             "El header del inventario padre no contiene las "
             "siguientes columnas definidas en header_list.txt:\n"
-            + "\n".join(f"  - {m}" for m in missing)
+            + "\n".join(f"  - {name}" for name in missing)
+        )
+
+    # --------------------------------------------------------
+    # Validar que no existan columnas duplicadas en el header
+    # del ODS, ya que producirían ambigüedad para el pipeline.
+    # --------------------------------------------------------
+    seen_headers: set[str] = set()
+    duplicated_headers: list[str] = []
+
+    for name in source_header:
+        if name in seen_headers and name not in duplicated_headers:
+            duplicated_headers.append(name)
+        seen_headers.add(name)
+
+    if duplicated_headers:
+        error(
+            "El header del inventario padre contiene columnas "
+            "duplicadas:\n"
+            + "\n".join(f"  - {name}" for name in duplicated_headers)
         )
 
     print(
@@ -218,45 +238,24 @@ def process_csv(
 # ============================================================
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Convierte un inventario padre ODS a CSV, "
-            "valida que los headers definidos en header_list.txt "
-            "estén presentes independientemente de su posición, "
-            "conserva todas las columnas y elimina saltos de línea "
-            "internos."
+    if len(sys.argv) < 2:
+        print(
+            f"Uso: {sys.argv[0]} "
+            "inventario.ods [header_list.txt]"
         )
-    )
-    parser.add_argument(
-        "ods",
-        type=Path,
-        help="Archivo ODS del inventario padre.",
-    )
-    parser.add_argument(
-        "-H", "--header-list",
-        type=Path,
-        default=None,
-        help=(
-            "Archivo header_list.txt. "
-            "Por defecto: header_list.txt junto al script."
-        ),
-    )
-    parser.add_argument(
-        "-o", "--output",
-        type=Path,
-        default=None,
-        help=(
-            "CSV de salida. "
-            "Por defecto: mismo nombre del ODS con extensión .csv."
-        ),
-    )
+        sys.exit(1)
 
-    args = parser.parse_args()
+    if len(sys.argv) > 3:
+        print(
+            f"Uso: {sys.argv[0]} "
+            "inventario.ods [header_list.txt]"
+        )
+        sys.exit(1)
 
     # --------------------------------------------------------
     # Validar ODS.
     # --------------------------------------------------------
-    ods_path = args.ods.resolve()
+    ods_path = Path(sys.argv[1])
 
     if not ods_path.is_file():
         error(f"No existe el archivo ODS:\n  {ods_path}")
@@ -270,20 +269,18 @@ def main() -> None:
     # --------------------------------------------------------
     # Resolver ruta de header_list.txt.
     # --------------------------------------------------------
-    if args.header_list is not None:
-        header_list_path = args.header_list.resolve()
-    else:
-        header_list_path = Path(__file__).resolve().parent / "header_list.txt"
+    header_list_path = (
+        Path(sys.argv[2])
+        if len(sys.argv) >= 3
+        else Path(__file__).resolve().parent / "header_list.txt"
+    )
 
     header_list = load_header_list(header_list_path)
 
     # --------------------------------------------------------
     # Resolver ruta de salida.
     # --------------------------------------------------------
-    if args.output is not None:
-        output_path = args.output.resolve()
-    else:
-        output_path = ods_path.parent / f"{ods_path.stem}.csv"
+    output_path = ods_path.parent / f"{ods_path.stem}.csv"
 
     # --------------------------------------------------------
     # Información.
@@ -305,10 +302,19 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="inventario_") as tmp_dir:
         tmp_path = Path(tmp_dir)
 
-        converted_csv = convert_ods_to_csv(libreoffice, ods_path, tmp_path)
+        converted_csv = convert_ods_to_csv(
+            libreoffice,
+            ods_path,
+            tmp_path,
+        )
+
         print(f"CSV temporal generado    : {converted_csv.name}")
 
-        process_csv(converted_csv, output_path, header_list)
+        process_csv(
+            converted_csv,
+            output_path,
+            header_list,
+        )
 
     # --------------------------------------------------------
     # Resultado.
