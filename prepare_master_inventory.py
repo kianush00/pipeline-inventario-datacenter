@@ -9,6 +9,15 @@ El orden de las columnas definidas en header_list.txt NO es
 relevante. Pueden existir columnas adicionales en el ODS; éstas
 se conservan sin tocar.
 
+El script permite que el ODS tenga una fila inicial de categorías
+agrupadas sobre el header real. Si una fila contiene todos los
+nombres definidos en header_list.txt exactamente una vez, esa fila
+se considera el header real y las filas anteriores se descartan.
+
+Si no existe una fila de categorías, la primera fila que contenga
+todos los nombres definidos en header_list.txt se considera
+directamente el header real.
+
 Uso:
     python3 prepare_master_inventory.py master_inventory.ods [header_list.txt]
 
@@ -94,6 +103,64 @@ def convert_ods_to_csv(
 
 
 # ============================================================
+# BUSCAR HEADER REAL
+# ============================================================
+
+def find_real_header(
+    rows: list[list[str]],
+    header_list: list[tuple[str, int]],
+) -> tuple[int, list[str]]:
+    """
+    Busca la primera fila que contenga todos los nombres definidos
+    en header_list.txt exactamente una vez.
+
+    Puede haber columnas adicionales que no estén definidas en
+    header_list.txt.
+
+    Retorna:
+        (índice_0based_de_la_fila, header)
+
+    Si ninguna fila contiene todos los nombres requeridos, aborta.
+    """
+    required_names = [name for name, _flag in header_list]
+    required_set = set(required_names)
+
+    for row_index, row in enumerate(rows):
+        row_names = set(row)
+
+        # La fila debe contener todos los nombres requeridos.
+        if not required_set.issubset(row_names):
+            continue
+
+        # Cada nombre requerido debe aparecer exactamente una vez.
+        duplicated_required = [
+            name
+            for name in required_names
+            if row.count(name) != 1
+        ]
+
+        if duplicated_required:
+            error(
+                "La fila candidata a header contiene columnas "
+                "definidas en header_list.txt duplicadas:\n"
+                + "\n".join(
+                    f"  - {name}"
+                    for name in duplicated_required
+                )
+                + f"\nFila del CSV temporal: {row_index + 1}"
+            )
+
+        return row_index, row
+
+    error(
+        "No se encontró ninguna fila que contenga todos los "
+        "nombres de columnas definidos en header_list.txt "
+        "exactamente una vez."
+    )
+    return -1, []
+
+
+# ============================================================
 # VALIDAR HEADER Y PROCESAR CSV
 # ============================================================
 
@@ -103,23 +170,22 @@ def process_csv(
     header_list: list[tuple[str, int]],
 ) -> None:
     """
-    Lee el CSV generado por LibreOffice, valida el header contra
-    header_list y escribe el CSV de salida limpio.
+    Lee el CSV generado por LibreOffice, detecta el header real
+    mediante header_list.txt y escribe el CSV de salida limpio.
 
     Reglas de validación del header:
-    - La fila 1 del ODS se descarta (contiene valores anidados).
-    - La fila 2 es el header real.
-    - Cada nombre definido en header_list.txt debe aparecer en el
-      header del ODS con nombre exacto (comparación sensible a
-      mayúsculas/minúsculas y espacios).
+    - Puede existir una fila inicial de categorías agrupadas.
+    - La fila real se identifica buscando todos los nombres de
+      header_list.txt exactamente.
     - El orden de los nombres NO importa.
-    - No se permiten nombres de header_list.txt que falten en el ODS.
-    - Las columnas adicionales del ODS se conservan sin modificar.
-    - Las columnas sin nombre se reportan como un problema independiente
-      de las columnas duplicadas.
+    - Todos los nombres definidos en header_list.txt deben aparecer
+      exactamente una vez en el header real.
+    - Pueden existir columnas adicionales no definidas en
+      header_list.txt; éstas se conservan.
+    - Las columnas sin nombre se reportan como un problema.
+    - No se permiten columnas duplicadas en el header real.
     - El FLAG asociado a cada columna de header_list.txt no afecta
-      este proceso; solamente se utiliza el nombre de la columna
-      para validarla.
+      este proceso.
     """
     print()
     print("Procesando CSV...")
@@ -166,53 +232,42 @@ def process_csv(
     # --------------------------------------------------------
     # Validar cantidad mínima de filas.
     # --------------------------------------------------------
-    if len(rows) < 2:
+    if not rows:
         error(
-            "El inventario no contiene suficientes filas.\n"
-            "Se esperaba al menos:\n"
-            "  fila 1 → fila que será eliminada (valores anidados)\n"
-            "  fila 2 → header real"
+            "El inventario no contiene ninguna fila."
         )
 
     # --------------------------------------------------------
-    # Descartar la primera fila (valores anidados del ODS).
-    # --------------------------------------------------------
-    rows = rows[1:]
-
-    source_header = rows[0]
-    print(f"Columnas encontradas en el inventario padre: {len(source_header)}")
-
-    # --------------------------------------------------------
-    # Validar que cada nombre de header_list esté en el header
-    # del ODS.
+    # Buscar el header real.
     #
-    # El orden NO importa.
+    # No se asume que la primera fila sea el header.
+    # Puede existir una fila previa de categorías.
     # --------------------------------------------------------
-    source_header_names = set(source_header)
+    header_row_index, source_header = find_real_header(
+        rows,
+        header_list,
+    )
 
-    missing = [
-        name
-        for name, _flag in header_list
-        if name not in source_header_names
-    ]
+    discarded_rows = header_row_index
 
-    if missing:
-        error(
-            "El header del inventario padre no contiene las "
-            "siguientes columnas definidas en header_list.txt:\n"
-            + "\n".join(f"  - {name}" for name in missing)
+    print(
+        f"Fila del header real en el CSV temporal: "
+        f"{header_row_index + 1}"
+    )
+
+    if discarded_rows > 0:
+        print(
+            f"Filas descartadas antes del header: "
+            f"{discarded_rows}"
         )
+
+    print(
+        f"Columnas encontradas en el inventario padre: "
+        f"{len(source_header)}"
+    )
 
     # --------------------------------------------------------
     # Validar columnas sin nombre.
-    #
-    # Una columna cuyo nombre sea "" se reporta separadamente
-    # de las columnas duplicadas, evitando un mensaje ambiguo
-    # como:
-    #
-    #   columna duplicada: ''
-    #
-    # Se informa además de su posición 1-based en el header.
     # --------------------------------------------------------
     unnamed_columns = [
         index + 1
@@ -231,11 +286,7 @@ def process_csv(
         )
 
     # --------------------------------------------------------
-    # Validar que no existan columnas duplicadas en el header
-    # del ODS, ya que producirían ambigüedad para el pipeline.
-    #
-    # Las columnas sin nombre ya fueron validadas anteriormente,
-    # por lo que aquí solamente se consideran nombres no vacíos.
+    # Validar que no existan columnas duplicadas en el header.
     # --------------------------------------------------------
     seen_headers: set[str] = set()
     duplicated_headers: list[str] = []
@@ -260,13 +311,15 @@ def process_csv(
     # --------------------------------------------------------
     # Escribir CSV de salida.
     #
-    # El header se copia tal como viene del ODS (sin modificar).
-    # Los valores de cada fila se limpian (se eliminan saltos de
-    # línea internos). QUOTE_ALL garantiza que todos los campos
-    # queden entrecomillados.
+    # Se conserva el header real y todas las columnas adicionales.
+    # Las filas anteriores al header real se descartan.
     # --------------------------------------------------------
     try:
-        with output_csv.open("w", encoding="utf-8", newline="") as file:
+        with output_csv.open(
+            "w",
+            encoding="utf-8",
+            newline="",
+        ) as file:
             writer = csv.writer(
                 file,
                 delimiter=",",
@@ -279,11 +332,26 @@ def process_csv(
                 [clean_value(v) for v in source_header]
             )
 
-            for row_number, row in enumerate(rows[1:], start=3):
+            # ------------------------------------------------
+            # Los datos comienzan inmediatamente después del
+            # header real.
+            #
+            # La numeración se deriva de header_row_index, por
+            # lo que corresponde siempre a la fila original del
+            # CSV generado por LibreOffice.
+            # ------------------------------------------------
+            for row_index in range(
+                header_row_index + 1,
+                len(rows),
+            ):
+                row = rows[row_index]
+                row_number = row_index + 1
+
                 if len(row) != len(source_header):
                     error(
-                        f"La fila {row_number} contiene {len(row)} columnas, "
-                        f"pero se esperaban {len(source_header)}."
+                        f"La fila {row_number} contiene "
+                        f"{len(row)} columnas, pero se esperaban "
+                        f"{len(source_header)}."
                     )
                 writer.writerow([clean_value(v) for v in row])
 
