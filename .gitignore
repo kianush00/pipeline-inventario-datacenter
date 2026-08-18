@@ -4,6 +4,7 @@
 
 # CSV/ODS files
 *.csv
+*.csv*
 *.ods
 *.xlsx
 *.xls
