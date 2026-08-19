@@ -26,12 +26,10 @@ Uso:
 
 Si no se indica la ruta de header_list.txt, se busca un archivo
 llamado "header_list.txt" en el mismo directorio que este script.
-
-El CSV de salida se genera automáticamente en el mismo directorio
-del ODS, utilizando el mismo nombre y cambiando la extensión a .csv.
 """
 
 import csv
+import os
 import shutil
 import subprocess
 import sys
@@ -174,6 +172,11 @@ def process_csv(
     Lee el CSV generado por LibreOffice, detecta el header real
     mediante header_list.txt y escribe el CSV de salida limpio.
 
+    El CSV de salida se escribe primero en un archivo temporal
+    ubicado en el mismo directorio que output_csv. Solo después
+    de completar exitosamente todo el procesamiento se reemplaza
+    el archivo de salida mediante os.replace().
+
     Reglas de validación del header:
     - Puede existir una fila inicial de categorías agrupadas.
     - La fila real se identifica buscando todos los nombres de
@@ -310,17 +313,24 @@ def process_csv(
     )
 
     # --------------------------------------------------------
-    # Escribir CSV de salida.
-    #
-    # Se conserva el header real y todas las columnas adicionales.
-    # Las filas anteriores al header real se descartan.
+    # Crear archivo temporal en el mismo directorio que la
+    # salida para permitir un reemplazo atómico mediante
+    # os.replace().
     # --------------------------------------------------------
+    temporary_output_path: Path | None = None
+
     try:
-        with output_csv.open(
-            "w",
+        with tempfile.NamedTemporaryFile(
+            mode="w",
             encoding="utf-8",
             newline="",
+            dir=output_csv.parent,
+            prefix=f".{output_csv.name}.",
+            suffix=".tmp",
+            delete=False,
         ) as file:
+            temporary_output_path = Path(file.name)
+
             writer = csv.writer(
                 file,
                 delimiter=",",
@@ -357,6 +367,13 @@ def process_csv(
 
                 writer.writerow([clean_value(v) for v in row])
 
+        # --------------------------------------------------------
+        # El archivo temporal solo reemplaza la salida definitiva
+        # si todo el procesamiento anterior terminó correctamente.
+        # --------------------------------------------------------
+        os.replace(temporary_output_path, output_csv)
+        temporary_output_path = None
+
     except OSError as exc:
         error(
             f"No se pudo escribir el CSV de salida:\n"
@@ -369,6 +386,16 @@ def process_csv(
             f"  {output_csv}\n"
             f"Motivo: {exc}"
         )
+    finally:
+        # --------------------------------------------------------
+        # Si el proceso falló antes del reemplazo, eliminar el
+        # archivo temporal para no dejar residuos.
+        # --------------------------------------------------------
+        if temporary_output_path is not None:
+            try:
+                temporary_output_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 # ============================================================
@@ -430,6 +457,19 @@ def main() -> None:
         if len(sys.argv) >= 3
         else Path(__file__).resolve().parent / "prepared_master_inventory.csv"
     )
+
+    # --------------------------------------------------------
+    # Validar colisión entre archivo de entrada y salida.
+    # --------------------------------------------------------
+    resolved_input = ods_path.resolve()
+    resolved_output = output_path.resolve()
+
+    if resolved_input == resolved_output:
+        error(
+            "El archivo de salida no puede ser el mismo archivo "
+            "que el archivo ODS de entrada:\n"
+            f"  {output_path}"
+        )
 
     # --------------------------------------------------------
     # Resolver ruta de header_list.txt.

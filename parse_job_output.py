@@ -42,7 +42,9 @@ Si no se indica la ruta de header_list.txt, se busca un archivo
 llamado "header_list.txt" en el mismo directorio que este script.
 """
 
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 from base_inventory import (
@@ -139,6 +141,19 @@ def main() -> None:
         error(f"No se encontró el archivo de entrada: {input_path}")
 
     # --------------------------------------------------------
+    # Validar colisión entre archivo de entrada y salida.
+    # --------------------------------------------------------
+    resolved_input = input_path.resolve()
+    resolved_output = output_path.resolve()
+
+    if resolved_input == resolved_output:
+        error(
+            "El archivo de salida no puede ser el mismo archivo "
+            "que el archivo de entrada:\n"
+            f"  {output_path}"
+        )
+
+    # --------------------------------------------------------
     # Cargar header_list: [(nombre, flag), ...]
     #
     # El flag determina si la columna se procesa:
@@ -187,152 +202,188 @@ def main() -> None:
     print(f"Cantidad de columnas definidas: {defined_fields}")
 
     # --------------------------------------------------------
-    # Procesar el archivo de entrada línea a línea.
-    #
-    # Una línea válida debe:
-    #
-    #   - Contener campos separados por comas.
-    #   - Cada campo debe tener formato CLAVE="VALOR".
-    #   - Cada clave debe existir exactamente en header_list.
-    #   - No puede repetirse una misma clave.
-    #
-    # Las claves con flag 0 quedan vacías.
-    #
-    # Las claves con flag 1 o 2 que no aparezcan en una línea
-    # válida se rellenan automáticamente con "N/A".
-    #
-    # Una clave desconocida o una clave duplicada provoca
-    # un error fatal y termina el script con exit 1.
+    # Crear archivo temporal en el mismo directorio que la
+    # salida para permitir un reemplazo atómico mediante
+    # os.replace().
     # --------------------------------------------------------
-    with output_path.open("w", encoding="utf-8", newline="") as out_f:
-        out_f.write(header_line + "\n")
+    temporary_output_path: Path | None = None
 
-        with input_path.open(
-            "r",
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
             encoding="utf-8",
-            errors="replace"
-        ) as in_f:
+            newline="",
+            dir=output_path.parent,
+            prefix=f".{output_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as out_f:
+            temporary_output_path = Path(out_f.name)
 
-            for line_number, raw_line in enumerate(in_f, start=1):
-                line = raw_line.rstrip("\r\n")
+            out_f.write(header_line + "\n")
 
-                if not line:
-                    continue
+            # ------------------------------------------------
+            # Procesar el archivo de entrada línea a línea.
+            #
+            # Una línea válida debe:
+            #
+            #   - Contener campos separados por comas.
+            #   - Cada campo debe tener formato CLAVE="VALOR".
+            #   - Cada clave debe existir exactamente en header_list.
+            #   - No puede repetirse una misma clave.
+            #
+            # Las claves con flag 0 quedan vacías.
+            #
+            # Las claves con flag 1 o 2 que no aparezcan en una línea
+            # válida se rellenan automáticamente con "N/A".
+            #
+            # Una clave desconocida o una clave duplicada provoca
+            # un error fatal y termina el script con exit 1.
+            # ------------------------------------------------
+            with input_path.open(
+                "r",
+                encoding="utf-8",
+                errors="replace"
+            ) as in_f:
 
-                # ------------------------------------------------
-                # Ignorar líneas que claramente no corresponden
-                # a una fila de datos de Rundeck.
-                #
-                # Primero se intenta separar la línea como CSV.
-                # Si contiene al menos una clave conocida, se
-                # considera una posible fila de inventario.
-                # ------------------------------------------------
-                fields = split_quoted_csv_line(line)
+                for line_number, raw_line in enumerate(in_f, start=1):
+                    line = raw_line.rstrip("\r\n")
 
-                if fields is None:
-                    continue
-
-                is_inventory_line = False
-
-                for field in fields:
-                    parsed = parse_key_value_field(field)
-
-                    if parsed is not None:
-                        key, _value = parsed
-
-                        if key in header_positions:
-                            is_inventory_line = True
-                            break
-
-                if not is_inventory_line:
-                    continue
-
-                # ------------------------------------------------
-                # Inicializar las columnas según su flag.
-                #
-                #   flag 0 -> vacío
-                #   flag 1 -> N/A
-                #   flag 2 -> N/A
-                #
-                # De esta forma, una clave con flag 0 nunca
-                # recibirá un valor desde la salida de Rundeck.
-                # ------------------------------------------------
-                output_values = [
-                    "" if flag == 0 else "N/A"
-                    for _name, flag in header_list
-                ]
-
-                seen_keys: set[str] = set()
-
-                # ------------------------------------------------
-                # Procesar cada campo CLAVE="VALOR".
-                # ------------------------------------------------
-                for field in fields:
-
-                    parsed = parse_key_value_field(field)
-
-                    if parsed is None:
-                        error(
-                            f"Línea {line_number}: "
-                            f"campo inválido: {field}"
-                        )
-
-                    key, value = parsed
-
-                    # ------------------------------------------------
-                    # La clave debe coincidir EXACTAMENTE con una
-                    # entrada de header_list.txt.
-                    #
-                    # Si no existe, es un error fatal.
-                    # ------------------------------------------------
-                    if key not in header_positions:
-                        error(
-                            f"Línea {line_number}: "
-                            f"clave no definida en header_list.txt: "
-                            f"'{key}'"
-                        )
-
-                    # ------------------------------------------------
-                    # No permitir claves duplicadas dentro de la
-                    # misma fila.
-                    # ------------------------------------------------
-                    if key in seen_keys:
-                        error(
-                            f"Línea {line_number}: "
-                            f"clave duplicada: '{key}'"
-                        )
-
-                    seen_keys.add(key)
-
-                    # ------------------------------------------------
-                    # Si la columna tiene flag 0, se ignora el valor
-                    # recibido desde Rundeck y permanece vacía.
-                    # ------------------------------------------------
-                    if header_flags[key] == 0:
+                    if not line:
                         continue
 
                     # ------------------------------------------------
-                    # Si la columna tiene flag 1 o 2, colocar el
-                    # valor en la posición correspondiente según
-                    # header_list.txt.
+                    # Ignorar líneas que claramente no corresponden
+                    # a una fila de datos de Rundeck.
+                    #
+                    # Primero se intenta separar la línea como CSV.
+                    # Si contiene al menos una clave conocida, se
+                    # considera una posible fila de inventario.
                     # ------------------------------------------------
-                    position = header_positions[key]
-                    output_values[position] = value
+                    fields = split_quoted_csv_line(line)
 
-                # ------------------------------------------------
-                # Escribir la fila CSV final.
-                #
-                # Todos los valores se escriben como campos CSV
-                # verdaderos, independientemente de cómo hayan
-                # llegado desde Rundeck.
-                # ------------------------------------------------
-                out_f.write(
-                    ",".join(
-                        csv_field(value)
-                        for value in output_values
+                    if fields is None:
+                        continue
+
+                    is_inventory_line = False
+
+                    for field in fields:
+                        parsed = parse_key_value_field(field)
+
+                        if parsed is not None:
+                            key, _value = parsed
+
+                            if key in header_positions:
+                                is_inventory_line = True
+                                break
+
+                    if not is_inventory_line:
+                        continue
+
+                    # ------------------------------------------------
+                    # Inicializar las columnas según su flag.
+                    #
+                    #   flag 0 -> vacío
+                    #   flag 1 -> N/A
+                    #   flag 2 -> N/A
+                    #
+                    # De esta forma, una clave con flag 0 nunca
+                    # recibirá un valor desde la salida de Rundeck.
+                    # ------------------------------------------------
+                    output_values = [
+                        "" if flag == 0 else "N/A"
+                        for _name, flag in header_list
+                    ]
+
+                    seen_keys: set[str] = set()
+
+                    # ------------------------------------------------
+                    # Procesar cada campo CLAVE="VALOR".
+                    # ------------------------------------------------
+                    for field in fields:
+
+                        parsed = parse_key_value_field(field)
+
+                        if parsed is None:
+                            error(
+                                f"Línea {line_number}: "
+                                f"campo inválido: {field}"
+                            )
+
+                        key, value = parsed
+
+                        # ------------------------------------------------
+                        # La clave debe coincidir EXACTAMENTE con una
+                        # entrada de header_list.txt.
+                        #
+                        # Si no existe, es un error fatal.
+                        # ------------------------------------------------
+                        if key not in header_positions:
+                            error(
+                                f"Línea {line_number}: "
+                                f"clave no definida en header_list.txt: "
+                                f"'{key}'"
+                            )
+
+                        # ------------------------------------------------
+                        # No permitir claves duplicadas dentro de la
+                        # misma fila.
+                        # ------------------------------------------------
+                        if key in seen_keys:
+                            error(
+                                f"Línea {line_number}: "
+                                f"clave duplicada: '{key}'"
+                            )
+
+                        seen_keys.add(key)
+
+                        # ------------------------------------------------
+                        # Si la columna tiene flag 0, se ignora el valor
+                        # recibido desde Rundeck y permanece vacía.
+                        # ------------------------------------------------
+                        if header_flags[key] == 0:
+                            continue
+
+                        # ------------------------------------------------
+                        # Si la columna tiene flag 1 o 2, colocar el
+                        # valor en la posición correspondiente según
+                        # header_list.txt.
+                        # ------------------------------------------------
+                        position = header_positions[key]
+                        output_values[position] = value
+
+                    # ------------------------------------------------
+                    # Escribir la fila CSV final.
+                    #
+                    # Todos los valores se escriben como campos CSV
+                    # verdaderos, independientemente de cómo hayan
+                    # llegado desde Rundeck.
+                    # ------------------------------------------------
+                    out_f.write(
+                        ",".join(
+                            csv_field(value)
+                            for value in output_values
+                        )
+                        + "\n"
                     )
-                    + "\n"
-                )
+
+        # --------------------------------------------------------
+        # El archivo temporal solo reemplaza la salida definitiva
+        # si todo el procesamiento anterior terminó correctamente.
+        # --------------------------------------------------------
+        os.replace(temporary_output_path, output_path)
+        temporary_output_path = None
+
+    finally:
+        # --------------------------------------------------------
+        # Si el proceso falló antes del reemplazo, eliminar el
+        # archivo temporal para no dejar residuos.
+        # --------------------------------------------------------
+        if temporary_output_path is not None:
+            try:
+                temporary_output_path.unlink()
+            except FileNotFoundError:
+                pass
 
     print()
     print("[OK] Proceso completado.")
