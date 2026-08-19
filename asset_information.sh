@@ -1317,23 +1317,9 @@ get_network_cidr() {
     if ! is_valid_prefix "$prefix"; then
         return 0
     fi
-    local ip_int network_int
+    local ip_int mask_int network_int
     ip_int=$(ip_to_int "$ip")
-    # Se calcula mask_int via awk para evitar el operador << dentro de $((...)),
-    # que confunde resaltadores de sintaxis (falso positivo de heredoc).
-    # La formula es equivalente a: (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF
-    local mask_int
-    mask_int=$(awk -v p="$prefix" 'BEGIN {
-        mask = 0
-        for (i = 0; i < p; i++)
-            mask = mask * 2 + 1
-        # mask tiene p bits en 1 desde el bit menos significativo;
-        # desplazarlo (32-p) posiciones hacia la izquierda via multiplicacion
-        shift = 1
-        for (i = 0; i < 32 - p; i++)
-            shift *= 2
-        printf "%d\n", (mask * shift) % 4294967296
-    }')
+    mask_int=$(( (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF ))
     network_int=$(( ip_int & mask_int ))
     echo "$(int_to_ip "$network_int")/$prefix"
 }

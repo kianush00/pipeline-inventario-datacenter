@@ -4,13 +4,14 @@
 
 # CSV/ODS files
 *.csv
-*.csv*
+*.csv#
 *.ods
 *.xlsx
 *.xls
 
-# Files starting with "salida"
-salida*
+# Txt files (except for header_list.txt)
+*.txt
+!header_list.txt
 
 # Logs
 *.log
