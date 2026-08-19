@@ -491,15 +491,34 @@ get_os_release_field() {
 }
 
 parse_release_file() {
-    # Parsea archivos tipo "CentOS release 6.10 (Final)" -> "CentOS<US>6.10"
+    # Parsea archivos tipo:
+    #   "CentOS Linux release 7.3.1611 (Core)"  -> "CentOS Linux<US>7.3.1611"
+    #   "CentOS release 6.10 (Final)"            -> "CentOS<US>6.10"
+    #   "Red Hat Enterprise Linux Server release 5.11 (Tikanga)" -> "Red Hat Enterprise Linux Server<US>5.11"
+    # Logica:
+    #   - Elimina la palabra "release" y todo lo que venga entre parentesis
+    #   - El ultimo token resultante es la version
+    #   - El resto es el nombre
     local file="$1"
-    local release version name
-
-    release=$(safe_capture sed 's/ release//; s/ *(.*)//' "$file")
-    version="${release##* }"
-    name="${release% $version}"
-
-    printf '%s\x1f%s' "$name" "$version"
+    local result
+    result=$(safe_capture awk '
+        NR == 1 {
+            # Eliminar " (....)" al final
+            sub(/ *\([^)]*\)/, "")
+            # Eliminar la palabra "release" (con espacios alrededor)
+            sub(/ release /, " ")
+            # Eliminar espacios sobrantes al inicio y al final
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+            # El ultimo campo es la version, el resto es el nombre
+            version = $NF
+            name = ""
+            for (i = 1; i < NF; i++) {
+                name = (i == 1) ? $i : name " " $i
+            }
+            printf "%s\x1f%s", name, version
+        }
+    ' "$file")
+    printf '%s' "$result"
 }
 
 get_os_info() {
@@ -508,27 +527,31 @@ get_os_info() {
     # hipervisor separados por coma: "Debian, Proxmox<US>11, 7.4-3"
     local so=""
     local version_so=""
-
-    if [[ -f /etc/debian_version ]]; then
-        so="Debian"
-        version_so=$(safe_capture cat /etc/debian_version)
-    elif [[ -f /etc/redhat-release ]]; then
+    if [[ -f /etc/redhat-release ]]; then
         IFS=$'\x1f' read -r so version_so <<< "$(parse_release_file /etc/redhat-release)"
         so=$(normalize_os_name "$so")
     elif [[ -f /etc/centos-release ]]; then
         IFS=$'\x1f' read -r so version_so <<< "$(parse_release_file /etc/centos-release)"
         so=$(normalize_os_name "$so")
-    elif [[ -n "$LSBRELEASE_CMD" ]]; then
-        so=$(safe_capture "$LSBRELEASE_CMD" -si)
-        version_so=$(safe_capture "$LSBRELEASE_CMD" -sr)
     elif [[ -f /etc/os-release ]]; then
         local name_raw version_id_raw version_raw
         name_raw=$(get_os_release_field "NAME")
         version_id_raw=$(get_os_release_field "VERSION_ID")
         version_raw=$(get_os_release_field "VERSION")
-    
         so=$(normalize_os_name "$name_raw")
-        version_so="${version_id_raw:-${version_raw:-N/A}}"
+        if [[ "$so" == "Debian" && -f /etc/debian_version ]]; then
+            version_so=$(safe_capture cat /etc/debian_version)
+        elif [[ "$so" == "Ubuntu" ]]; then
+            version_so="${version_raw%% *}"
+        else
+            version_so="${version_id_raw:-${version_raw:-N/A}}"
+        fi
+    elif [[ -n "$LSBRELEASE_CMD" ]]; then
+        so=$(safe_capture "$LSBRELEASE_CMD" -si)
+        version_so=$(safe_capture "$LSBRELEASE_CMD" -sr)
+    elif [[ -f /etc/debian_version ]]; then
+        so="Debian"
+        version_so=$(safe_capture cat /etc/debian_version)
     elif [[ -f /etc/system-release ]]; then
         IFS=$'\x1f' read -r so version_so <<< "$(parse_release_file /etc/system-release)"
         so=$(normalize_os_name "$so")
