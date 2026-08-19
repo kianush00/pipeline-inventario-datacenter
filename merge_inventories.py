@@ -168,17 +168,20 @@ def resolve_positions(
 
 
 # ============================================================
-# LEER HEADER
+# LEER CSV COMPLETO
 # ============================================================
 
-def read_header(
+def load_csv_data(
     csv_path: Path,
-) -> tuple[str, list[str]]:
+) -> tuple[str, list[str], list[list[str]]]:
     """
-    Lee y valida el header de un CSV.
+    Lee un CSV completo en una sola pasada.
 
     Retorna:
-        (línea_original, campos_del_header)
+        (línea_original_del_header, campos_del_header, filas_de_datos)
+
+    Las filas se mantienen en memoria para evitar una segunda
+    lectura del archivo durante el procesamiento posterior.
     """
     with csv_path.open(
         "r",
@@ -187,49 +190,18 @@ def read_header(
     ) as file:
         header_line = file.readline().rstrip("\r\n")
 
-    if not header_line:
-        error(f"El archivo CSV está vacío:\n  {csv_path}")
+        if not header_line:
+            error(f"El archivo CSV está vacío:\n  {csv_path}")
 
-    header_fields = split_quoted_csv_line(header_line)
+        header_fields = split_quoted_csv_line(header_line)
 
-    if header_fields is None:
-        error(
-            f"El header del CSV tiene comillas desbalanceadas:\n"
-            f"  {csv_path}"
-        )
+        if header_fields is None:
+            error(
+                f"El header del CSV tiene comillas desbalanceadas:\n"
+                f"  {csv_path}"
+            )
 
-    return header_line, header_fields
-
-
-# ============================================================
-# LEER DATOS DEL CSV PARSEADO
-# ============================================================
-
-def load_parsed_data(
-    input_parsed_path: Path,
-    defined_fields: int,
-    key_idx: int,
-) -> tuple[dict[str, list[str]], set[str]]:
-    """
-    Lee el inventario parseado y construye un mapa:
-
-        clave -> fila
-
-    Solo se consideran claves válidas.
-
-    Las claves duplicadas se registran en duplicated_keys y
-    quedan excluidas del mapa para impedir cualquier fusión
-    posterior.
-    """
-    parsed_data: dict[str, list[str]] = {}
-    duplicated_keys: set[str] = set()
-
-    with input_parsed_path.open(
-        "r",
-        encoding="utf-8",
-        errors="replace",
-    ) as file:
-        next(file, None)
+        rows: list[list[str]] = []
 
         for line_number, raw_line in enumerate(file, start=2):
             line = raw_line.rstrip("\r\n")
@@ -241,41 +213,89 @@ def load_parsed_data(
 
             if fields is None:
                 print(
-                    f"[ERROR] Línea {line_number} del inventario parseado: "
-                    "comillas desbalanceadas.",
-                    file=sys.stderr,
-                )
-                continue
-
-            if len(fields) != defined_fields:
-                print(
-                    f"[ERROR] Línea {line_number} del inventario parseado: "
-                    f"se esperaban {defined_fields} campos, "
-                    f"pero se encontraron {len(fields)}.",
+                    f"[ERROR] Línea {line_number} de "
+                    f"{csv_path.name}: comillas desbalanceadas.",
                     file=sys.stderr
                 )
                 continue
 
-            key = strip_quotes(fields[key_idx])
+            rows.append(fields)
 
-            if is_invalid_key(key):
-                continue
+    return header_line, header_fields, rows
 
-            if key in duplicated_keys:
-                continue
 
-            if key in parsed_data:
-                print(
-                    f"[WARNING] Clave duplicada en el inventario "
-                    f"parseado: '{key}'. Las filas con esta clave "
-                    "no serán fusionadas.",
-                    file=sys.stderr
-                )
-                del parsed_data[key]
-                duplicated_keys.add(key)
-                continue
+# ============================================================
+# VALIDAR ESTRUCTURA DE FILAS
+# ============================================================
 
-            parsed_data[key] = fields
+def validate_rows(
+    rows: list[list[str]],
+    expected_columns: int,
+    csv_path: Path,
+) -> list[list[str]]:
+    """
+    Valida que todas las filas tengan exactamente la cantidad
+    de columnas esperada.
+
+    Las filas inválidas se descartan.
+    """
+    valid_rows: list[list[str]] = []
+
+    for row_number, fields in enumerate(rows, start=2):
+        if len(fields) != expected_columns:
+            print(
+                f"[ERROR] Línea {row_number} de {csv_path.name}: "
+                f"se esperaban {expected_columns} campos, "
+                f"pero se encontraron {len(fields)}.",
+                file=sys.stderr
+            )
+            continue
+
+        valid_rows.append(fields)
+
+    return valid_rows
+
+
+# ============================================================
+# CONSTRUIR MAPA DEL INVENTARIO PARSEADO
+# ============================================================
+
+def build_parsed_data(
+    rows: list[list[str]],
+    key_idx: int,
+) -> tuple[dict[str, list[str]], set[str]]:
+    """
+    Construye un mapa:
+
+        clave -> fila
+
+    Las claves duplicadas se registran y quedan excluidas del
+    mapa para impedir cualquier fusión posterior.
+    """
+    parsed_data: dict[str, list[str]] = {}
+    duplicated_keys: set[str] = set()
+
+    for fields in rows:
+        key = strip_quotes(fields[key_idx])
+
+        if is_invalid_key(key):
+            continue
+
+        if key in duplicated_keys:
+            continue
+
+        if key in parsed_data:
+            print(
+                f"[WARNING] Clave duplicada en el inventario "
+                f"parseado: '{key}'. Las filas con esta clave "
+                "no serán fusionadas.",
+                file=sys.stderr
+            )
+            del parsed_data[key]
+            duplicated_keys.add(key)
+            continue
+
+        parsed_data[key] = fields
 
     return parsed_data, duplicated_keys
 
@@ -284,62 +304,28 @@ def load_parsed_data(
 # VALIDAR UNICIDAD DE CLAVES EN EL INVENTARIO MAESTRO
 # ============================================================
 
-def validate_parent_keys(
-    input_parent_path: Path,
-    parent_total_columns: int,
+def find_parent_duplicated_keys(
+    rows: list[list[str]],
     key_idx: int,
 ) -> set[str]:
     """
-    Recorre el inventario maestro y detecta claves duplicadas.
+    Detecta claves duplicadas en el inventario maestro.
 
     Retorna el conjunto de claves duplicadas.
-
-    La validación se realiza antes de comenzar la fusión.
     """
     seen_keys: set[str] = set()
     duplicated_keys: set[str] = set()
 
-    with input_parent_path.open(
-        "r",
-        encoding="utf-8",
-        errors="replace",
-    ) as file:
-        next(file, None)
+    for fields in rows:
+        key = strip_quotes(fields[key_idx])
 
-        for line_number, raw_line in enumerate(file, start=2):
-            line = raw_line.rstrip("\r\n")
+        if is_invalid_key(key):
+            continue
 
-            if not line:
-                continue
-
-            fields = split_quoted_csv_line(line)
-
-            if fields is None:
-                print(
-                    f"[ERROR] Línea {line_number} del inventario maestro: "
-                    "comillas desbalanceadas.",
-                    file=sys.stderr
-                )
-                continue
-
-            if len(fields) != parent_total_columns:
-                print(
-                    f"[ERROR] Línea {line_number} del inventario maestro: "
-                    f"se esperaban {parent_total_columns} campos, "
-                    f"pero se encontraron {len(fields)}.",
-                    file=sys.stderr
-                )
-                continue
-
-            key = strip_quotes(fields[key_idx])
-
-            if is_invalid_key(key):
-                continue
-
-            if key in seen_keys:
-                duplicated_keys.add(key)
-            else:
-                seen_keys.add(key)
+        if key in seen_keys:
+            duplicated_keys.add(key)
+        else:
+            seen_keys.add(key)
 
     for key in sorted(duplicated_keys):
         print(
@@ -393,9 +379,6 @@ def main() -> None:
 
     # --------------------------------------------------------
     # Validar colisiones entre archivos de entrada y salida.
-    #
-    # Se utiliza resolve() para detectar también referencias
-    # que apuntan al mismo archivo mediante rutas diferentes.
     # --------------------------------------------------------
     resolved_output = output_path.resolve()
     resolved_parsed = input_parsed_path.resolve()
@@ -427,11 +410,13 @@ def main() -> None:
     key_name = resolve_key_column(header_list)
 
     # --------------------------------------------------------
-    # Leer y validar header del inventario parseado.
+    # Leer completamente el inventario parseado.
     # --------------------------------------------------------
-    _parsed_header_line, parsed_header_fields = read_header(
-        input_parsed_path
-    )
+    (
+        _parsed_header_line,
+        parsed_header_fields,
+        parsed_rows,
+    ) = load_csv_data(input_parsed_path)
 
     parsed_positions = resolve_positions(
         header_list,
@@ -441,12 +426,20 @@ def main() -> None:
 
     key_parsed_idx = parsed_positions[key_name]
 
-    # --------------------------------------------------------
-    # Leer y validar header del inventario maestro.
-    # --------------------------------------------------------
-    parent_header_line, parent_header_fields = read_header(
-        input_parent_path
+    parsed_rows = validate_rows(
+        parsed_rows,
+        defined_fields,
+        input_parsed_path,
     )
+
+    # --------------------------------------------------------
+    # Leer completamente el inventario maestro.
+    # --------------------------------------------------------
+    (
+        parent_header_line,
+        parent_header_fields,
+        parent_rows,
+    ) = load_csv_data(input_parent_path)
 
     parent_positions = resolve_positions(
         header_list,
@@ -457,6 +450,12 @@ def main() -> None:
     key_parent_idx = parent_positions[key_name]
     parent_total_columns = len(parent_header_fields)
     extra_columns = parent_total_columns - defined_fields
+
+    parent_rows = validate_rows(
+        parent_rows,
+        parent_total_columns,
+        input_parent_path,
+    )
 
     # --------------------------------------------------------
     # Construir mapa de fusión.
@@ -479,17 +478,16 @@ def main() -> None:
         merge_pairs.append((parent_idx, parsed_idx))
 
     # --------------------------------------------------------
-    # Validar unicidad de claves ANTES de comenzar la fusión.
+    # Validar unicidad de claves usando las filas ya cargadas
+    # en memoria.
     # --------------------------------------------------------
-    parsed_data, parsed_duplicated_keys = load_parsed_data(
-        input_parsed_path,
-        defined_fields,
+    parsed_data, parsed_duplicated_keys = build_parsed_data(
+        parsed_rows,
         key_parsed_idx,
     )
 
-    parent_duplicated_keys = validate_parent_keys(
-        input_parent_path,
-        parent_total_columns,
+    parent_duplicated_keys = find_parent_duplicated_keys(
+        parent_rows,
         key_parent_idx,
     )
 
@@ -534,87 +532,63 @@ def main() -> None:
         ) as out_f:
             temporary_output_path = Path(out_f.name)
 
-            with input_parent_path.open(
-                "r",
-                encoding="utf-8",
-                errors="replace",
-            ) as in_f:
-                # Header del maestro sin modificar.
-                out_f.write(parent_header_line + "\n")
-                next(in_f, None)
+            # ------------------------------------------------
+            # Escribir header del maestro sin modificar.
+            # ------------------------------------------------
+            out_f.write(parent_header_line + "\n")
 
-                for line_number, raw_line in enumerate(in_f, start=2):
-                    line = raw_line.rstrip("\r\n")
+            # ------------------------------------------------
+            # Procesar todas las filas del maestro ya cargadas
+            # en memoria.
+            # ------------------------------------------------
+            for line_number, fields in enumerate(parent_rows, start=2):
+                key = strip_quotes(fields[key_parent_idx])
 
-                    if not line:
-                        continue
-
-                    fields = split_quoted_csv_line(line)
-
-                    if fields is None:
-                        print(
-                            f"[ERROR] Línea {line_number} del inventario maestro: "
-                            "comillas desbalanceadas.",
-                            file=sys.stderr
-                        )
-                        continue
-
-                    if len(fields) != parent_total_columns:
-                        print(
-                            f"[ERROR] Línea {line_number} del inventario maestro: "
-                            f"se esperaban {parent_total_columns} campos, "
-                            f"pero se encontraron {len(fields)}.",
-                            file=sys.stderr
-                        )
-                        continue
-
-                    key = strip_quotes(fields[key_parent_idx])
-
-                    # ------------------------------------------------
-                    # Clave inválida:
-                    # conservar la fila del maestro sin fusionar.
-                    # ------------------------------------------------
-                    if is_invalid_key(key):
-                        out_f.write(",".join(fields) + "\n")
-                        continue
-
-                    # ------------------------------------------------
-                    # Clave duplicada en el maestro:
-                    # conservar la fila sin fusionar.
-                    # ------------------------------------------------
-                    if key in parent_duplicated_keys:
-                        out_f.write(",".join(fields) + "\n")
-                        continue
-
-                    # ------------------------------------------------
-                    # La clave no existe en el parseado:
-                    # LEFT JOIN -> conservar la fila del maestro.
-                    # ------------------------------------------------
-                    if key not in parsed_data:
-                        print(
-                            f"[WARNING] Línea {line_number} del inventario maestro: "
-                            f"la clave '{key}' no existe en el inventario "
-                            "parseado. La fila se conservará sin fusionar.",
-                            file=sys.stderr
-                        )
-                        out_f.write(",".join(fields) + "\n")
-                        continue
-
-                    # ------------------------------------------------
-                    # La clave existe y es única en ambos inventarios.
-                    # Fusionar solamente las columnas con flag 1.
-                    # ------------------------------------------------
-                    parsed_fields = parsed_data[key]
-
-                    for parent_idx, parsed_idx in merge_pairs:
-                        parsed_value = parsed_fields[parsed_idx]
-
-                        if is_empty_or_na(parsed_value):
-                            continue
-
-                        fields[parent_idx] = parsed_value
-
+                # ------------------------------------------------
+                # Clave inválida:
+                # conservar la fila del maestro sin fusionar.
+                # ------------------------------------------------
+                if is_invalid_key(key):
                     out_f.write(",".join(fields) + "\n")
+                    continue
+
+                # ------------------------------------------------
+                # Clave duplicada en el maestro:
+                # conservar la fila sin fusionar.
+                # ------------------------------------------------
+                if key in parent_duplicated_keys:
+                    out_f.write(",".join(fields) + "\n")
+                    continue
+
+                # ------------------------------------------------
+                # La clave no existe en el parseado:
+                # LEFT JOIN -> conservar la fila del maestro.
+                # ------------------------------------------------
+                if key not in parsed_data:
+                    print(
+                        f"[WARNING] Línea {line_number} del inventario maestro: "
+                        f"la clave '{key}' no existe en el inventario "
+                        "parseado. La fila se conservará sin fusionar.",
+                        file=sys.stderr
+                    )
+                    out_f.write(",".join(fields) + "\n")
+                    continue
+
+                # ------------------------------------------------
+                # La clave existe y es única en ambos inventarios.
+                # Fusionar solamente las columnas con flag 1.
+                # ------------------------------------------------
+                parsed_fields = parsed_data[key]
+
+                for parent_idx, parsed_idx in merge_pairs:
+                    parsed_value = parsed_fields[parsed_idx]
+
+                    if is_empty_or_na(parsed_value):
+                        continue
+
+                    fields[parent_idx] = parsed_value
+
+                out_f.write(",".join(fields) + "\n")
 
         # --------------------------------------------------------
         # El archivo temporal solo reemplaza la salida definitiva
