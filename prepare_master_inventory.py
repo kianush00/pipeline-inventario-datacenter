@@ -1,28 +1,36 @@
 """
 prepare_master_inventory.py
 ============================
-Convierte un inventario maestro en formato ODS a CSV limpio,
+Convierte un inventario maestro en formato ODS/XLSX a CSV limpio,
 validando que las columnas definidas en header_list.txt aparezcan
-en el header del ODS con sus nombres exactos.
+en el header del archivo de entrada con sus nombres exactos.
 
 El orden de las columnas definidas en header_list.txt NO es
-relevante. Pueden existir columnas adicionales en el ODS; éstas
-se conservan sin tocar.
+relevante. Pueden existir columnas adicionales en el archivo de
+entrada; éstas se conservan sin tocar.
 
-El script permite que el ODS tenga una fila inicial de categorías
-agrupadas sobre el header real. Si una fila contiene todos los
-nombres definidos en header_list.txt exactamente una vez, esa fila
-se considera el header real y las filas anteriores se descartan.
+El script permite que el archivo de entrada tenga una fila inicial
+de categorías agrupadas sobre el header real. Si una fila contiene
+todos los nombres definidos en header_list.txt exactamente una vez,
+esa fila se considera el header real y las filas anteriores se
+descartan.
 
 Si no existe una fila de categorías, la primera fila que contenga
 todos los nombres definidos en header_list.txt se considera
 directamente el header real.
 
+Formatos de entrada soportados:
+    .ods
+    .xlsx
+
+LibreOffice se utiliza para convertir el archivo de entrada a CSV
+antes de realizar las validaciones y el procesamiento.
+
 Uso:
     python3 prepare_master_inventory.py \
-        master_inventory.ods \
+        master_inventory.[ods|xlsx] \
         [prepared_master_inventory.csv] \
-        [header_list.txt] \
+        [header_list.txt]
 
 Si no se indica la ruta de header_list.txt, se busca un archivo
 llamado "header_list.txt" en el mismo directorio que este script.
@@ -59,23 +67,23 @@ def find_libreoffice() -> str:
 
 
 # ============================================================
-# CONVERTIR ODS A CSV
+# CONVERTIR PLANILLA A CSV
 # ============================================================
 
-def convert_ods_to_csv(
+def convert_spreadsheet_to_csv(
     libreoffice: str,
-    ods_path: Path,
+    input_path: Path,
     temporary_directory: Path,
 ) -> Path:
     print()
-    print("Convirtiendo ODS a CSV...")
+    print("Convirtiendo archivo de entrada a CSV...")
 
     command = [
         libreoffice,
         "--headless",
         "--convert-to", "csv",
         "--outdir", str(temporary_directory),
-        str(ods_path),
+        str(input_path),
     ]
 
     result = subprocess.run(
@@ -87,12 +95,12 @@ def convert_ods_to_csv(
 
     if result.returncode != 0:
         error(
-            "LibreOffice no pudo convertir el ODS.\n\n"
+            "LibreOffice no pudo convertir el archivo de entrada.\n\n"
             f"stdout:\n{result.stdout}\n\n"
             f"stderr:\n{result.stderr}"
         )
 
-    converted_csv = temporary_directory / f"{ods_path.stem}.csv"
+    converted_csv = temporary_directory / f"{input_path.stem}.csv"
 
     if not converted_csv.is_file():
         error(
@@ -171,11 +179,6 @@ def process_csv(
     """
     Lee el CSV generado por LibreOffice, detecta el header real
     mediante header_list.txt y escribe el CSV de salida limpio.
-
-    El CSV de salida se escribe primero en un archivo temporal
-    ubicado en el mismo directorio que output_csv. Solo después
-    de completar exitosamente todo el procesamiento se reemplaza
-    el archivo de salida mediante os.replace().
 
     Reglas de validación del header:
     - Puede existir una fila inicial de categorías agrupadas.
@@ -308,29 +311,22 @@ def process_csv(
         )
 
     print(
-        f"Columnas de header_list.txt encontradas en el ODS: "
+        f"Columnas de header_list.txt encontradas en el archivo: "
         f"{len(header_list)}"
     )
 
     # --------------------------------------------------------
-    # Crear archivo temporal en el mismo directorio que la
-    # salida para permitir un reemplazo atómico mediante
-    # os.replace().
+    # Escribir CSV de salida.
+    #
+    # Se conserva el header real y todas las columnas adicionales.
+    # Las filas anteriores al header real se descartan.
     # --------------------------------------------------------
-    temporary_output_path: Path | None = None
-
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
+        with output_csv.open(
+            "w",
             encoding="utf-8",
             newline="",
-            dir=output_csv.parent,
-            prefix=f".{output_csv.name}.",
-            suffix=".tmp",
-            delete=False,
         ) as file:
-            temporary_output_path = Path(file.name)
-
             writer = csv.writer(
                 file,
                 delimiter=",",
@@ -367,13 +363,6 @@ def process_csv(
 
                 writer.writerow([clean_value(v) for v in row])
 
-        # --------------------------------------------------------
-        # El archivo temporal solo reemplaza la salida definitiva
-        # si todo el procesamiento anterior terminó correctamente.
-        # --------------------------------------------------------
-        os.replace(temporary_output_path, output_csv)
-        temporary_output_path = None
-
     except OSError as exc:
         error(
             f"No se pudo escribir el CSV de salida:\n"
@@ -386,16 +375,6 @@ def process_csv(
             f"  {output_csv}\n"
             f"Motivo: {exc}"
         )
-    finally:
-        # --------------------------------------------------------
-        # Si el proceso falló antes del reemplazo, eliminar el
-        # archivo temporal para no dejar residuos.
-        # --------------------------------------------------------
-        if temporary_output_path is not None:
-            try:
-                temporary_output_path.unlink()
-            except FileNotFoundError:
-                pass
 
 
 # ============================================================
@@ -406,7 +385,7 @@ def main() -> None:
     if len(sys.argv) < 2:
         error(
             f"Uso: {sys.argv[0]} "
-            "master_inventory.ods "
+            "master_inventory.[ods|xlsx] "
             "[prepared_master_inventory.csv] "
             "[header_list.txt]"
         )
@@ -415,38 +394,41 @@ def main() -> None:
         error(
             f"Cantidad de argumentos inválida.\n"
             f"Uso: {sys.argv[0]} "
-            "master_inventory.ods "
+            "master_inventory.[ods|xlsx] "
             "[prepared_master_inventory.csv] "
             "[header_list.txt]"
         )
 
     # --------------------------------------------------------
-    # Validar ODS.
+    # Validar archivo de entrada.
     # --------------------------------------------------------
-    ods_path = Path(sys.argv[1])
+    input_path = Path(sys.argv[1])
 
-    if not ods_path.is_file():
-        error(f"No existe el archivo ODS:\n  {ods_path}")
+    if not input_path.is_file():
+        error(f"No existe el archivo de entrada:\n  {input_path}")
 
-    if ods_path.suffix.lower() != ".ods":
+    supported_extensions = {".ods", ".xlsx"}
+
+    if input_path.suffix.lower() not in supported_extensions:
         error(
-            f"El archivo de entrada no parece ser un ODS:\n"
-            f"  {ods_path}"
+            "El archivo de entrada debe ser un archivo ODS "
+            "(.ods) o Excel (.xlsx):\n"
+            f"  {input_path}"
         )
 
     try:
-        ods_size = ods_path.stat().st_size
+        input_size = input_path.stat().st_size
     except OSError as exc:
         error(
-            f"No se pudo obtener el tamaño del archivo ODS:\n"
-            f"  {ods_path}\n"
+            "No se pudo obtener el tamaño del archivo de entrada:\n"
+            f"  {input_path}\n"
             f"Motivo: {exc}"
         )
 
-    if ods_size == 0:
+    if input_size == 0:
         error(
-            f"El archivo ODS está vacío (0 bytes):\n"
-            f"  {ods_path}"
+            f"El archivo de entrada está vacío (0 bytes):\n"
+            f"  {input_path}"
         )
 
     # --------------------------------------------------------
@@ -461,13 +443,13 @@ def main() -> None:
     # --------------------------------------------------------
     # Validar colisión entre archivo de entrada y salida.
     # --------------------------------------------------------
-    resolved_input = ods_path.resolve()
+    resolved_input = input_path.resolve()
     resolved_output = output_path.resolve()
 
     if resolved_input == resolved_output:
         error(
             "El archivo de salida no puede ser el mismo archivo "
-            "que el archivo ODS de entrada:\n"
+            "que el archivo de entrada:\n"
             f"  {output_path}"
         )
 
@@ -486,7 +468,7 @@ def main() -> None:
     # Información.
     # --------------------------------------------------------
     print()
-    print(f"Archivo ODS              : {ods_path}")
+    print(f"Archivo de entrada       : {input_path}")
     print(f"header_list.txt          : {header_list_path}")
     print(f"Columnas en header_list  : {len(header_list)}")
     print(f"CSV de salida            : {output_path}")
@@ -502,19 +484,62 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="inventario_") as tmp_dir:
         tmp_path = Path(tmp_dir)
 
-        converted_csv = convert_ods_to_csv(
+        converted_csv = convert_spreadsheet_to_csv(
             libreoffice,
-            ods_path,
+            input_path,
             tmp_path,
         )
 
         print(f"CSV temporal generado    : {converted_csv.name}")
 
-        process_csv(
-            converted_csv,
-            output_path,
-            header_list,
-        )
+        # ----------------------------------------------------
+        # Crear un segundo archivo temporal en el mismo
+        # directorio que la salida definitiva.
+        #
+        # Esto permite reemplazar el archivo final mediante
+        # os.replace() de forma atómica.
+        # ----------------------------------------------------
+        temporary_output_path: Path | None = None
+
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                newline="",
+                dir=output_path.parent,
+                prefix=f".{output_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary_output:
+                temporary_output_path = Path(temporary_output.name)
+
+            process_csv(
+                converted_csv,
+                temporary_output_path,
+                header_list,
+            )
+
+            # ------------------------------------------------
+            # El archivo temporal solo reemplaza la salida
+            # definitiva si todo el procesamiento terminó
+            # correctamente.
+            # ------------------------------------------------
+            os.replace(
+                temporary_output_path,
+                output_path,
+            )
+            temporary_output_path = None
+
+        finally:
+            # ------------------------------------------------
+            # Si el proceso falló antes del reemplazo, eliminar
+            # el archivo temporal para no dejar residuos.
+            # ------------------------------------------------
+            if temporary_output_path is not None:
+                try:
+                    temporary_output_path.unlink()
+                except FileNotFoundError:
+                    pass
 
     # --------------------------------------------------------
     # Resultado.
@@ -522,8 +547,8 @@ def main() -> None:
     print()
     print("[OK] Proceso completado.")
     print()
-    print(f"ODS original : {ods_path}")
-    print(f"CSV generado : {output_path}")
+    print(f"Archivo original : {input_path}")
+    print(f"CSV generado     : {output_path}")
 
 
 if __name__ == "__main__":
