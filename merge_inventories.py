@@ -38,8 +38,8 @@ El inventario maestro es la base:
 La unión se comporta como un LEFT JOIN:
 - Si la clave del maestro no existe en el parseado, la fila del
   maestro se conserva sin modificar.
-- Si la clave del maestro es vacía, N/A o "Not Settable", la fila
-  del maestro se conserva sin fusionar.
+- Si la clave del maestro es vacía o N/A, la fila del maestro
+  se conserva sin fusionar.
 - Si una clave aparece más de una vez en cualquiera de los dos
   inventarios, las filas afectadas se conservan sin fusionar.
 - Solo se fusionan filas cuya clave sea válida y única en ambos
@@ -56,7 +56,9 @@ Si no se indica la ruta de header_list.txt, se busca un archivo
 llamado "header_list.txt" en el mismo directorio que este script.
 """
 
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 from base_inventory import (
@@ -96,6 +98,20 @@ def resolve_key_column(
         )
 
     return key_columns[0]
+
+
+# ============================================================
+# VALIDAR CLAVE DE UNIÓN
+# ============================================================
+
+def is_invalid_key(value: str) -> bool:
+    """
+    Retorna True si el valor no puede utilizarse como clave
+    de unión.
+
+    Una clave es inválida solamente si está vacía o es "N/A".
+    """
+    return is_empty_or_na(value)
 
 
 # ============================================================
@@ -242,7 +258,7 @@ def load_parsed_data(
 
             key = strip_quotes(fields[key_idx])
 
-            if key in ("", "N/A", "Not Settable"):
+            if is_invalid_key(key):
                 continue
 
             if key in duplicated_keys:
@@ -317,7 +333,7 @@ def validate_parent_keys(
 
             key = strip_quotes(fields[key_idx])
 
-            if key in ("", "N/A", "Not Settable"):
+            if is_invalid_key(key):
                 continue
 
             if key in seen_keys:
@@ -350,6 +366,16 @@ def main() -> None:
         )
         sys.exit(1)
 
+    if len(sys.argv) > 5:
+        error(
+            f"Cantidad de argumentos inválida.\n"
+            f"Uso: {sys.argv[0]} "
+            "inventario_parseado.csv "
+            "inventario_maestro.csv "
+            "inventario_fusionado.csv "
+            "[header_list.txt]"
+        )
+
     input_parsed_path = Path(sys.argv[1])
     input_parent_path = Path(sys.argv[2])
     output_path       = Path(sys.argv[3])
@@ -364,6 +390,30 @@ def main() -> None:
     ):
         if not path.is_file():
             error(f"No se encontró el {label}: {path}")
+
+    # --------------------------------------------------------
+    # Validar colisiones entre archivos de entrada y salida.
+    #
+    # Se utiliza resolve() para detectar también referencias
+    # que apuntan al mismo archivo mediante rutas diferentes.
+    # --------------------------------------------------------
+    resolved_output = output_path.resolve()
+    resolved_parsed = input_parsed_path.resolve()
+    resolved_parent = input_parent_path.resolve()
+
+    if resolved_output == resolved_parsed:
+        error(
+            "El archivo de salida no puede ser el mismo archivo "
+            "que el inventario parseado:\n"
+            f"  {output_path}"
+        )
+
+    if resolved_output == resolved_parent:
+        error(
+            "El archivo de salida no puede ser el mismo archivo "
+            "que el inventario maestro:\n"
+            f"  {output_path}"
+        )
 
     # --------------------------------------------------------
     # Cargar header_list.
@@ -466,107 +516,123 @@ def main() -> None:
     )
 
     # --------------------------------------------------------
-    # Leer inventario maestro, realizar LEFT JOIN y escribir salida.
-    #
-    # TODAS las filas del maestro se conservan.
-    #
-    # Una fila solamente se modifica si:
-    #   1. Tiene una clave válida.
-    #   2. La clave es única en el maestro.
-    #   3. La clave existe en el parseado.
-    #   4. La clave es única en el parseado.
-    #
-    # Si alguna condición falla, la fila del maestro se escribe
-    # sin fusionar.
+    # Crear archivo temporal en el mismo directorio que la
+    # salida para permitir un reemplazo atómico mediante
+    # os.replace().
     # --------------------------------------------------------
-    with (
-        output_path.open(
-            "w",
+    temporary_output_path: Path | None = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
             encoding="utf-8",
             newline="",
-        ) as out_f,
-        input_parent_path.open(
-            "r",
-            encoding="utf-8",
-            errors="replace",
-        ) as in_f,
-    ):
-        # Header del maestro sin modificar.
-        out_f.write(parent_header_line + "\n")
-        next(in_f, None)
+            dir=output_path.parent,
+            prefix=f".{output_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as out_f:
+            temporary_output_path = Path(out_f.name)
 
-        for line_number, raw_line in enumerate(in_f, start=2):
-            line = raw_line.rstrip("\r\n")
+            with input_parent_path.open(
+                "r",
+                encoding="utf-8",
+                errors="replace",
+            ) as in_f:
+                # Header del maestro sin modificar.
+                out_f.write(parent_header_line + "\n")
+                next(in_f, None)
 
-            if not line:
-                continue
+                for line_number, raw_line in enumerate(in_f, start=2):
+                    line = raw_line.rstrip("\r\n")
 
-            fields = split_quoted_csv_line(line)
+                    if not line:
+                        continue
 
-            if fields is None:
-                print(
-                    f"[ERROR] Línea {line_number} del inventario maestro: "
-                    "comillas desbalanceadas.",
-                    file=sys.stderr
-                )
-                continue
+                    fields = split_quoted_csv_line(line)
 
-            if len(fields) != parent_total_columns:
-                print(
-                    f"[ERROR] Línea {line_number} del inventario maestro: "
-                    f"se esperaban {parent_total_columns} campos, "
-                    f"pero se encontraron {len(fields)}.",
-                    file=sys.stderr
-                )
-                continue
+                    if fields is None:
+                        print(
+                            f"[ERROR] Línea {line_number} del inventario maestro: "
+                            "comillas desbalanceadas.",
+                            file=sys.stderr
+                        )
+                        continue
 
-            key = strip_quotes(fields[key_parent_idx])
+                    if len(fields) != parent_total_columns:
+                        print(
+                            f"[ERROR] Línea {line_number} del inventario maestro: "
+                            f"se esperaban {parent_total_columns} campos, "
+                            f"pero se encontraron {len(fields)}.",
+                            file=sys.stderr
+                        )
+                        continue
 
-            # ------------------------------------------------
-            # Clave inválida:
-            # conservar la fila del maestro sin fusionar.
-            # ------------------------------------------------
-            if key in ("", "N/A", "Not Settable"):
-                out_f.write(",".join(fields) + "\n")
-                continue
+                    key = strip_quotes(fields[key_parent_idx])
 
-            # ------------------------------------------------
-            # Clave duplicada en el maestro:
-            # conservar la fila sin fusionar.
-            # ------------------------------------------------
-            if key in parent_duplicated_keys:
-                out_f.write(",".join(fields) + "\n")
-                continue
+                    # ------------------------------------------------
+                    # Clave inválida:
+                    # conservar la fila del maestro sin fusionar.
+                    # ------------------------------------------------
+                    if is_invalid_key(key):
+                        out_f.write(",".join(fields) + "\n")
+                        continue
 
-            # ------------------------------------------------
-            # La clave no existe en el parseado:
-            # LEFT JOIN -> conservar la fila del maestro.
-            # ------------------------------------------------
-            if key not in parsed_data:
-                print(
-                    f"[WARNING] Línea {line_number} del inventario maestro: "
-                    f"la clave '{key}' no existe en el inventario "
-                    "parseado. La fila se conservará sin fusionar.",
-                    file=sys.stderr
-                )
-                out_f.write(",".join(fields) + "\n")
-                continue
+                    # ------------------------------------------------
+                    # Clave duplicada en el maestro:
+                    # conservar la fila sin fusionar.
+                    # ------------------------------------------------
+                    if key in parent_duplicated_keys:
+                        out_f.write(",".join(fields) + "\n")
+                        continue
 
-            # ------------------------------------------------
-            # La clave existe y es única en ambos inventarios.
-            # Fusionar solamente las columnas con flag 1.
-            # ------------------------------------------------
-            parsed_fields = parsed_data[key]
+                    # ------------------------------------------------
+                    # La clave no existe en el parseado:
+                    # LEFT JOIN -> conservar la fila del maestro.
+                    # ------------------------------------------------
+                    if key not in parsed_data:
+                        print(
+                            f"[WARNING] Línea {line_number} del inventario maestro: "
+                            f"la clave '{key}' no existe en el inventario "
+                            "parseado. La fila se conservará sin fusionar.",
+                            file=sys.stderr
+                        )
+                        out_f.write(",".join(fields) + "\n")
+                        continue
 
-            for parent_idx, parsed_idx in merge_pairs:
-                parsed_value = parsed_fields[parsed_idx]
+                    # ------------------------------------------------
+                    # La clave existe y es única en ambos inventarios.
+                    # Fusionar solamente las columnas con flag 1.
+                    # ------------------------------------------------
+                    parsed_fields = parsed_data[key]
 
-                if is_empty_or_na(parsed_value):
-                    continue
+                    for parent_idx, parsed_idx in merge_pairs:
+                        parsed_value = parsed_fields[parsed_idx]
 
-                fields[parent_idx] = parsed_value
+                        if is_empty_or_na(parsed_value):
+                            continue
 
-            out_f.write(",".join(fields) + "\n")
+                        fields[parent_idx] = parsed_value
+
+                    out_f.write(",".join(fields) + "\n")
+
+        # --------------------------------------------------------
+        # El archivo temporal solo reemplaza la salida definitiva
+        # si todo el procesamiento anterior terminó correctamente.
+        # --------------------------------------------------------
+        os.replace(temporary_output_path, output_path)
+        temporary_output_path = None
+
+    finally:
+        # --------------------------------------------------------
+        # Si el proceso falló antes del reemplazo, eliminar el
+        # archivo temporal para no dejar residuos.
+        # --------------------------------------------------------
+        if temporary_output_path is not None:
+            try:
+                temporary_output_path.unlink()
+            except FileNotFoundError:
+                pass
 
     # --------------------------------------------------------
     # Resultado.
