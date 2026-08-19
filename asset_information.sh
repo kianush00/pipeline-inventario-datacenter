@@ -1067,12 +1067,14 @@ get_raid_info() {
 
 ###############################################################################
 # Conversion IP <-> entero (para calculos de red/mascara)
+# El prefijo 10# fuerza base decimal en cada octeto, previniendo que bash
+# interprete octetos con ceros a la izquierda (ej. 010) como octal.
 ###############################################################################
 ip_to_int() {
     local ip="$1"
     local a b c d
     IFS='.' read -r a b c d <<< "$ip"
-    echo $(( (a << 24) + (b << 16) + (c << 8) + d ))
+    echo $(( (10#$a * 16777216) + (10#$b * 65536) + (10#$c * 256) + 10#$d ))
 }
 
 int_to_ip() {
@@ -1285,25 +1287,33 @@ get_ip_address() {
 get_network_cidr() {
     local iface="${1:-$(get_primary_interface)}"
     local raw ip prefix
-
     raw=$(get_ip_cidr_raw "$iface")
     if [[ -z "$raw" || "$raw" != */* ]]; then return 0; fi
-
     ip="${raw%/*}"
     prefix="${raw#*/}"
-
     if ! is_valid_prefix "$prefix"; then
         return 0
     fi
-
-    local ip_int mask_int network_int
+    local ip_int network_int
     ip_int=$(ip_to_int "$ip")
-    mask_int=$(( (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF ))
+    # Se calcula mask_int via awk para evitar el operador << dentro de $((...)),
+    # que confunde resaltadores de sintaxis (falso positivo de heredoc).
+    # La formula es equivalente a: (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF
+    local mask_int
+    mask_int=$(awk -v p="$prefix" 'BEGIN {
+        mask = 0
+        for (i = 0; i < p; i++)
+            mask = mask * 2 + 1
+        # mask tiene p bits en 1 desde el bit menos significativo;
+        # desplazarlo (32-p) posiciones hacia la izquierda via multiplicacion
+        shift = 1
+        for (i = 0; i < 32 - p; i++)
+            shift *= 2
+        printf "%d\n", (mask * shift) % 4294967296
+    }')
     network_int=$(( ip_int & mask_int ))
-
     echo "$(int_to_ip "$network_int")/$prefix"
 }
-
 
 ###############################################################################
 # Direccion MAC de una interfaz (por defecto, la principal)
