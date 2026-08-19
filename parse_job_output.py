@@ -33,7 +33,10 @@ exactamente en header_list.txt provoca un error fatal y el script
 termina con código de salida 1.
 
 Uso:
-    python3 parse_job_output.py job_output.txt parsed_job_output.csv [header_list.txt]
+    python3 parse_job_output.py \
+        job_output.txt \
+        [parsed_job_output.csv] \
+        [header_list.txt] \
 
 Si no se indica la ruta de header_list.txt, se busca un archivo
 llamado "header_list.txt" en el mismo directorio que este script.
@@ -106,17 +109,29 @@ def parse_key_value_field(field: str) -> tuple[str, str] | None:
 
 
 def main() -> None:
-    if len(sys.argv) < 3:
+    if len(sys.argv) < 2:
         print(
             f"Uso: {sys.argv[0]} "
-            "archivo_entrada.log archivo_salida.csv [header_list.txt]"
+            "job_output.txt [parsed_job_output.csv] [header_list.txt]"
         )
         sys.exit(1)
 
-    input_path  = Path(sys.argv[1])
-    output_path = Path(sys.argv[2])
+    if len(sys.argv) > 4:
+        error(
+            f"Cantidad de argumentos inválida.\n"
+            f"Uso: {sys.argv[0]} "
+            "job_output.txt [parsed_job_output.csv] [header_list.txt]"
+        )
+
+    input_path = Path(sys.argv[1])
+    output_path = (
+        Path(sys.argv[2])
+        if len(sys.argv) >= 3
+        else Path(__file__).resolve().parent / "parsed_job_output.csv"
+    )
     header_list_path = (
-        Path(sys.argv[3]) if len(sys.argv) >= 4
+        Path(sys.argv[3])
+        if len(sys.argv) >= 4
         else Path(__file__).resolve().parent / "header_list.txt"
     )
 

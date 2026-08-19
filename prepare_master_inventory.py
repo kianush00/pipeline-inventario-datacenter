@@ -19,7 +19,10 @@ todos los nombres definidos en header_list.txt se considera
 directamente el header real.
 
 Uso:
-    python3 prepare_master_inventory.py master_inventory.ods [header_list.txt]
+    python3 prepare_master_inventory.py \
+        master_inventory.ods \
+        [prepared_master_inventory.csv] \
+        [header_list.txt] \
 
 Si no se indica la ruta de header_list.txt, se busca un archivo
 llamado "header_list.txt" en el mismo directorio que este script.
@@ -374,18 +377,21 @@ def process_csv(
 
 def main() -> None:
     if len(sys.argv) < 2:
-        print(
+        error(
             f"Uso: {sys.argv[0]} "
-            "inventario.ods [header_list.txt]"
+            "master_inventory.ods "
+            "[prepared_master_inventory.csv] "
+            "[header_list.txt]"
         )
-        sys.exit(1)
 
-    if len(sys.argv) > 3:
-        print(
+    if len(sys.argv) > 4:
+        error(
+            f"Cantidad de argumentos inválida.\n"
             f"Uso: {sys.argv[0]} "
-            "inventario.ods [header_list.txt]"
+            "master_inventory.ods "
+            "[prepared_master_inventory.csv] "
+            "[header_list.txt]"
         )
-        sys.exit(1)
 
     # --------------------------------------------------------
     # Validar ODS.
@@ -417,20 +423,24 @@ def main() -> None:
         )
 
     # --------------------------------------------------------
+    # Resolver ruta de salida.
+    # --------------------------------------------------------
+    output_path = (
+        Path(sys.argv[2])
+        if len(sys.argv) >= 3
+        else Path(__file__).resolve().parent / "prepared_master_inventory.csv"
+    )
+
+    # --------------------------------------------------------
     # Resolver ruta de header_list.txt.
     # --------------------------------------------------------
     header_list_path = (
-        Path(sys.argv[2])
-        if len(sys.argv) >= 3
+        Path(sys.argv[3])
+        if len(sys.argv) >= 4
         else Path(__file__).resolve().parent / "header_list.txt"
     )
 
     header_list = load_header_list(header_list_path)
-
-    # --------------------------------------------------------
-    # Resolver ruta de salida.
-    # --------------------------------------------------------
-    output_path = ods_path.parent / f"{ods_path.stem}.csv"
 
     # --------------------------------------------------------
     # Información.

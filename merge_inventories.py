@@ -49,7 +49,7 @@ Uso:
     python3 merge_inventories.py \
         parsed_inventory.csv \
         master_inventory.csv \
-        merged_inventory.csv \
+        [merged_inventory.csv] \
         [header_list.txt]
 
 Si no se indica la ruta de header_list.txt, se busca un archivo
@@ -342,12 +342,12 @@ def find_parent_duplicated_keys(
 # ============================================================
 
 def main() -> None:
-    if len(sys.argv) < 4:
+    if len(sys.argv) < 3:
         print(
             f"Uso: {sys.argv[0]} "
-            "inventario_parseado.csv "
-            "inventario_maestro.csv "
-            "inventario_fusionado.csv "
+            "parsed_inventory.csv "
+            "master_inventory.csv "
+            "[merged_inventory.csv] "
             "[header_list.txt]"
         )
         sys.exit(1)
@@ -356,17 +356,22 @@ def main() -> None:
         error(
             f"Cantidad de argumentos inválida.\n"
             f"Uso: {sys.argv[0]} "
-            "inventario_parseado.csv "
-            "inventario_maestro.csv "
-            "inventario_fusionado.csv "
+            "parsed_inventory.csv "
+            "master_inventory.csv "
+            "[merged_inventory.csv] "
             "[header_list.txt]"
         )
 
     input_parsed_path = Path(sys.argv[1])
     input_parent_path = Path(sys.argv[2])
-    output_path       = Path(sys.argv[3])
-    header_list_path  = (
-        Path(sys.argv[4]) if len(sys.argv) >= 5
+    output_path = (
+        Path(sys.argv[3])
+        if len(sys.argv) >= 4
+        else Path(__file__).resolve().parent / "merged_inventory.csv"
+    )
+    header_list_path = (
+        Path(sys.argv[4])
+        if len(sys.argv) >= 5
         else Path(__file__).resolve().parent / "header_list.txt"
     )
 
