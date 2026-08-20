@@ -67,6 +67,7 @@ from base_inventory import (
     load_header_list,
     split_quoted_csv_line,
     strip_quotes,
+    usage,
 )
 
 # ============================================================
@@ -343,17 +344,16 @@ def find_parent_duplicated_keys(
 
 def main() -> None:
     if len(sys.argv) < 3:
-        print(
+        usage(
             f"Uso: {sys.argv[0]} "
             "parsed_inventory.csv "
             "master_inventory.csv "
             "[merged_inventory.csv] "
             "[header_list.txt]"
         )
-        sys.exit(1)
 
     if len(sys.argv) > 5:
-        error(
+        usage(
             f"Cantidad de argumentos inválida.\n"
             f"Uso: {sys.argv[0]} "
             "parsed_inventory.csv "

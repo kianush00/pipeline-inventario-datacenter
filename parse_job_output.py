@@ -52,6 +52,7 @@ from base_inventory import (
     load_header_list,
     split_quoted_csv_line,
     strip_quotes,
+    usage,
 )
 
 
@@ -112,14 +113,13 @@ def parse_key_value_field(field: str) -> tuple[str, str] | None:
 
 def main() -> None:
     if len(sys.argv) < 2:
-        print(
+        usage(
             f"Uso: {sys.argv[0]} "
             "job_output.txt [parsed_job_output.csv] [header_list.txt]"
         )
-        sys.exit(1)
 
     if len(sys.argv) > 4:
-        error(
+        usage(
             f"Cantidad de argumentos inválida.\n"
             f"Uso: {sys.argv[0]} "
             "job_output.txt [parsed_job_output.csv] [header_list.txt]"

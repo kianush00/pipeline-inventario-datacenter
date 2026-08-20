@@ -6,12 +6,16 @@
 *.csv
 *.csv#
 *.ods
+*.ods#
 *.xlsx
+*.xlsx#
 *.xls
+*.xls#
 
 # Txt files (except for header_list.txt)
 *.txt
 !header_list.txt
+!requirements.txt
 
 # Logs
 *.log

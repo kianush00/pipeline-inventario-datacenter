@@ -24,6 +24,12 @@ def error(message: str) -> NoReturn:
     sys.exit(1)
 
 
+def usage(message: str) -> NoReturn:
+    """Imprime un mensaje de uso en stderr y termina con exit 1."""
+    print(message, file=sys.stderr)
+    sys.exit(1)
+
+
 # ============================================================
 # FORMATO header_list.txt
 #

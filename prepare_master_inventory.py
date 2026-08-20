@@ -28,7 +28,7 @@ antes de realizar las validaciones y el procesamiento.
 
 Uso:
     python3 prepare_master_inventory.py \
-        master_inventory.[ods|xlsx] \
+        master_inventory.(ods|xlsx) \
         [prepared_master_inventory.csv] \
         [header_list.txt]
 
@@ -48,6 +48,7 @@ from base_inventory import (
     clean_value,
     error,
     load_header_list,
+    usage,
 )
 
 # ============================================================
@@ -383,18 +384,18 @@ def process_csv(
 
 def main() -> None:
     if len(sys.argv) < 2:
-        error(
+        usage(
             f"Uso: {sys.argv[0]} "
-            "master_inventory.[ods|xlsx] "
+            "master_inventory.(ods|xlsx) "
             "[prepared_master_inventory.csv] "
             "[header_list.txt]"
         )
 
     if len(sys.argv) > 4:
-        error(
+        usage(
             f"Cantidad de argumentos inválida.\n"
             f"Uso: {sys.argv[0]} "
-            "master_inventory.[ods|xlsx] "
+            "master_inventory.(ods|xlsx) "
             "[prepared_master_inventory.csv] "
             "[header_list.txt]"
         )
