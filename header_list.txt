@@ -1,5 +1,5 @@
 Nombre maquina|0
-Tipo de maquina|0
+Tipo de maquina|1
 SO Host|1
 Version SO Host|1
 SO Hipervisor|1
@@ -16,14 +16,13 @@ Cores|1
 Threads|1
 Sockets|1
 RAM (GB)|1
-Discos|0
+Discos|1
 Capacidad visible (GB)|1
 RAID|0
-Marca|0
-Modelo|0
-P/N|0
-Serial Number|0
-Service Tag|0
+Marca|1
+Modelo|1
+Serial Number|1
+Service Tag|1
 UUID|2
 Version BIOS|1
 Fecha BIOS|1

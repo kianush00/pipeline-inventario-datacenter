@@ -176,10 +176,10 @@ normalize_manufacturer() {
     local manufacturer="$1"
 
     case "$manufacturer" in
-        "Dell Inc.")
+        "Dell Inc."|"Dell Inc")
             echo "Dell"
             ;;
-        "Hewlett-Packard")
+        "Hewlett-Packard"|"Hewlett Packard")
             echo "HP"
             ;;
         "HPE")
@@ -187,6 +187,9 @@ normalize_manufacturer() {
             ;;
         "LENOVO")
             echo "Lenovo"
+            ;;
+        "Intel Corporation")
+            echo "Intel"
             ;;
         *)
             echo "$manufacturer"
@@ -249,6 +252,30 @@ get_dmi() {
     fi
 
     echo "$value"
+}
+
+###############################################################################
+# Obtener y validar el numero de serie del sistema desde SMBIOS.
+###############################################################################
+get_system_serial() {
+    local serial
+
+    serial=$(get_dmi system-serial-number)
+
+    case "$serial" in
+        ""|"To Be Filled By O.E.M."|"Default string")
+            echo ""
+            ;;
+        "Unknown"|"Not Specified"|"None")
+            echo ""
+            ;;
+        "0123456789"|"S123456789"|"............")
+            echo ""
+            ;;
+        *)
+            echo "$serial"
+            ;;
+    esac
 }
 
 ###############################################################################
@@ -1482,20 +1509,17 @@ KERNEL=$(uname -r)
 
 MARCA=""
 MODELO=""
-PN=""
 SERIAL=""
 SERVICE_TAG=""
 
 if [[ "$TIPO_MAQUINA" == "Hipervisor" || "$TIPO_MAQUINA" == "Dedicada" ]]; then
     MARCA=$(get_dmi system-manufacturer)
     MODELO=$(get_dmi system-product-name)
-    SERIAL=$(get_dmi system-serial-number)
+    SERIAL=$(get_system_serial)
 
     if [[ "$MARCA" == *Dell* ]]; then
         SERVICE_TAG="$SERIAL"
         SERIAL=""
-    else
-        PN=$(get_dmi baseboard-product-name)
     fi
 fi
 
@@ -1583,7 +1607,6 @@ OUTPUT_KEYS=(
     "RAID"
     "Marca"
     "Modelo"
-    "P/N"
     "Serial Number"
     "Service Tag"
     "UUID"
@@ -1615,7 +1638,6 @@ OUTPUT_VALUES=(
     "$RAID"
     "$MARCA"
     "$MODELO"
-    "$PN"
     "$SERIAL"
     "$SERVICE_TAG"
     "$UUID"
