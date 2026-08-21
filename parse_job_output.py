@@ -2,20 +2,20 @@
 parse_job_output.py
 =====================
 Normaliza la salida cruda del job de Rundeck a un CSV con el layout de
-columnas definido en header_list.txt.
+columnas definido en rundeck_header_list.txt.
 
 Cada línea válida del log debe contener campos en formato:
 
     CLAVE="VALOR",CLAVE="VALOR",...
 
 Las claves deben corresponder exactamente con las entradas definidas
-en header_list.txt.
+en rundeck_header_list.txt.
 
 El orden de las claves en la salida de Rundeck NO importa. Cada valor
 se asigna a la columna correspondiente según el nombre de la clave
-definido en header_list.txt.
+definido en rundeck_header_list.txt.
 
-El segundo valor de cada entrada de header_list.txt determina el
+El segundo valor de cada entrada de rundeck_header_list.txt determina el
 comportamiento de la columna:
 
     0 -> la columna queda vacía en el CSV de salida.
@@ -23,23 +23,23 @@ comportamiento de la columna:
     2 -> la columna se procesa normalmente y corresponde a la clave
          utilizada para identificar la fila en el proceso de fusión.
 
-Si una clave definida en header_list.txt tiene flag 1 o 2 pero no
+Si una clave definida en rundeck_header_list.txt tiene flag 1 o 2 pero no
 aparece en una línea válida, su valor se establece como "N/A".
 
 Las líneas que no correspondan a una fila válida son ignoradas.
 
 Una clave que aparezca en la salida de Rundeck pero que NO exista
-exactamente en header_list.txt provoca un error fatal y el script
+exactamente en rundeck_header_list.txt provoca un error fatal y el script
 termina con código de salida 1.
 
 Uso:
     python3 parse_job_output.py \
         job_output.log \
         [parsed_job_output.csv] \
-        [header_list.txt] \
+        [rundeck_header_list.txt] \
 
-Si no se indica la ruta de header_list.txt, se busca un archivo
-llamado "header_list.txt" en el mismo directorio que este script.
+Si no se indica la ruta de rundeck_header_list.txt, se busca un archivo
+llamado "rundeck_header_list.txt" en el mismo directorio que este script.
 """
 
 import os
@@ -49,7 +49,7 @@ from pathlib import Path
 
 from base_inventory import (
     error,
-    load_header_list,
+    load_rundeck_header_list,
     split_quoted_csv_line,
     strip_quotes,
     usage,
@@ -115,14 +115,14 @@ def main() -> None:
     if len(sys.argv) < 2:
         usage(
             f"Uso: {sys.argv[0]} "
-            "job_output.log [parsed_job_output.csv] [header_list.txt]"
+            "job_output.log [parsed_job_output.csv] [rundeck_header_list.txt]"
         )
 
     if len(sys.argv) > 4:
         usage(
             f"Cantidad de argumentos inválida.\n"
             f"Uso: {sys.argv[0]} "
-            "job_output.log [parsed_job_output.csv] [header_list.txt]"
+            "job_output.log [parsed_job_output.csv] [rundeck_header_list.txt]"
         )
 
     input_path = Path(sys.argv[1])
@@ -131,10 +131,10 @@ def main() -> None:
         if len(sys.argv) >= 3
         else Path(__file__).resolve().parent / "parsed_job_output.csv"
     )
-    header_list_path = (
+    rundeck_header_list_path = (
         Path(sys.argv[3])
         if len(sys.argv) >= 4
-        else Path(__file__).resolve().parent / "header_list.txt"
+        else Path(__file__).resolve().parent / "rundeck_header_list.txt"
     )
 
     if not input_path.is_file():
@@ -154,7 +154,7 @@ def main() -> None:
         )
 
     # --------------------------------------------------------
-    # Cargar header_list: [(nombre, flag), ...]
+    # Cargar rundeck_header_list: [(nombre, flag), ...]
     #
     # El flag determina si la columna se procesa:
     #
@@ -162,11 +162,11 @@ def main() -> None:
     #   1 -> procesamiento normal
     #   2 -> procesamiento normal y clave de fusión
     #
-    # El orden de header_list determina el orden de las
+    # El orden de rundeck_header_list determina el orden de las
     # columnas del CSV de salida.
     # --------------------------------------------------------
-    header_list = load_header_list(header_list_path)
-    defined_fields = len(header_list)
+    rundeck_header_list = load_rundeck_header_list(rundeck_header_list_path)
+    defined_fields = len(rundeck_header_list)
 
     # --------------------------------------------------------
     # Construir mapas:
@@ -180,21 +180,21 @@ def main() -> None:
     # --------------------------------------------------------
     header_positions = {
         name: index
-        for index, (name, _flag) in enumerate(header_list)
+        for index, (name, _flag) in enumerate(rundeck_header_list)
     }
 
     header_flags = {
         name: flag
-        for name, flag in header_list
+        for name, flag in rundeck_header_list
     }
 
     # --------------------------------------------------------
     # Construir la línea de header del CSV de salida.
-    # Los nombres vienen directamente de header_list, en orden.
+    # Los nombres vienen directamente de rundeck_header_list, en orden.
     # --------------------------------------------------------
     header_line = ",".join(
         csv_field(name)
-        for name, _flag in header_list
+        for name, _flag in rundeck_header_list
     )
 
     print("Header final:")
@@ -229,7 +229,7 @@ def main() -> None:
             #
             #   - Contener campos separados por comas.
             #   - Cada campo debe tener formato CLAVE="VALOR".
-            #   - Cada clave debe existir exactamente en header_list.
+            #   - Cada clave debe existir exactamente en rundeck_header_list.
             #   - No puede repetirse una misma clave.
             #
             # Las claves con flag 0 quedan vacías.
@@ -292,7 +292,7 @@ def main() -> None:
                     # ------------------------------------------------
                     output_values = [
                         "" if flag == 0 else "N/A"
-                        for _name, flag in header_list
+                        for _name, flag in rundeck_header_list
                     ]
 
                     seen_keys: set[str] = set()
@@ -314,14 +314,14 @@ def main() -> None:
 
                         # ------------------------------------------------
                         # La clave debe coincidir EXACTAMENTE con una
-                        # entrada de header_list.txt.
+                        # entrada de rundeck_header_list.txt.
                         #
                         # Si no existe, es un error fatal.
                         # ------------------------------------------------
                         if key not in header_positions:
                             error(
                                 f"Línea {line_number}: "
-                                f"clave no definida en header_list.txt: "
+                                f"clave no definida en rundeck_header_list.txt: "
                                 f"'{key}'"
                             )
 
@@ -347,7 +347,7 @@ def main() -> None:
                         # ------------------------------------------------
                         # Si la columna tiene flag 1 o 2, colocar el
                         # valor en la posición correspondiente según
-                        # header_list.txt.
+                        # rundeck_header_list.txt.
                         # ------------------------------------------------
                         position = header_positions[key]
                         output_values[position] = value

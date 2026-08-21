@@ -13,7 +13,7 @@ El script:
    orden) coincida EXACTAMENTE con el header de
    merged_inventory.csv. Esto valida simultáneamente que los
    nombres de columna y sus posiciones sean idénticos entre ambos
-   archivos, sin necesitar header_list.txt.
+   archivos, sin necesitar rundeck_header_list.txt.
 3. Valida que la cantidad de filas de datos del maestro (a partir
    del header detectado) coincida exactamente con la cantidad de
    filas de merged_inventory.csv. Si no coincide, aborta: no es

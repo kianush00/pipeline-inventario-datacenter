@@ -3,10 +3,10 @@ merge_inventories.py
 =======================
 Fusiona un inventario "parseado" sobre un inventario "maestro"
 (source of truth), usando como clave de fusión la columna cuyo
-FLAG en header_list.txt sea 2.
+FLAG en rundeck_header_list.txt sea 2.
 
 El layout de columnas y las reglas de fusión se leen desde
-header_list.txt con formato:
+rundeck_header_list.txt con formato:
 
     NOMBRE_COLUMNA|FLAG
 
@@ -27,7 +27,7 @@ leyendo los headers de ambos CSV.
 
 El inventario maestro es la base:
 - Todas sus filas se conservan en el CSV de salida.
-- Las columnas adicionales no definidas en header_list.txt
+- Las columnas adicionales no definidas en rundeck_header_list.txt
   se conservan sin fusionar.
 - Las columnas con FLAG 0 se conservan sin fusionar.
 - Las columnas con FLAG 1 pueden ser actualizadas desde el
@@ -50,10 +50,10 @@ Uso:
         parsed_inventory.csv \
         master_inventory.csv \
         [merged_inventory.csv] \
-        [header_list.txt]
+        [rundeck_header_list.txt]
 
-Si no se indica la ruta de header_list.txt, se busca un archivo
-llamado "header_list.txt" en el mismo directorio que este script.
+Si no se indica la ruta de rundeck_header_list.txt, se busca un archivo
+llamado "rundeck_header_list.txt" en el mismo directorio que este script.
 """
 
 import os
@@ -64,7 +64,7 @@ from pathlib import Path
 from base_inventory import (
     error,
     is_empty_or_na,
-    load_header_list,
+    load_rundeck_header_list,
     split_quoted_csv_line,
     strip_quotes,
     usage,
@@ -75,7 +75,7 @@ from base_inventory import (
 # ============================================================
 
 def resolve_key_column(
-    header_list: list[tuple[str, int]],
+    rundeck_header_list: list[tuple[str, int]],
 ) -> str:
     """
     Determina la columna utilizada como clave de unión.
@@ -87,13 +87,13 @@ def resolve_key_column(
     """
     key_columns = [
         name
-        for name, flag in header_list
+        for name, flag in rundeck_header_list
         if flag == 2
     ]
 
     if len(key_columns) != 1:
         error(
-            "header_list.txt debe contener exactamente una "
+            "rundeck_header_list.txt debe contener exactamente una "
             "columna con flag 2.\n"
             f"Se encontraron {len(key_columns)}."
         )
@@ -120,20 +120,20 @@ def is_invalid_key(value: str) -> bool:
 # ============================================================
 
 def resolve_positions(
-    header_list: list[tuple[str, int]],
+    rundeck_header_list: list[tuple[str, int]],
     header_fields: list[str],
     csv_path: Path,
 ) -> dict[str, int]:
     """
     Detecta la posición (índice 0-based) de cada columna de
-    header_list dentro del header de un CSV.
+    rundeck_header_list dentro del header de un CSV.
 
     Reglas:
-    - Cada nombre de header_list debe aparecer exactamente una
+    - Cada nombre de rundeck_header_list debe aparecer exactamente una
       vez en el header del CSV.
     - El orden de las columnas NO importa.
     - Los CSV pueden contener columnas adicionales no definidas
-      en header_list.txt.
+      en rundeck_header_list.txt.
 
     Retorna:
         dict {nombre_columna: índice_0based}
@@ -155,10 +155,10 @@ def resolve_positions(
 
     positions: dict[str, int] = {}
 
-    for name, _flag in header_list:
+    for name, _flag in rundeck_header_list:
         if name not in name_to_index:
             error(
-                f"La columna '{name}' definida en header_list.txt "
+                f"La columna '{name}' definida en rundeck_header_list.txt "
                 f"no existe en el header del archivo.\n"
                 f"  {csv_path}"
             )
@@ -349,7 +349,7 @@ def main() -> None:
             "parsed_inventory.csv "
             "master_inventory.csv "
             "[merged_inventory.csv] "
-            "[header_list.txt]"
+            "[rundeck_header_list.txt]"
         )
 
     if len(sys.argv) > 5:
@@ -359,7 +359,7 @@ def main() -> None:
             "parsed_inventory.csv "
             "master_inventory.csv "
             "[merged_inventory.csv] "
-            "[header_list.txt]"
+            "[rundeck_header_list.txt]"
         )
 
     input_parsed_path = Path(sys.argv[1])
@@ -369,10 +369,10 @@ def main() -> None:
         if len(sys.argv) >= 4
         else Path(__file__).resolve().parent / "merged_inventory.csv"
     )
-    header_list_path = (
+    rundeck_header_list_path = (
         Path(sys.argv[4])
         if len(sys.argv) >= 5
-        else Path(__file__).resolve().parent / "header_list.txt"
+        else Path(__file__).resolve().parent / "rundeck_header_list.txt"
     )
 
     for path, label in (
@@ -404,15 +404,15 @@ def main() -> None:
         )
 
     # --------------------------------------------------------
-    # Cargar header_list.
+    # Cargar rundeck_header_list.
     # --------------------------------------------------------
-    header_list = load_header_list(header_list_path)
-    defined_fields = len(header_list)
+    rundeck_header_list = load_rundeck_header_list(rundeck_header_list_path)
+    defined_fields = len(rundeck_header_list)
 
     # --------------------------------------------------------
     # Determinar la columna de unión a partir del flag 2.
     # --------------------------------------------------------
-    key_name = resolve_key_column(header_list)
+    key_name = resolve_key_column(rundeck_header_list)
 
     # --------------------------------------------------------
     # Leer completamente el inventario parseado.
@@ -424,7 +424,7 @@ def main() -> None:
     ) = load_csv_data(input_parsed_path)
 
     parsed_positions = resolve_positions(
-        header_list,
+        rundeck_header_list,
         parsed_header_fields,
         input_parsed_path,
     )
@@ -447,7 +447,7 @@ def main() -> None:
     ) = load_csv_data(input_parent_path)
 
     parent_positions = resolve_positions(
-        header_list,
+        rundeck_header_list,
         parent_header_fields,
         input_parent_path,
     )
@@ -473,7 +473,7 @@ def main() -> None:
     # --------------------------------------------------------
     merge_pairs: list[tuple[int, int]] = []
 
-    for name, flag in header_list:
+    for name, flag in rundeck_header_list:
         if flag != 1:
             continue
 
@@ -499,7 +499,7 @@ def main() -> None:
     # --------------------------------------------------------
     # Resumen informativo.
     # --------------------------------------------------------
-    print(f"Columnas definidas en header_list : {defined_fields}")
+    print(f"Columnas definidas en rundeck_header_list : {defined_fields}")
     print(f"Columnas totales en el maestro    : {parent_total_columns}")
 
     if extra_columns > 0:

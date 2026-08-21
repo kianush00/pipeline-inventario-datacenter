@@ -31,7 +31,7 @@ def usage(message: str) -> NoReturn:
 
 
 # ============================================================
-# FORMATO header_list.txt
+# FORMATO rundeck_header_list.txt
 #
 # Cada línea no vacía y no comentario tiene la forma:
 #
@@ -46,13 +46,13 @@ def usage(message: str) -> NoReturn:
 #
 # El orden de las líneas define el orden lógico de las columnas
 # que interesan al pipeline. Las columnas intermedias del
-# inventario maestro que no aparezcan en header_list.txt se
+# inventario maestro que no aparezcan en rundeck_header_list.txt se
 # conservan sin tocar y nunca se fusionan.
 # ============================================================
 
-def load_header_list(path: Path) -> list[tuple[str, int]]:
+def load_rundeck_header_list(path: Path) -> list[tuple[str, int]]:
     """
-    Lee header_list.txt y devuelve una lista de tuplas:
+    Lee rundeck_header_list.txt y devuelve una lista de tuplas:
 
         [(nombre, flag), ...]
 
@@ -67,7 +67,7 @@ def load_header_list(path: Path) -> list[tuple[str, int]]:
     Parámetros
     ----------
     path : Path
-        Ruta al archivo header_list.txt.
+        Ruta al archivo rundeck_header_list.txt.
 
     Retorna
     -------
@@ -76,7 +76,7 @@ def load_header_list(path: Path) -> list[tuple[str, int]]:
     """
     if not path.is_file():
         error(
-            f"No se encontró el archivo header_list:\n"
+            f"No se encontró el archivo rundeck_header_list:\n"
             f"  {path}"
         )
 
@@ -97,7 +97,7 @@ def load_header_list(path: Path) -> list[tuple[str, int]]:
 
             if len(parts) != 2:
                 error(
-                    f"header_list línea {line_number}: formato inválido:\n"
+                    f"rundeck_header_list línea {line_number}: formato inválido:\n"
                     f"  {line}\n"
                     f"Formato esperado:\n"
                     f"  NOMBRE_COLUMNA|0\n"
@@ -109,19 +109,19 @@ def load_header_list(path: Path) -> list[tuple[str, int]]:
 
             if not name:
                 error(
-                    f"header_list línea {line_number}: "
+                    f"rundeck_header_list línea {line_number}: "
                     f"el nombre de columna está vacío."
                 )
 
             if flag_str not in ("0", "1", "2"):
                 error(
-                    f"header_list línea {line_number}: "
+                    f"rundeck_header_list línea {line_number}: "
                     f"el flag debe ser 0, 1 o 2, se encontró '{flag_str}'."
                 )
 
             if name in seen_names:
                 error(
-                    f"header_list línea {line_number}: "
+                    f"rundeck_header_list línea {line_number}: "
                     f"nombre de columna duplicado: '{name}'."
                 )
 
@@ -129,7 +129,7 @@ def load_header_list(path: Path) -> list[tuple[str, int]]:
             entries.append((name, int(flag_str)))
 
     if not entries:
-        error("header_list está vacío (sin entradas válidas).")
+        error("rundeck_header_list está vacío (sin entradas válidas).")
 
     key_entries = [
         name
@@ -139,7 +139,7 @@ def load_header_list(path: Path) -> list[tuple[str, int]]:
 
     if len(key_entries) != 1:
         error(
-            "header_list debe contener exactamente una columna "
+            "rundeck_header_list debe contener exactamente una columna "
             f"con FLAG 2, pero se encontraron {len(key_entries)}.\n"
             + (
                 "Columnas con FLAG 2:\n"

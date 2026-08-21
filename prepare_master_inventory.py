@@ -2,21 +2,21 @@
 prepare_master_inventory.py
 ============================
 Convierte un inventario maestro en formato ODS/XLSX a CSV limpio,
-validando que las columnas definidas en header_list.txt aparezcan
+validando que las columnas definidas en rundeck_header_list.txt aparezcan
 en el header del archivo de entrada con sus nombres exactos.
 
-El orden de las columnas definidas en header_list.txt NO es
+El orden de las columnas definidas en rundeck_header_list.txt NO es
 relevante. Pueden existir columnas adicionales en el archivo de
 entrada; éstas se conservan sin tocar.
 
 El script permite que el archivo de entrada tenga una fila inicial
 de categorías agrupadas sobre el header real. Si una fila contiene
-todos los nombres definidos en header_list.txt exactamente una vez,
+todos los nombres definidos en rundeck_header_list.txt exactamente una vez,
 esa fila se considera el header real y las filas anteriores se
 descartan.
 
 Si no existe una fila de categorías, la primera fila que contenga
-todos los nombres definidos en header_list.txt se considera
+todos los nombres definidos en rundeck_header_list.txt se considera
 directamente el header real.
 
 Formatos de entrada soportados:
@@ -30,10 +30,10 @@ Uso:
     python3 prepare_master_inventory.py \
         master_inventory.(ods|xlsx) \
         [prepared_master_inventory.csv] \
-        [header_list.txt]
+        [rundeck_header_list.txt]
 
-Si no se indica la ruta de header_list.txt, se busca un archivo
-llamado "header_list.txt" en el mismo directorio que este script.
+Si no se indica la ruta de rundeck_header_list.txt, se busca un archivo
+llamado "rundeck_header_list.txt" en el mismo directorio que este script.
 """
 
 import csv
@@ -47,7 +47,7 @@ from pathlib import Path
 from base_inventory import (
     clean_value,
     error,
-    load_header_list,
+    load_rundeck_header_list,
     usage,
 )
 
@@ -118,21 +118,21 @@ def convert_spreadsheet_to_csv(
 
 def find_real_header(
     rows: list[list[str]],
-    header_list: list[tuple[str, int]],
+    rundeck_header_list: list[tuple[str, int]],
 ) -> tuple[int, list[str]]:
     """
     Busca la primera fila que contenga todos los nombres definidos
-    en header_list.txt exactamente una vez.
+    en rundeck_header_list.txt exactamente una vez.
 
     Puede haber columnas adicionales que no estén definidas en
-    header_list.txt.
+    rundeck_header_list.txt.
 
     Retorna:
         (índice_0based_de_la_fila, header)
 
     Si ninguna fila contiene todos los nombres requeridos, aborta.
     """
-    required_names = [name for name, _flag in header_list]
+    required_names = [name for name, _flag in rundeck_header_list]
     required_set = set(required_names)
 
     for row_index, row in enumerate(rows):
@@ -150,7 +150,7 @@ def find_real_header(
         if duplicated_required:
             error(
                 "La fila candidata a header contiene columnas "
-                "definidas en header_list.txt duplicadas:\n"
+                "definidas en rundeck_header_list.txt duplicadas:\n"
                 + "\n".join(
                     f"  - {name}"
                     for name in duplicated_required
@@ -162,7 +162,7 @@ def find_real_header(
 
     error(
         "No se encontró ninguna fila que contenga todos los "
-        "nombres de columnas definidos en header_list.txt "
+        "nombres de columnas definidos en rundeck_header_list.txt "
         "exactamente una vez."
     )
     return -1, []
@@ -175,24 +175,24 @@ def find_real_header(
 def process_csv(
     source_csv: Path,
     output_csv: Path,
-    header_list: list[tuple[str, int]],
+    rundeck_header_list: list[tuple[str, int]],
 ) -> None:
     """
     Lee el CSV generado por LibreOffice, detecta el header real
-    mediante header_list.txt y escribe el CSV de salida limpio.
+    mediante rundeck_header_list.txt y escribe el CSV de salida limpio.
 
     Reglas de validación del header:
     - Puede existir una fila inicial de categorías agrupadas.
     - La fila real se identifica buscando todos los nombres de
-      header_list.txt exactamente.
+      rundeck_header_list.txt exactamente.
     - El orden de los nombres NO importa.
-    - Todos los nombres definidos en header_list.txt deben aparecer
+    - Todos los nombres definidos en rundeck_header_list.txt deben aparecer
       exactamente una vez en el header real.
     - Pueden existir columnas adicionales no definidas en
-      header_list.txt; éstas se conservan.
+      rundeck_header_list.txt; éstas se conservan.
     - Las columnas sin nombre se reportan como un problema.
     - No se permiten columnas duplicadas en el header real.
-    - El FLAG asociado a cada columna de header_list.txt no afecta
+    - El FLAG asociado a cada columna de rundeck_header_list.txt no afecta
       este proceso.
     """
     print()
@@ -253,7 +253,7 @@ def process_csv(
     # --------------------------------------------------------
     header_row_index, source_header = find_real_header(
         rows,
-        header_list,
+        rundeck_header_list,
     )
 
     discarded_rows = header_row_index
@@ -312,8 +312,8 @@ def process_csv(
         )
 
     print(
-        f"Columnas de header_list.txt encontradas en el archivo: "
-        f"{len(header_list)}"
+        f"Columnas de rundeck_header_list.txt encontradas en el archivo: "
+        f"{len(rundeck_header_list)}"
     )
 
     # --------------------------------------------------------
@@ -388,7 +388,7 @@ def main() -> None:
             f"Uso: {sys.argv[0]} "
             "master_inventory.(ods|xlsx) "
             "[prepared_master_inventory.csv] "
-            "[header_list.txt]"
+            "[rundeck_header_list.txt]"
         )
 
     if len(sys.argv) > 4:
@@ -397,7 +397,7 @@ def main() -> None:
             f"Uso: {sys.argv[0]} "
             "master_inventory.(ods|xlsx) "
             "[prepared_master_inventory.csv] "
-            "[header_list.txt]"
+            "[rundeck_header_list.txt]"
         )
 
     # --------------------------------------------------------
@@ -455,23 +455,23 @@ def main() -> None:
         )
 
     # --------------------------------------------------------
-    # Resolver ruta de header_list.txt.
+    # Resolver ruta de rundeck_header_list.txt.
     # --------------------------------------------------------
-    header_list_path = (
+    rundeck_header_list_path = (
         Path(sys.argv[3])
         if len(sys.argv) >= 4
-        else Path(__file__).resolve().parent / "header_list.txt"
+        else Path(__file__).resolve().parent / "rundeck_header_list.txt"
     )
 
-    header_list = load_header_list(header_list_path)
+    rundeck_header_list = load_rundeck_header_list(rundeck_header_list_path)
 
     # --------------------------------------------------------
     # Información.
     # --------------------------------------------------------
     print()
     print(f"Archivo de entrada       : {input_path}")
-    print(f"header_list.txt          : {header_list_path}")
-    print(f"Columnas en header_list  : {len(header_list)}")
+    print(f"rundeck_header_list.txt          : {rundeck_header_list_path}")
+    print(f"Columnas en rundeck_header_list  : {len(rundeck_header_list)}")
     print(f"CSV de salida            : {output_path}")
 
     # --------------------------------------------------------
@@ -517,7 +517,7 @@ def main() -> None:
             process_csv(
                 converted_csv,
                 temporary_output_path,
-                header_list,
+                rundeck_header_list,
             )
 
             # ------------------------------------------------

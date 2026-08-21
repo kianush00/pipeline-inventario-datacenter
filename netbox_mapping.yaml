@@ -2,7 +2,7 @@
 # ====================
 # Contrato de exportación entre merged_inventory.csv y NetBox 4.6.
 # Leído exclusivamente por export_to_netbox.py.
-# No depende de header_list.txt.
+# No depende de rundeck_header_list.txt.
 #
 # ── Credenciales ─────────────────────────────────────────────
 # Se leen desde variables de entorno (nunca en este archivo):

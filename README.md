@@ -65,7 +65,7 @@ The script is defensive and resilient: it resolves system paths under `/sys`, us
 
 ### 2) Schema definition
 
-The file `header_list.txt` defines the output schema for the pipeline and the merge behavior. Each entry follows the pattern:
+The file `rundeck_header_list.txt` defines the output schema for the pipeline and the merge behavior. Each entry follows the pattern:
 
 ```text
 COLUMN_NAME|FLAG
@@ -81,12 +81,12 @@ This file acts as the contract between the raw Rundeck output and the final inve
 
 ### 3) Raw-output parser
 
-The Python script `parse_job_output.py` reads the text output from Rundeck and normalizes it into a CSV that matches the schema declared in `header_list.txt`.
+The Python script `parse_job_output.py` reads the text output from Rundeck and normalizes it into a CSV that matches the schema declared in `rundeck_header_list.txt`.
 
 Key behaviors:
 
 - it accepts fields in any order
-- it validates that every key in the raw output exists in `header_list.txt`
+- it validates that every key in the raw output exists in `rundeck_header_list.txt`
 - it detects malformed rows and duplicate keys
 - it fills missing values with `N/A` when required
 - it emits a clean CSV ready for the next stage
@@ -100,7 +100,7 @@ The script `prepare_master_inventory.py` prepares the authoritative master inven
 This stage:
 
 - converts the ODS file to CSV using LibreOffice in headless mode
-- validates the header against `header_list.txt`
+- validates the header against `rundeck_header_list.txt`
 - checks that required columns exist in the master inventory
 - rejects duplicated headers or missing required fields
 - emits a clean master CSV while preserving extra columns that are not part of the merge model
@@ -114,7 +114,7 @@ The script `merge_inventories.py` is the core of the ETL merge step. It performs
 - the parsed inventory generated from Rundeck output
 - the master inventory prepared from the ODS master
 
-The logic is controlled by the single column flagged as `2` in `header_list.txt`, which is the join key. In this project, the key is the machine UUID.
+The logic is controlled by the single column flagged as `2` in `rundeck_header_list.txt`, which is the join key. In this project, the key is the machine UUID.
 
 Merge rules:
 
@@ -130,7 +130,7 @@ This preserves the master inventory as the base while updating only the fields i
 
 `base_inventory.py` centralizes the common CSV and validation utilities used by the three Python scripts. It provides functions for:
 
-- validating `header_list.txt`
+- validating `rundeck_header_list.txt`
 - parsing CSV values while respecting quoted fields
 - cleaning values and normalizing N/A conditions
 - identifying malformed lines and invalid data structures
@@ -143,7 +143,7 @@ This keeps the ETL logic consistent across parsing, master preparation, and fina
 .
 ├── asset_information.sh
 ├── base_inventory.py
-├── header_list.txt
+├── rundeck_header_list.txt
 ├── merge_inventories.py
 ├── parse_job_output.py
 ├── prepare_master_inventory.py
