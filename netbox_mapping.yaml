@@ -43,6 +43,7 @@ status_map:
   "Desarrollo":    "staged"
   "Certificación": "staged"
   "Réplica":       "active"
+  "Mantenimiento": "maintenance"
   "Baja":          "decommissioning"
 
 # ── Estado operativo → custom field ──────────────────────────
@@ -165,40 +166,40 @@ custom_fields:
 device_fields:
   - source: "Nombre maquina"
     target: "name"
-    skip_if_empty: false
+    skip_if_empty: true
 
   - source: "Serial Number"
     target: "serial"
-    skip_if_empty: true
+    skip_if_empty: false
 
   - source: "Nro Inventario"
     target: "asset_tag"
-    skip_if_empty: true
+    skip_if_empty: false
 
   - source: "Rack"
     target: "rack"           # resuelto a ID por el script
-    skip_if_empty: true
+    skip_if_empty: false
 
   - source: "Posicion (U)"
     target: "position"
-    skip_if_empty: true
+    skip_if_empty: false
     cast: "int"
 
   - source: "Altura (U)"
     target: "_u_height"      # se usa solo para crear/actualizar DeviceType
-    skip_if_empty: true
+    skip_if_empty: false
     cast: "int"
 
   - source: "SO Host"
     target: "platform"       # resuelto o creado por nombre
-    skip_if_empty: true
+    skip_if_empty: false
 
-  # Descripción: concatenación de 'Rol' + '. ' + 'Notas'.
+  # Descripción: concatenación de 'Descripcion' + '. ' + 'Notas'.
   # La lógica de concatenación está en el script.
-  - source: ["Rol", "Notas"]
+  - source: ["Descripcion", "Notas"]
     target: "description"
     transform: "concat_dot"
-    skip_if_empty: true
+    skip_if_empty: false
 
 # ── Custom fields de Device ───────────────────────────────────
 device_custom_fields:
@@ -208,81 +209,77 @@ device_custom_fields:
 
   - source: "Service Tag"
     target: "service_tag"
-    skip_if_empty: true
+    skip_if_empty: false
 
   - source: "CPU Modelo"
     target: "cpu_model"
-    skip_if_empty: true
+    skip_if_empty: false
 
   - source: "Cores"
     target: "cpu_cores"
-    skip_if_empty: true
+    skip_if_empty: false
     cast: "int"
 
   - source: "Threads"
     target: "cpu_threads"
-    skip_if_empty: true
+    skip_if_empty: false
     cast: "int"
 
   - source: "Sockets"
     target: "cpu_sockets"
-    skip_if_empty: true
+    skip_if_empty: false
     cast: "int"
 
   - source: "Discos"
     target: "disks"
-    skip_if_empty: true
+    skip_if_empty: false
 
   - source: "RAID"
     target: "raid"
-    skip_if_empty: true
+    skip_if_empty: false
 
   - source: "Version BIOS"
     target: "bios_version"
-    skip_if_empty: true
+    skip_if_empty: false
 
   - source: "Fecha BIOS"
     target: "bios_date"
-    skip_if_empty: true
+    skip_if_empty: false
 
   - source: "Estado operativo"
     target: "operational_status"
-    skip_if_empty: true
+    skip_if_empty: false
     map: "operational_status_map"
 
   - source: "Nodo Rundeck"
     target: "rundeck_node"
-    skip_if_empty: true
+    skip_if_empty: false
     cast: "bool_si_no"       # "si" → True, "no" → False
 
 # ── Campos nativos de VirtualMachine ─────────────────────────
 vm_fields:
   - source: "Nombre maquina"
     target: "name"
-    skip_if_empty: false
+    skip_if_empty: true
 
   - source: "SO Host"
     target: "platform"
-    skip_if_empty: true
+    skip_if_empty: false
 
   - source: "RAM (GB)"
     target: "memory"
-    skip_if_empty: true
+    skip_if_empty: false
     cast: "int_gb_to_mb"     # CSV en GB; NetBox espera MB (entero)
 
   - source: "Capacidad visible (GB)"
     target: "disk"
-    skip_if_empty: true
+    skip_if_empty: false
     cast: "int"
 
-  - source: ["Rol", "Notas"]
+  - source: ["Descripcion", "Notas"]
     target: "description"
     transform: "concat_dot"
-    skip_if_empty: true
-
-  - source: "Serial Number"
-    target: "serial"
-    skip_if_empty: true
+    skip_if_empty: false
 
 # ── Custom fields de VirtualMachine ──────────────────────────
 vm_custom_fields:
@@ -292,25 +289,25 @@ vm_custom_fields:
 
   - source: "CPU Modelo"
     target: "cpu_model"
-    skip_if_empty: true
+    skip_if_empty: false
 
   - source: "Cores"
     target: "cpu_cores"
-    skip_if_empty: true
+    skip_if_empty: false
     cast: "int"
 
   - source: "Discos"
     target: "disks"
-    skip_if_empty: true
+    skip_if_empty: false
 
   - source: "Estado operativo"
     target: "operational_status"
-    skip_if_empty: true
+    skip_if_empty: false
     map: "operational_status_map"
 
   - source: "Nodo Rundeck"
     target: "rundeck_node"
-    skip_if_empty: true
+    skip_if_empty: false
     cast: "bool_si_no"
 
 # ── Interfaces de red ─────────────────────────────────────────

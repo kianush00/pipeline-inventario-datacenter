@@ -108,6 +108,7 @@ def build_nb_client(url: str, token: str, verify_ssl: bool) -> pynetbox.api:
     try:
         nb.dcim.sites.filter(limit=1)
     except Exception as exc:
+        # TODO: Distinguir correctamente los tipos de errores
         log.error("No se pudo conectar con NetBox (%s): %s", url, exc)
         sys.exit(1)
 
@@ -488,6 +489,7 @@ def ensure_custom_fields(
             )
             log.info("Custom field creado: %s", name)
         except Exception as exc:
+            # TODO: Distinguir correctamente los tipos de errores
             log.error("Error al crear custom field '%s': %s", name, exc)
 
 
@@ -615,12 +617,14 @@ def _sync_interfaces_for_object(
             try:
                 existing[name].update(payload)
             except Exception as exc:
+                # TODO: Distinguir correctamente los tipos de errores
                 log.error("Error actualizando interfaz %s: %s", name, exc)
                 continue
         else:
             try:
                 existing[name] = iface_endpoint.create(**payload)
             except Exception as exc:
+                # TODO: Distinguir correctamente los tipos de errores
                 log.error("Error creando interfaz %s: %s", name, exc)
                 continue
 
@@ -655,6 +659,7 @@ def _assign_ip(
                 "assigned_object_id":   iface_obj.id,
             })
         except Exception as exc:
+            # TODO: Distinguir correctamente los tipos de errores
             log.error("Error actualizando IP %s: %s", cidr, exc)
     else:
         try:
@@ -665,6 +670,7 @@ def _assign_ip(
                 assigned_object_id=iface_obj.id,
             )
         except Exception as exc:
+            # TODO: Distinguir correctamente los tipos de errores
             log.error("Error creando IP %s: %s", cidr, exc)
 
 
@@ -779,7 +785,7 @@ def sync_device(
     payload["site"]        = getattr(site, "id", site.get("id", 0))
 
     # Role: NetBox 4.x usa "role" (no "device_role").
-    # Dado que el Rol del CSV no mapea a roles predefinidos de NetBox,
+    # Dado que el Descripcion del CSV no mapea a roles predefinidos de NetBox,
     # se omite aquí y se incluye en la descripción (ver concat_dot).
     # NetBox requiere el campo role → se usa un rol genérico "Sin clasificar"
     # que se garantiza que existe.
@@ -808,8 +814,9 @@ def sync_device(
 
     # ── GET o CREATE/UPDATE ──────────────────────────────────
     try:
-        existing = list(nb.dcim.devices.filter(**{"cf_inventory_uuid": uuid}))
+        existing = list(nb.dcim.devices.filter(cf_inventory_uuid=uuid))
     except Exception as exc:
+        # TODO: Distinguir correctamente los tipos de errores
         log.error("ERROR buscando device UUID=%s: %s", uuid, exc)
         return "ERROR"
 
@@ -824,6 +831,7 @@ def sync_device(
             log.info("CREATED device: %s", machine_name)
             return "CREATED"
         except Exception as exc:
+            # TODO: Distinguir correctamente los tipos de errores
             log.error("ERROR creando device %s: %s", machine_name, exc)
             return "ERROR"
     else:
@@ -833,6 +841,7 @@ def sync_device(
             log.info("UPDATED device: %s", machine_name)
             return "UPDATED"
         except Exception as exc:
+            # TODO: Distinguir correctamente los tipos de errores
             log.error("ERROR actualizando device %s: %s", machine_name, exc)
             return "ERROR"
 
@@ -889,6 +898,7 @@ def sync_vm(
         if host_devices:
             payload["device"] = host_devices[0].id
     except Exception:
+        #TODO: Distinguir correctamente los tipos de errores
         pass
 
     # Estado.
@@ -907,9 +917,10 @@ def sync_vm(
     # ── GET o CREATE/UPDATE ──────────────────────────────────
     try:
         existing = list(
-            nb.virtualization.virtual_machines.filter(**{"cf_inventory_uuid": uuid})
+            nb.virtualization.virtual_machines.filter(cf_inventory_uuid=uuid)
         )
     except Exception as exc:
+        # TODO: Distinguir correctamente los tipos de errores
         log.error("ERROR buscando VM UUID=%s: %s", uuid, exc)
         return "ERROR"
 
@@ -924,6 +935,7 @@ def sync_vm(
             log.info("CREATED VM: %s", machine_name)
             return "CREATED"
         except Exception as exc:
+            # TODO: Distinguir correctamente los tipos de errores
             log.error("ERROR creando VM %s: %s", machine_name, exc)
             return "ERROR"
     else:
@@ -933,6 +945,7 @@ def sync_vm(
             log.info("UPDATED VM: %s", machine_name)
             return "UPDATED"
         except Exception as exc:
+            # TODO: Distinguir correctamente los tipos de errores
             log.error("ERROR actualizando VM %s: %s", machine_name, exc)
             return "ERROR"
 
@@ -1090,16 +1103,14 @@ def main() -> None:
             uuid = row.get("UUID", "").strip()
 
             if nb_type == "device":
-                objs = list(nb.dcim.devices.filter(**{"cf_inventory_uuid": uuid}))
+                objs = list(nb.dcim.devices.filter(cf_inventory_uuid=uuid))
                 if objs:
                     _sync_interfaces_for_object(
                         nb, objs[0].id, "device", interfaces, args.dry_run
                     )
             else:
                 objs = list(
-                    nb.virtualization.virtual_machines.filter(
-                        **{"cf_inventory_uuid": uuid}
-                    )
+                    nb.virtualization.virtual_machines.filter(cf_inventory_uuid=uuid)
                 )
                 if objs:
                     _sync_interfaces_for_object(
