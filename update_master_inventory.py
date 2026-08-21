@@ -329,8 +329,9 @@ def main() -> None:
 
     if openpyxl is None:
         error(
-            "Falta la dependencia 'openpyxl'.\n"
-            "Instalar con: pip install openpyxl"
+            "No se pudo importar la dependencia 'openpyxl'.\n"
+            "Verifique que el entorno virtual .venv esté activado:\n"
+            "  source .venv/bin/activate"
         )
 
     merged_csv_path = Path(sys.argv[1])

@@ -1,0 +1,337 @@
+# netbox_mapping.yaml
+# ====================
+# Contrato de exportación entre merged_inventory.csv y NetBox 4.6.
+# Leído exclusivamente por export_to_netbox.py.
+# No depende de header_list.txt.
+#
+# ── Credenciales ─────────────────────────────────────────────
+# Se leen desde variables de entorno (nunca en este archivo):
+#   NETBOX_URL        → https://netbox.miempresa.com
+#   NETBOX_TOKEN      → token con permisos write sobre
+#                       dcim, virtualization, ipam, extras, core
+#   NETBOX_VERIFY_SSL → "true" / "false"  (por defecto: true)
+
+# ── Site único ───────────────────────────────────────────────
+# Todos los objetos se asignan a este site.
+# Si no existe en NetBox, el script lo crea automáticamente.
+site:
+  name: "Datacenter Principal"
+  slug: "datacenter-principal"
+
+# ── ClusterType ──────────────────────────────────────────────
+# Las VMs se agrupan en un Cluster cuyo nombre coincide con el
+# valor del campo 'Host/Cluster/Chassis' en el CSV.
+# El cluster_type se crea automáticamente si no existe.
+cluster_type:
+  name: "Hipervisor"
+  slug: "hipervisor"
+
+# ── Tipo de máquina ──────────────────────────────────────────
+# Mapeo de 'Tipo de maquina' del CSV al modelo NetBox destino.
+# Valores no listados aquí: la fila se omite con advertencia.
+machine_type_map:
+  "Dedicada":   "device"           # DCIM → Device
+  "Hipervisor": "device"           # DCIM → Device  (+ genera Cluster)
+  "VM":         "virtual_machine"  # Virtualization → VirtualMachine
+
+# ── Estado → NetBox status ───────────────────────────────────
+# Valores nativos de NetBox 4.x para Device y VirtualMachine:
+#   active | planned | staged | failed | inventory | decommissioning
+# Vacío / N/A → campo omitido (NetBox aplica "active" por defecto).
+status_map:
+  "Producción":    "active"
+  "Desarrollo":    "staged"
+  "Certificación": "staged"
+  "Réplica":       "active"
+  "Baja":          "decommissioning"
+
+# ── Estado operativo → custom field ──────────────────────────
+# NetBox no tiene campo nativo equivalente; se almacena como
+# custom field de texto (ver sección custom_fields).
+# Vacío / N/A → "unknown".
+operational_status_map:
+  "Encendido":       "on"
+  "Apagado":         "off"
+  "Sin información": "unknown"
+
+# ── Custom Fields ────────────────────────────────────────────
+# El script garantiza que estos custom fields existen en NetBox
+# antes de sincronizar datos.  Si no existen, los crea vía POST
+# a /api/extras/custom-fields/.
+#
+# NOTA API NetBox 4.x:
+#   - El campo se llama "object_types" (plural), no "content_types".
+#   - Los tipos se referencian con la notación "app.model",
+#     usando /api/core/object-types/ (desde NetBox 4.5;
+#     /api/extras/object-types/ fue eliminado en 4.5).
+custom_fields:
+  - name: "inventory_uuid"
+    label: "UUID de inventario"
+    type: "text"
+    required: false
+    object_types:
+      - "dcim.device"
+      - "virtualization.virtualmachine"
+
+  - name: "service_tag"
+    label: "Service Tag"
+    type: "text"
+    required: false
+    object_types:
+      - "dcim.device"
+
+  - name: "cpu_model"
+    label: "Modelo CPU"
+    type: "text"
+    required: false
+    object_types:
+      - "dcim.device"
+      - "virtualization.virtualmachine"
+
+  - name: "cpu_cores"
+    label: "Cores CPU"
+    type: "integer"
+    required: false
+    object_types:
+      - "dcim.device"
+      - "virtualization.virtualmachine"
+
+  - name: "cpu_threads"
+    label: "Threads CPU"
+    type: "integer"
+    required: false
+    object_types:
+      - "dcim.device"
+
+  - name: "cpu_sockets"
+    label: "Sockets CPU"
+    type: "integer"
+    required: false
+    object_types:
+      - "dcim.device"
+
+  - name: "disks"
+    label: "Discos"
+    type: "text"
+    required: false
+    object_types:
+      - "dcim.device"
+      - "virtualization.virtualmachine"
+
+  - name: "raid"
+    label: "RAID"
+    type: "text"
+    required: false
+    object_types:
+      - "dcim.device"
+
+  - name: "bios_version"
+    label: "Versión BIOS"
+    type: "text"
+    required: false
+    object_types:
+      - "dcim.device"
+
+  - name: "bios_date"
+    label: "Fecha BIOS"
+    type: "text"
+    required: false
+    object_types:
+      - "dcim.device"
+
+  - name: "operational_status"
+    label: "Estado operativo"
+    type: "text"
+    required: false
+    object_types:
+      - "dcim.device"
+      - "virtualization.virtualmachine"
+
+  - name: "rundeck_node"
+    label: "Nodo Rundeck"
+    type: "boolean"
+    required: false
+    object_types:
+      - "dcim.device"
+      - "virtualization.virtualmachine"
+
+# ── Campos nativos de Device (DCIM) ──────────────────────────
+# 'source' → nombre exacto de la columna en merged_inventory.csv.
+# 'target' → campo en el API de NetBox.
+# 'skip_if_empty' → no enviar el campo si el valor es vacío/N/A.
+#
+# NOTA: En NetBox 4.x el campo de rol del Device se llama "role"
+# (renombrado desde "device_role" en v3.6; eliminado el alias en 4.0).
+device_fields:
+  - source: "Nombre maquina"
+    target: "name"
+    skip_if_empty: false
+
+  - source: "Serial Number"
+    target: "serial"
+    skip_if_empty: true
+
+  - source: "Nro Inventario"
+    target: "asset_tag"
+    skip_if_empty: true
+
+  - source: "Rack"
+    target: "rack"           # resuelto a ID por el script
+    skip_if_empty: true
+
+  - source: "Posicion (U)"
+    target: "position"
+    skip_if_empty: true
+    cast: "int"
+
+  - source: "Altura (U)"
+    target: "_u_height"      # se usa solo para crear/actualizar DeviceType
+    skip_if_empty: true
+    cast: "int"
+
+  - source: "SO Host"
+    target: "platform"       # resuelto o creado por nombre
+    skip_if_empty: true
+
+  # Descripción: concatenación de 'Rol' + '. ' + 'Notas'.
+  # La lógica de concatenación está en el script.
+  - source: ["Rol", "Notas"]
+    target: "description"
+    transform: "concat_dot"
+    skip_if_empty: true
+
+# ── Custom fields de Device ───────────────────────────────────
+device_custom_fields:
+  - source: "UUID"
+    target: "inventory_uuid"
+    skip_if_empty: false     # clave de idempotencia
+
+  - source: "Service Tag"
+    target: "service_tag"
+    skip_if_empty: true
+
+  - source: "CPU Modelo"
+    target: "cpu_model"
+    skip_if_empty: true
+
+  - source: "Cores"
+    target: "cpu_cores"
+    skip_if_empty: true
+    cast: "int"
+
+  - source: "Threads"
+    target: "cpu_threads"
+    skip_if_empty: true
+    cast: "int"
+
+  - source: "Sockets"
+    target: "cpu_sockets"
+    skip_if_empty: true
+    cast: "int"
+
+  - source: "Discos"
+    target: "disks"
+    skip_if_empty: true
+
+  - source: "RAID"
+    target: "raid"
+    skip_if_empty: true
+
+  - source: "Version BIOS"
+    target: "bios_version"
+    skip_if_empty: true
+
+  - source: "Fecha BIOS"
+    target: "bios_date"
+    skip_if_empty: true
+
+  - source: "Estado operativo"
+    target: "operational_status"
+    skip_if_empty: true
+    map: "operational_status_map"
+
+  - source: "Nodo Rundeck"
+    target: "rundeck_node"
+    skip_if_empty: true
+    cast: "bool_si_no"       # "si" → True, "no" → False
+
+# ── Campos nativos de VirtualMachine ─────────────────────────
+vm_fields:
+  - source: "Nombre maquina"
+    target: "name"
+    skip_if_empty: false
+
+  - source: "SO Host"
+    target: "platform"
+    skip_if_empty: true
+
+  - source: "RAM (GB)"
+    target: "memory"
+    skip_if_empty: true
+    cast: "int_gb_to_mb"     # CSV en GB; NetBox espera MB (entero)
+
+  - source: "Capacidad visible (GB)"
+    target: "disk"
+    skip_if_empty: true
+    cast: "int"
+
+  - source: ["Rol", "Notas"]
+    target: "description"
+    transform: "concat_dot"
+    skip_if_empty: true
+
+  - source: "Serial Number"
+    target: "serial"
+    skip_if_empty: true
+
+# ── Custom fields de VirtualMachine ──────────────────────────
+vm_custom_fields:
+  - source: "UUID"
+    target: "inventory_uuid"
+    skip_if_empty: false
+
+  - source: "CPU Modelo"
+    target: "cpu_model"
+    skip_if_empty: true
+
+  - source: "Cores"
+    target: "cpu_cores"
+    skip_if_empty: true
+    cast: "int"
+
+  - source: "Discos"
+    target: "disks"
+    skip_if_empty: true
+
+  - source: "Estado operativo"
+    target: "operational_status"
+    skip_if_empty: true
+    map: "operational_status_map"
+
+  - source: "Nodo Rundeck"
+    target: "rundeck_node"
+    skip_if_empty: true
+    cast: "bool_si_no"
+
+# ── Interfaces de red ─────────────────────────────────────────
+# Las cinco columnas de red se parsean en paralelo por posición.
+# Si los arrays resultantes no tienen la misma longitud, la
+# sincronización de interfaces de esa fila se omite (el Device/VM
+# se sincroniza de todas formas).
+network:
+  columns:
+    names:  "Interfaces"
+    status: "Interfaces estado"
+    ip:     "IP"
+    prefix: "Red IP"
+    mac:    "MAC"
+  # Valores que se tratan como "sin dato" en cualquier columna de red.
+  empty_values:
+    - "N/A"
+    - ""
+    - "None"
+  # Mapeo de estado del CSV a 'enabled' (bool) en NetBox.
+  # Cualquier valor no listado → enabled=true.
+  interface_status_map:
+    "up":   true
+    "down": false

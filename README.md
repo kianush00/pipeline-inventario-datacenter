@@ -169,7 +169,7 @@ The expected flow is:
 Example usage:
 
 ```bash
-python3 parse_job_output.py job_output.txt parsed_job_output.csv
+python3 parse_job_output.py job_output.log parsed_job_output.csv
 python3 prepare_master_inventory.py master_inventory.ods
 python3 merge_inventories.py parsed_job_output.csv master_inventory.csv merged_inventory.csv
 ```

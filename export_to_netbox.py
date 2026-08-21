@@ -1,0 +1,1137 @@
+"""
+export_to_netbox.py
+===================
+Exporta el inventario fusionado (merged_inventory.csv) a NetBox 4.x.
+
+Dependencias:
+    pip install pynetbox>=7.3.0 PyYAML>=6.0
+
+Variables de entorno requeridas:
+    NETBOX_URL        → https://netbox.miempresa.com
+    NETBOX_TOKEN      → token con permisos write sobre
+                        dcim, virtualization, ipam, extras, core
+    NETBOX_VERIFY_SSL → "true" / "false"  (por defecto: true)
+
+Uso:
+    python3 export_to_netbox.py merged_inventory.csv [netbox_mapping.yaml] [--dry-run]
+
+Opciones:
+    --dry-run   Muestra las operaciones que se ejecutarían sin
+                modificar NetBox. Útil para validar antes del
+                primer sync real.
+
+Estrategia de idempotencia:
+    El lookup de Device y VirtualMachine se hace siempre por el
+    custom field 'inventory_uuid'. Esto garantiza que un cambio
+    de nombre en el CSV actualiza el objeto existente en NetBox
+    en lugar de crear un duplicado.
+
+Códigos de salida:
+    0 → sin errores en filas individuales
+    1 → al menos una fila produjo ERROR
+"""
+
+import argparse
+import csv
+import logging
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+import pynetbox
+import requests
+import urllib3
+import yaml
+
+# ============================================================
+# LOGGER
+# ============================================================
+
+logging.basicConfig(
+    format="%(levelname)s %(message)s",
+    level=logging.INFO,
+    stream=sys.stderr,
+)
+log = logging.getLogger("export_to_netbox")
+
+
+# ============================================================
+# CONSTANTES
+# ============================================================
+
+EMPTY_VALUES = {"", "N/A", "None", "n/a", "none"}
+
+
+# ============================================================
+# CARGA DE CONFIGURACIÓN
+# ============================================================
+
+def load_config(mapping_path: Path) -> dict:
+    if not mapping_path.is_file():
+        log.error("No se encontró el archivo de mapping: %s", mapping_path)
+        sys.exit(1)
+    with mapping_path.open("r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def load_env() -> tuple[str, str, bool]:
+    url = os.environ.get("NETBOX_URL", "").rstrip("/")
+    token = os.environ.get("NETBOX_TOKEN", "")
+    verify_ssl = os.environ.get("NETBOX_VERIFY_SSL", "true").lower() != "false"
+
+    if not url:
+        log.error("Variable de entorno NETBOX_URL no definida.")
+        sys.exit(1)
+    if not token:
+        log.error("Variable de entorno NETBOX_TOKEN no definida.")
+        sys.exit(1)
+    return url, token, verify_ssl
+
+
+# ============================================================
+# CLIENTE PYNETBOX
+# ============================================================
+
+def build_nb_client(url: str, token: str, verify_ssl: bool) -> pynetbox.api:
+    if not verify_ssl:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    session = requests.Session()
+    session.verify = verify_ssl
+
+    nb = pynetbox.api(url, token=token)
+    nb.http_session = session
+
+    # Verificar conectividad con una llamada liviana.
+    try:
+        nb.dcim.sites.filter(limit=1)
+    except Exception as exc:
+        log.error("No se pudo conectar con NetBox (%s): %s", url, exc)
+        sys.exit(1)
+
+    log.info("Conectado a NetBox %s", url)
+    return nb
+
+
+# ============================================================
+# UTILIDADES
+# ============================================================
+
+def slugify(name: str) -> str:
+    """Genera un slug válido para NetBox desde un nombre."""
+    slug = name.lower().strip()
+    slug = re.sub(r"[^\w\s-]", "", slug)
+    slug = re.sub(r"[\s_-]+", "-", slug)
+    slug = slug.strip("-")
+    # NetBox limita los slugs a 100 caracteres.
+    return slug[:100]
+
+
+def is_empty(value: Any) -> bool:
+    if value is None:
+        return True
+    return str(value).strip() in EMPTY_VALUES
+
+
+def safe_int(value: Any) -> int | None:
+    try:
+        return int(str(value).strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def safe_int_gb_to_mb(value: Any) -> int | None:
+    """Convierte GB (string/float) a MB (entero). NetBox espera MB para memory."""
+    try:
+        gb = float(str(value).strip())
+        return int(gb * 1024)
+    except (ValueError, TypeError):
+        return None
+
+
+def safe_bool_si_no(value: Any) -> bool | None:
+    """'si'/'sí' → True, 'no' → False, otro → None."""
+    v = str(value).strip().lower()
+    if v in ("si", "sí", "yes", "true", "1"):
+        return True
+    if v in ("no", "false", "0"):
+        return False
+    return None
+
+
+def apply_cast(value: Any, cast: str) -> Any:
+    if cast == "int":
+        return safe_int(value)
+    if cast == "int_gb_to_mb":
+        return safe_int_gb_to_mb(value)
+    if cast == "bool_si_no":
+        return safe_bool_si_no(value)
+    return value
+
+
+def concat_dot(parts: list[str]) -> str:
+    """Concatena partes no vacías con '. ' como separador."""
+    clean = [p.strip() for p in parts if not is_empty(p)]
+    return ". ".join(clean)
+
+
+# ============================================================
+# LEER CSV
+# ============================================================
+
+def read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    """
+    Lee merged_inventory.csv.
+    Devuelve (headers, rows) donde cada row es {header: value}.
+    """
+    if not path.is_file():
+        log.error("No se encontró el CSV de entrada: %s", path)
+        sys.exit(1)
+
+    rows: list[dict[str, str]] = []
+    with path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        headers = reader.fieldnames or []
+        for row in reader:
+            rows.append(dict(row))
+
+    log.info("CSV leído: %d filas, %d columnas", len(rows), len(headers))
+    return list(headers), rows
+
+
+# ============================================================
+# NORMALIZACIÓN DE VALORES DE FILA
+# ============================================================
+
+def resolve_field_value(
+    row: dict[str, str],
+    field_def: dict,
+    config: dict,
+) -> Any:
+    """
+    Resuelve el valor de un campo según su definición en el YAML.
+    Retorna None si el valor está vacío y skip_if_empty=True.
+    """
+    source = field_def.get("source")
+    skip_if_empty = field_def.get("skip_if_empty", True)
+    transform = field_def.get("transform")
+    cast = field_def.get("cast")
+    map_key = field_def.get("map")
+
+    # Transformación multi-source (concat_dot).
+    if isinstance(source, list) and transform == "concat_dot":
+        parts = [row.get(s, "") for s in source]
+        value = concat_dot(parts)
+        if not value and skip_if_empty:
+            return None
+        return value
+
+    # Campo simple.
+    value = row.get(source, "")
+
+    if is_empty(value):
+        return None if skip_if_empty else ""
+
+    # Mapeo de valores (ej. status_map, operational_status_map).
+    if map_key:
+        mapping = config.get(map_key, {})
+        value = mapping.get(value.strip(), value)
+
+    # Cast de tipo.
+    if cast:
+        value = apply_cast(value, cast)
+
+    return value
+
+
+# ============================================================
+# TAXONOMÍA: ensure_* (GET o CREATE)
+# ============================================================
+
+def ensure_site(nb: pynetbox.api, cfg: dict, dry_run: bool) -> Any:
+    name = cfg["site"]["name"]
+    slug = cfg["site"].get("slug") or slugify(name)
+
+    results = list(nb.dcim.sites.filter(name=name))
+    if results:
+        return results[0]
+
+    if dry_run:
+        log.info("[DRY-RUN] Crearía Site: %s", name)
+        return {"id": 0, "name": name}
+
+    obj = nb.dcim.sites.create(name=name, slug=slug)
+    log.info("Site creado: %s", name)
+    return obj
+
+
+def ensure_cluster_type(nb: pynetbox.api, cfg: dict, dry_run: bool) -> Any:
+    name = cfg["cluster_type"]["name"]
+    slug = cfg["cluster_type"].get("slug") or slugify(name)
+
+    results = list(nb.virtualization.cluster_types.filter(name=name))
+    if results:
+        return results[0]
+
+    if dry_run:
+        log.info("[DRY-RUN] Crearía ClusterType: %s", name)
+        return {"id": 0, "name": name}
+
+    obj = nb.virtualization.cluster_types.create(name=name, slug=slug)
+    log.info("ClusterType creado: %s", name)
+    return obj
+
+
+def ensure_manufacturer(
+    nb: pynetbox.api, name: str, cache: dict, dry_run: bool
+) -> Any:
+    if name in cache:
+        return cache[name]
+
+    results = list(nb.dcim.manufacturers.filter(name=name))
+    if results:
+        cache[name] = results[0]
+        return results[0]
+
+    if dry_run:
+        log.info("[DRY-RUN] Crearía Manufacturer: %s", name)
+        obj = {"id": 0, "name": name}
+        cache[name] = obj
+        return obj
+
+    obj = nb.dcim.manufacturers.create(name=name, slug=slugify(name))
+    log.info("Manufacturer creado: %s", name)
+    cache[name] = obj
+    return obj
+
+
+def ensure_device_type(
+    nb: pynetbox.api,
+    manufacturer: Any,
+    model: str,
+    u_height: int,
+    cache: dict,
+    dry_run: bool,
+) -> Any:
+    key = (str(getattr(manufacturer, "id", manufacturer.get("id", 0))), model)
+    if key in cache:
+        return cache[key]
+
+    manufacturer_id = getattr(manufacturer, "id", manufacturer.get("id", 0))
+    results = list(nb.dcim.device_types.filter(model=model, manufacturer_id=manufacturer_id))
+    if results:
+        cache[key] = results[0]
+        return results[0]
+
+    if dry_run:
+        log.info("[DRY-RUN] Crearía DeviceType: %s / %s", manufacturer, model)
+        obj = {"id": 0, "model": model}
+        cache[key] = obj
+        return obj
+
+    obj = nb.dcim.device_types.create(
+        model=model,
+        slug=slugify(model),
+        manufacturer=manufacturer_id,
+        u_height=u_height or 1,
+    )
+    log.info("DeviceType creado: %s / %s", getattr(manufacturer, "name", "?"), model)
+    cache[key] = obj
+    return obj
+
+
+def ensure_platform(
+    nb: pynetbox.api, name: str, cache: dict, dry_run: bool
+) -> Any:
+    if name in cache:
+        return cache[name]
+
+    results = list(nb.dcim.platforms.filter(name=name))
+    if results:
+        cache[name] = results[0]
+        return results[0]
+
+    if dry_run:
+        log.info("[DRY-RUN] Crearía Platform: %s", name)
+        obj = {"id": 0, "name": name}
+        cache[name] = obj
+        return obj
+
+    obj = nb.dcim.platforms.create(name=name, slug=slugify(name))
+    log.info("Platform creado: %s", name)
+    cache[name] = obj
+    return obj
+
+
+def ensure_rack(
+    nb: pynetbox.api, name: str, site: Any, cache: dict, dry_run: bool
+) -> Any:
+    if name in cache:
+        return cache[name]
+
+    site_id = getattr(site, "id", site.get("id", 0))
+    results = list(nb.dcim.racks.filter(name=name, site_id=site_id))
+    if results:
+        cache[name] = results[0]
+        return results[0]
+
+    if dry_run:
+        log.info("[DRY-RUN] Crearía Rack: %s", name)
+        obj = {"id": 0, "name": name}
+        cache[name] = obj
+        return obj
+
+    obj = nb.dcim.racks.create(name=name, site=site_id)
+    log.info("Rack creado: %s", name)
+    cache[name] = obj
+    return obj
+
+
+def ensure_cluster(
+    nb: pynetbox.api,
+    name: str,
+    cluster_type: Any,
+    site: Any,
+    cache: dict,
+    dry_run: bool,
+) -> Any:
+    if name in cache:
+        return cache[name]
+
+    results = list(nb.virtualization.clusters.filter(name=name))
+    if results:
+        cache[name] = results[0]
+        return results[0]
+
+    cluster_type_id = getattr(cluster_type, "id", cluster_type.get("id", 0))
+    site_id = getattr(site, "id", site.get("id", 0))
+
+    if dry_run:
+        log.info("[DRY-RUN] Crearía Cluster: %s", name)
+        obj = {"id": 0, "name": name}
+        cache[name] = obj
+        return obj
+
+    obj = nb.virtualization.clusters.create(
+        name=name,
+        type=cluster_type_id,
+        site=site_id,
+    )
+    log.info("Cluster creado: %s", name)
+    cache[name] = obj
+    return obj
+
+
+# ============================================================
+# CUSTOM FIELDS: ensure_custom_fields
+# ============================================================
+
+def ensure_custom_fields(
+    nb: pynetbox.api,
+    cfg: dict,
+    dry_run: bool,
+) -> None:
+    """
+    Garantiza que todos los custom fields del YAML existen en NetBox.
+    Si no existen, los crea vía POST a /api/extras/custom-fields/.
+
+    NOTA NetBox 4.x:
+    - El campo se llama "object_types" (plural).
+    - Los tipos se identifican por su app_label.model en
+      /api/core/object-types/ (desde NetBox 4.5;
+      /api/extras/object-types/ fue eliminado).
+    """
+    # Construir mapa nombre → ID de object_type.
+    object_type_cache: dict[str, int] = {}
+
+    def get_object_type_id(app_model: str) -> int | None:
+        if app_model in object_type_cache:
+            return object_type_cache[app_model]
+        app_label, model = app_model.split(".", 1)
+        results = list(
+            nb.core.object_types.filter(app_label=app_label, model=model)
+        )
+        if not results:
+            log.warning("object_type no encontrado en NetBox: %s", app_model)
+            return None
+        ot_id = results[0].id
+        object_type_cache[app_model] = ot_id
+        return ot_id
+
+    existing_cfs = {cf.name: cf for cf in nb.extras.custom_fields.all()}
+
+    for cf_def in cfg.get("custom_fields", []):
+        name = cf_def["name"]
+        if name in existing_cfs:
+            log.debug("Custom field ya existe: %s", name)
+            continue
+
+        ot_ids = [
+            get_object_type_id(ot)
+            for ot in cf_def.get("object_types", [])
+        ]
+        ot_ids = [i for i in ot_ids if i is not None]
+
+        if dry_run:
+            log.info("[DRY-RUN] Crearía custom field: %s (%s)", name, cf_def.get("type"))
+            continue
+
+        try:
+            nb.extras.custom_fields.create(
+                name=name,
+                label=cf_def.get("label", name),
+                type=cf_def.get("type", "text"),
+                required=cf_def.get("required", False),
+                object_types=ot_ids,
+            )
+            log.info("Custom field creado: %s", name)
+        except Exception as exc:
+            log.error("Error al crear custom field '%s': %s", name, exc)
+
+
+# ============================================================
+# PARSEO DE RED
+# ============================================================
+
+def parse_network_interfaces(
+    row: dict[str, str],
+    net_cfg: dict,
+) -> list[dict] | None:
+    """
+    Parsea las 5 columnas de red del CSV (valores separados por comas)
+    y devuelve una lista de dicts con la información de cada interfaz.
+
+    Retorna None si los arrays tienen longitudes distintas.
+    """
+    empty_vals = set(net_cfg.get("empty_values", ["N/A", "", "None"]))
+    status_map: dict[str, bool] = net_cfg.get("interface_status_map", {})
+
+    def split_col(col_name: str) -> list[str]:
+        raw = row.get(col_name, "")
+        if raw.strip() in empty_vals:
+            return []
+        return [v.strip() for v in raw.split(",")]
+
+    cols = net_cfg["columns"]
+    names   = split_col(cols["names"])
+    statuses = split_col(cols["status"])
+    ips     = split_col(cols["ip"])
+    prefixes = split_col(cols["prefix"])
+    macs    = split_col(cols["mac"])
+
+    if not names:
+        return []
+
+    # Rellenar con vacíos si alguna columna tiene menos elementos.
+    max_len = len(names)
+    for lst in (statuses, ips, prefixes, macs):
+        if lst and len(lst) != max_len:
+            return None  # longitudes incompatibles
+
+    def pad(lst: list[str]) -> list[str]:
+        return lst + [""] * (max_len - len(lst))
+
+    statuses = pad(statuses)
+    ips      = pad(ips)
+    prefixes = pad(prefixes)
+    macs     = pad(macs)
+
+    interfaces = []
+    for i, name in enumerate(names):
+        if not name or name in empty_vals:
+            continue
+
+        status_raw = statuses[i].lower().strip()
+        enabled = status_map.get(status_raw, True)
+
+        ip_raw   = ips[i]     if ips[i] not in empty_vals     else None
+        pfx_raw  = prefixes[i] if prefixes[i] not in empty_vals else None
+        mac_raw  = macs[i]    if macs[i] not in empty_vals    else None
+
+        # Construir dirección CIDR si tenemos IP y prefijo.
+        cidr = None
+        if ip_raw and pfx_raw:
+            try:
+                prefix_len = pfx_raw.split("/")[1]
+                cidr = f"{ip_raw}/{prefix_len}"
+            except IndexError:
+                cidr = None
+
+        interfaces.append({
+            "name":    name,
+            "enabled": enabled,
+            "mac":     mac_raw,
+            "ip":      ip_raw,
+            "prefix":  pfx_raw,
+            "cidr":    cidr,
+        })
+
+    return interfaces
+
+
+# ============================================================
+# SINCRONIZACIÓN DE INTERFACES
+# ============================================================
+
+def _sync_interfaces_for_object(
+    nb: pynetbox.api,
+    obj_id: int,
+    obj_type: str,   # "device" | "virtual_machine"
+    interfaces: list[dict],
+    dry_run: bool,
+) -> None:
+    """Sincroniza interfaces y sus IPs para un Device o VM."""
+
+    if obj_type == "device":
+        iface_endpoint = nb.dcim.interfaces
+        iface_filter   = {"device_id": obj_id}
+    else:
+        iface_endpoint = nb.virtualization.interfaces
+        iface_filter   = {"virtual_machine_id": obj_id}
+
+    existing = {iface.name: iface for iface in iface_endpoint.filter(**iface_filter)}
+
+    for iface_data in interfaces:
+        name    = iface_data["name"]
+        enabled = iface_data["enabled"]
+        mac     = iface_data["mac"]
+        cidr    = iface_data["cidr"]
+
+        payload: dict[str, Any] = {"name": name, "enabled": enabled}
+        if mac:
+            payload["mac_address"] = mac.upper()
+        if obj_type == "device":
+            payload["device"] = obj_id
+            payload["type"]   = "other"   # tipo genérico; ajustable
+        else:
+            payload["virtual_machine"] = obj_id
+
+        if dry_run:
+            action = "Actualizaría" if name in existing else "Crearía"
+            log.info("[DRY-RUN] %s interfaz %s en objeto %s", action, name, obj_id)
+        elif name in existing:
+            try:
+                existing[name].update(payload)
+            except Exception as exc:
+                log.error("Error actualizando interfaz %s: %s", name, exc)
+                continue
+        else:
+            try:
+                existing[name] = iface_endpoint.create(**payload)
+            except Exception as exc:
+                log.error("Error creando interfaz %s: %s", name, exc)
+                continue
+
+        # Asignar IP si hay CIDR.
+        if cidr and not dry_run:
+            iface_obj = existing.get(name)
+            if iface_obj:
+                _assign_ip(nb, cidr, iface_obj, obj_type)
+
+        if cidr and dry_run:
+            log.info("[DRY-RUN] Asignaría IP %s a interfaz %s", cidr, name)
+
+
+def _assign_ip(
+    nb: pynetbox.api,
+    cidr: str,
+    iface_obj: Any,
+    obj_type: str,
+) -> None:
+    """Crea o actualiza una IP address en NetBox y la asigna a la interfaz."""
+    if obj_type == "device":
+        assigned_type = "dcim.interface"
+    else:
+        assigned_type = "virtualization.vminterface"
+
+    existing = list(nb.ipam.ip_addresses.filter(address=cidr))
+    if existing:
+        ip_obj = existing[0]
+        try:
+            ip_obj.update({
+                "assigned_object_type": assigned_type,
+                "assigned_object_id":   iface_obj.id,
+            })
+        except Exception as exc:
+            log.error("Error actualizando IP %s: %s", cidr, exc)
+    else:
+        try:
+            nb.ipam.ip_addresses.create(
+                address=cidr,
+                status="active",
+                assigned_object_type=assigned_type,
+                assigned_object_id=iface_obj.id,
+            )
+        except Exception as exc:
+            log.error("Error creando IP %s: %s", cidr, exc)
+
+
+# ============================================================
+# CONSTRUCCIÓN DE PAYLOAD
+# ============================================================
+
+def build_payload(
+    row: dict[str, str],
+    field_defs: list[dict],
+    cf_defs: list[dict],
+    config: dict,
+) -> tuple[dict, dict]:
+    """
+    Construye (payload_nativo, payload_cf) para una fila del CSV.
+    Los campos con valor None (vacíos + skip_if_empty) se excluyen.
+    """
+    payload: dict[str, Any] = {}
+    cf_payload: dict[str, Any] = {}
+
+    for fd in field_defs:
+        target = fd["target"]
+        if target.startswith("_"):
+            # Campo interno del script (ej. _u_height), no va al API directamente.
+            continue
+        value = resolve_field_value(row, fd, config)
+        if value is not None:
+            payload[target] = value
+
+    for fd in cf_defs:
+        target = fd["target"]
+        value = resolve_field_value(row, fd, config)
+        if value is not None:
+            cf_payload[target] = value
+
+    if cf_payload:
+        payload["custom_fields"] = cf_payload
+
+    return payload, cf_payload
+
+
+def get_internal_field(
+    row: dict[str, str],
+    field_defs: list[dict],
+    internal_key: str,
+    config: dict,
+) -> Any:
+    """Extrae un campo interno (prefijado con '_') de los field_defs."""
+    for fd in field_defs:
+        if fd.get("target") == internal_key:
+            return resolve_field_value(row, fd, config)
+    return None
+
+
+# ============================================================
+# SINCRONIZADOR DE DEVICE
+# ============================================================
+
+def sync_device(
+    nb: pynetbox.api,
+    row: dict[str, str],
+    config: dict,
+    site: Any,
+    cluster_type: Any,
+    caches: dict,
+    dry_run: bool,
+) -> str:
+    """
+    Sincroniza una fila de tipo 'device' o 'hipervisor' con NetBox.
+    Retorna: "CREATED" | "UPDATED" | "UNCHANGED" | "SKIPPED" | "ERROR"
+    """
+    machine_name = row.get("Nombre maquina", "").strip()
+    uuid = row.get("UUID", "").strip()
+    if is_empty(uuid):
+        log.warning("SKIP (UUID vacío): %s", machine_name)
+        return "SKIPPED"
+
+    device_fields_cfg = config.get("device_fields", [])
+    device_cf_cfg     = config.get("device_custom_fields", [])
+
+    payload, _ = build_payload(row, device_fields_cfg, device_cf_cfg, config)
+
+    # ── Resolución de objetos relacionados ──────────────────
+    # Manufacturer y DeviceType.
+    marca  = row.get("Marca", "").strip()
+    modelo = row.get("Modelo", "").strip()
+
+    if is_empty(marca) or is_empty(modelo):
+        log.warning("SKIP (%s): sin Marca o Modelo.", machine_name)
+        return "SKIPPED"
+
+    manufacturer = ensure_manufacturer(nb, marca, caches["manufacturers"], dry_run)
+    u_height = get_internal_field(row, device_fields_cfg, "_u_height", config) or 1
+    device_type = ensure_device_type(
+        nb, manufacturer, modelo, u_height, caches["device_types"], dry_run
+    )
+
+    # Platform.
+    platform_name = row.get("SO Host", "").strip()
+    if not is_empty(platform_name):
+        platform = ensure_platform(nb, platform_name, caches["platforms"], dry_run)
+        payload["platform"] = getattr(platform, "id", platform.get("id", 0))
+
+    # Rack.
+    rack_name = row.get("Rack", "").strip()
+    if not is_empty(rack_name):
+        rack = ensure_rack(nb, rack_name, site, caches["racks"], dry_run)
+        payload["rack"] = getattr(rack, "id", rack.get("id", 0))
+
+    # DeviceType y Site son siempre obligatorios en NetBox.
+    payload["device_type"] = getattr(device_type, "id", device_type.get("id", 0))
+    payload["site"]        = getattr(site, "id", site.get("id", 0))
+
+    # Role: NetBox 4.x usa "role" (no "device_role").
+    # Dado que el Rol del CSV no mapea a roles predefinidos de NetBox,
+    # se omite aquí y se incluye en la descripción (ver concat_dot).
+    # NetBox requiere el campo role → se usa un rol genérico "Sin clasificar"
+    # que se garantiza que existe.
+    role = _ensure_generic_role(nb, caches, dry_run)
+    payload["role"] = getattr(role, "id", role.get("id", 0))
+
+    # Estado.
+    estado = row.get("Estado", "").strip()
+    if not is_empty(estado):
+        status_mapped = config.get("status_map", {}).get(estado)
+        if status_mapped:
+            payload["status"] = status_mapped
+
+    # Cluster para hipervisores.
+    tipo = row.get("Tipo de maquina", "").strip()
+    if tipo == "Hipervisor":
+        cluster = ensure_cluster(
+            nb,
+            machine_name,
+            cluster_type,
+            site,
+            caches["clusters"],
+            dry_run,
+        )
+        payload["cluster"] = getattr(cluster, "id", cluster.get("id", 0))
+
+    # ── GET o CREATE/UPDATE ──────────────────────────────────
+    try:
+        existing = list(nb.dcim.devices.filter(**{"cf_inventory_uuid": uuid}))
+    except Exception as exc:
+        log.error("ERROR buscando device UUID=%s: %s", uuid, exc)
+        return "ERROR"
+
+    if dry_run:
+        action = "Actualizaría" if existing else "Crearía"
+        log.info("[DRY-RUN] %s device: %s (UUID=%s)", action, machine_name, uuid)
+        return "CREATED" if not existing else "UPDATED"
+
+    if not existing:
+        try:
+            nb.dcim.devices.create(**payload)
+            log.info("CREATED device: %s", machine_name)
+            return "CREATED"
+        except Exception as exc:
+            log.error("ERROR creando device %s: %s", machine_name, exc)
+            return "ERROR"
+    else:
+        dev = existing[0]
+        try:
+            dev.update(payload)
+            log.info("UPDATED device: %s", machine_name)
+            return "UPDATED"
+        except Exception as exc:
+            log.error("ERROR actualizando device %s: %s", machine_name, exc)
+            return "ERROR"
+
+
+# ============================================================
+# SINCRONIZADOR DE VM
+# ============================================================
+
+def sync_vm(
+    nb: pynetbox.api,
+    row: dict[str, str],
+    config: dict,
+    site: Any,
+    cluster_type: Any,
+    caches: dict,
+    dry_run: bool,
+) -> str:
+    """
+    Sincroniza una fila de tipo 'virtual_machine' con NetBox.
+    Retorna: "CREATED" | "UPDATED" | "UNCHANGED" | "SKIPPED" | "ERROR"
+    """
+    machine_name = row.get("Nombre maquina", "").strip()
+    uuid = row.get("UUID", "").strip()
+    if is_empty(uuid):
+        log.warning("SKIP (UUID vacío): %s", machine_name)
+        return "SKIPPED"
+
+    vm_fields_cfg = config.get("vm_fields", [])
+    vm_cf_cfg     = config.get("vm_custom_fields", [])
+
+    payload, _ = build_payload(row, vm_fields_cfg, vm_cf_cfg, config)
+
+    # Platform.
+    platform_name = row.get("SO Host", "").strip()
+    if not is_empty(platform_name):
+        platform = ensure_platform(nb, platform_name, caches["platforms"], dry_run)
+        payload["platform"] = getattr(platform, "id", platform.get("id", 0))
+
+    # Cluster: se basa en 'Host/Cluster/Chassis'.
+    host_name = row.get("Host/Cluster/Chassis", "").strip()
+    if is_empty(host_name):
+        log.warning("SKIP (%s): VM sin Host/Cluster/Chassis.", machine_name)
+        return "SKIPPED"
+
+    cluster = ensure_cluster(
+        nb, host_name, cluster_type, site, caches["clusters"], dry_run
+    )
+    payload["cluster"] = getattr(cluster, "id", cluster.get("id", 0))
+    payload["site"]    = getattr(site, "id", site.get("id", 0))
+
+    # Device del hipervisor host (opcional pero recomendado en NetBox 4.x).
+    try:
+        host_devices = list(nb.dcim.devices.filter(name=host_name))
+        if host_devices:
+            payload["device"] = host_devices[0].id
+    except Exception:
+        pass
+
+    # Estado.
+    estado = row.get("Estado", "").strip()
+    if not is_empty(estado):
+        status_mapped = config.get("status_map", {}).get(estado)
+        if status_mapped:
+            payload["status"] = status_mapped
+
+    # vcpus (Cores).
+    cores = row.get("Cores", "").strip()
+    cores_int = safe_int(cores)
+    if cores_int is not None:
+        payload["vcpus"] = float(cores_int)
+
+    # ── GET o CREATE/UPDATE ──────────────────────────────────
+    try:
+        existing = list(
+            nb.virtualization.virtual_machines.filter(**{"cf_inventory_uuid": uuid})
+        )
+    except Exception as exc:
+        log.error("ERROR buscando VM UUID=%s: %s", uuid, exc)
+        return "ERROR"
+
+    if dry_run:
+        action = "Actualizaría" if existing else "Crearía"
+        log.info("[DRY-RUN] %s VM: %s (UUID=%s)", action, machine_name, uuid)
+        return "CREATED" if not existing else "UPDATED"
+
+    if not existing:
+        try:
+            nb.virtualization.virtual_machines.create(**payload)
+            log.info("CREATED VM: %s", machine_name)
+            return "CREATED"
+        except Exception as exc:
+            log.error("ERROR creando VM %s: %s", machine_name, exc)
+            return "ERROR"
+    else:
+        vm = existing[0]
+        try:
+            vm.update(payload)
+            log.info("UPDATED VM: %s", machine_name)
+            return "UPDATED"
+        except Exception as exc:
+            log.error("ERROR actualizando VM %s: %s", machine_name, exc)
+            return "ERROR"
+
+
+# ============================================================
+# ROL GENÉRICO
+# ============================================================
+
+def _ensure_generic_role(nb: pynetbox.api, caches: dict, dry_run: bool) -> Any:
+    """
+    Garantiza que existe un DeviceRole genérico "Sin clasificar" en NetBox.
+    NetBox 4.x: el endpoint es /api/dcim/device-roles/, el campo en
+    Device se llama "role".
+    """
+    name = "Sin clasificar"
+    if "generic_role" in caches:
+        return caches["generic_role"]
+
+    results = list(nb.dcim.device_roles.filter(name=name))
+    if results:
+        caches["generic_role"] = results[0]
+        return results[0]
+
+    if dry_run:
+        obj = {"id": 0, "name": name}
+        caches["generic_role"] = obj
+        return obj
+
+    obj = nb.dcim.device_roles.create(name=name, slug=slugify(name), color="9e9e9e")
+    log.info("DeviceRole creado: %s", name)
+    caches["generic_role"] = obj
+    return obj
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Exporta merged_inventory.csv a NetBox 4.x."
+    )
+    parser.add_argument(
+        "csv",
+        type=Path,
+        help="Ruta al CSV fusionado (merged_inventory.csv).",
+    )
+    parser.add_argument(
+        "mapping",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="Ruta a netbox_mapping.yaml (por defecto: junto al script).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Muestra las operaciones sin modificar NetBox.",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Activa logs de nivel DEBUG.",
+    )
+
+    args = parser.parse_args()
+
+    if args.verbose:
+        log.setLevel(logging.DEBUG)
+
+    mapping_path = args.mapping or (
+        Path(__file__).resolve().parent / "netbox_mapping.yaml"
+    )
+
+    # ── Cargar configuración ─────────────────────────────────
+    config = load_config(mapping_path)
+    url, token, verify_ssl = load_env()
+
+    if args.dry_run:
+        log.info("Modo DRY-RUN activado. No se modificará NetBox.")
+
+    # ── Conectar ─────────────────────────────────────────────
+    nb = build_nb_client(url, token, verify_ssl)
+
+    # ── Garantizar custom fields ─────────────────────────────
+    ensure_custom_fields(nb, config, args.dry_run)
+
+    # ── Garantizar taxonomía global ──────────────────────────
+    site         = ensure_site(nb, config, args.dry_run)
+    cluster_type = ensure_cluster_type(nb, config, args.dry_run)
+
+    caches: dict[str, dict] = {
+        "manufacturers": {},
+        "device_types":  {},
+        "platforms":     {},
+        "racks":         {},
+        "clusters":      {},
+    }
+
+    # ── Leer CSV ─────────────────────────────────────────────
+    _headers, rows = read_csv(args.csv)
+
+    machine_type_map: dict[str, str] = config.get("machine_type_map", {})
+    net_cfg: dict = config.get("network", {})
+
+    # ── Contadores ───────────────────────────────────────────
+    counts = {
+        "CREATED":   0,
+        "UPDATED":   0,
+        "UNCHANGED": 0,
+        "SKIPPED":   0,
+        "ERROR":     0,
+    }
+
+    # ── Procesar filas ───────────────────────────────────────
+    for row_num, row in enumerate(rows, start=2):
+        tipo_raw = row.get("Tipo de maquina", "").strip()
+        nb_type  = machine_type_map.get(tipo_raw)
+
+        if nb_type is None:
+            log.warning(
+                "Fila %d SKIP: Tipo de maquina '%s' no está en machine_type_map.",
+                row_num, tipo_raw,
+            )
+            counts["SKIPPED"] += 1
+            continue
+
+        # ── Parsear interfaces ────────────────────────────────
+        interfaces = parse_network_interfaces(row, net_cfg)
+        net_error  = interfaces is None
+        if net_error:
+            machine_name = row.get("Nombre maquina", f"fila {row_num}")
+            log.warning(
+                "Interfaces de '%s' tienen longitudes inconsistentes; "
+                "se omitirán para esta fila.",
+                machine_name,
+            )
+            interfaces = []
+
+        # ── Sincronizar Device o VM ───────────────────────────
+        if nb_type == "device":
+            result = sync_device(
+                nb, row, config, site, cluster_type, caches, args.dry_run
+            )
+        else:
+            result = sync_vm(
+                nb, row, config, site, cluster_type, caches, args.dry_run
+            )
+
+        counts[result] = counts.get(result, 0) + 1
+
+        # ── Sincronizar interfaces ────────────────────────────
+        if result in ("CREATED", "UPDATED") and interfaces and not args.dry_run:
+            machine_name = row.get("Nombre maquina", "").strip()
+            uuid = row.get("UUID", "").strip()
+
+            if nb_type == "device":
+                objs = list(nb.dcim.devices.filter(**{"cf_inventory_uuid": uuid}))
+                if objs:
+                    _sync_interfaces_for_object(
+                        nb, objs[0].id, "device", interfaces, args.dry_run
+                    )
+            else:
+                objs = list(
+                    nb.virtualization.virtual_machines.filter(
+                        **{"cf_inventory_uuid": uuid}
+                    )
+                )
+                if objs:
+                    _sync_interfaces_for_object(
+                        nb, objs[0].id, "virtual_machine", interfaces, args.dry_run
+                    )
+
+        elif result in ("CREATED", "UPDATED") and interfaces and args.dry_run:
+            machine_name = row.get("Nombre maquina", f"fila {row_num}")
+            for iface in interfaces:
+                log.info(
+                    "[DRY-RUN] Sincronizaría interfaz %s en '%s'",
+                    iface["name"], machine_name,
+                )
+
+    # ── Resumen ──────────────────────────────────────────────
+    print()
+    print("=" * 50)
+    print("Resumen de exportación a NetBox")
+    print("=" * 50)
+    print(f"  Total filas procesadas : {len(rows)}")
+    print(f"  Creados                : {counts['CREATED']}")
+    print(f"  Actualizados           : {counts['UPDATED']}")
+    print(f"  Sin cambios            : {counts['UNCHANGED']}")
+    print(f"  Omitidos (SKIP)        : {counts['SKIPPED']}")
+    print(f"  Errores                : {counts['ERROR']}")
+    print("=" * 50)
+
+    if args.dry_run:
+        print("(Modo DRY-RUN: no se realizaron cambios en NetBox)")
+
+    sys.exit(0 if counts["ERROR"] == 0 else 1)
+
+
+if __name__ == "__main__":
+    main()

@@ -34,7 +34,7 @@ termina con código de salida 1.
 
 Uso:
     python3 parse_job_output.py \
-        job_output.txt \
+        job_output.log \
         [parsed_job_output.csv] \
         [header_list.txt] \
 
@@ -115,14 +115,14 @@ def main() -> None:
     if len(sys.argv) < 2:
         usage(
             f"Uso: {sys.argv[0]} "
-            "job_output.txt [parsed_job_output.csv] [header_list.txt]"
+            "job_output.log [parsed_job_output.csv] [header_list.txt]"
         )
 
     if len(sys.argv) > 4:
         usage(
             f"Cantidad de argumentos inválida.\n"
             f"Uso: {sys.argv[0]} "
-            "job_output.txt [parsed_job_output.csv] [header_list.txt]"
+            "job_output.log [parsed_job_output.csv] [header_list.txt]"
         )
 
     input_path = Path(sys.argv[1])
