@@ -155,6 +155,8 @@ This keeps the ETL logic consistent across parsing, master preparation, and fina
 └── .gitignore
 ```
 
+NOTE: `export_to_netbox.py` requires NetBox 4.6+
+
 ## Typical pipeline execution
 
 The expected flow is:

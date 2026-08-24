@@ -26,6 +26,80 @@ cluster_type:
   name: "Hipervisor"
   slug: "hipervisor"
 
+# ── Roles de dispositivo ─────────────────────────────────────
+# Lista canónica de roles que el script garantiza que existen
+# en NetBox antes de sincronizar datos (/api/dcim/device-roles/).
+# Si un valor de 'Rol' del CSV no está en esta lista, la fila
+# se omite con advertencia.
+# Los colores son valores hexadecimales sin '#' (estilo NetBox).
+device_roles:
+  - name: "Hypervisor"
+    slug: "hypervisor"
+    color: "9c27b0"
+  - name: "DNS Server"
+    slug: "dns-server"
+    color: "2196f3"
+  - name: "DHCP Server"
+    slug: "dhcp-server"
+    color: "2196f3"
+  - name: "Mail Server"
+    slug: "mail-server"
+    color: "009688"
+  - name: "Database Server"
+    slug: "database-server"
+    color: "f44336"
+  - name: "Web Server"
+    slug: "web-server"
+    color: "4caf50"
+  - name: "Application Server"
+    slug: "application-server"
+    color: "8bc34a"
+  - name: "Storage Server"
+    slug: "storage-server"
+    color: "ff9800"
+  - name: "Backup Server"
+    slug: "backup-server"
+    color: "795548"
+  - name: "Monitoring Server"
+    slug: "monitoring-server"
+    color: "00bcd4"
+  - name: "Management Server"
+    slug: "management-server"
+    color: "607d8b"
+  - name: "Authentication Server"
+    slug: "authentication-server"
+    color: "673ab7"
+  - name: "Proxy Server"
+    slug: "proxy-server"
+    color: "ff5722"
+  - name: "Repository Server"
+    slug: "repository-server"
+    color: "cddc39"
+  - name: "Logging Server"
+    slug: "logging-server"
+    color: "9e9e9e"
+  - name: "VPN Server"
+    slug: "vpn-server"
+    color: "3f51b5"
+  - name: "File Server"
+    slug: "file-server"
+    color: "ffeb3b"
+  - name: "Tape Drive"
+    slug: "tape-drive"
+    color: "795548"
+  - name: "Chassis"
+    slug: "chassis"
+    color: "607d8b"
+  - name: "Container Host"
+    slug: "container-host"
+    color: "00bcd4"
+  - name: "Network/Firewall Device"
+    slug: "network-firewall-device"
+    color: "f44336"
+  - name: "Others"
+    slug: "others"
+    color: "9e9e9e"
+
 # ── Tipo de máquina ──────────────────────────────────────────
 # Mapeo de 'Tipo de maquina' del CSV al modelo NetBox destino.
 # Valores no listados aquí: la fila se omite con advertencia.
@@ -43,7 +117,6 @@ status_map:
   "Desarrollo":    "staged"
   "Certificación": "staged"
   "Réplica":       "active"
-  "Mantenimiento": "maintenance"
   "Baja":          "decommissioning"
 
 # ── Estado operativo → custom field ──────────────────────────
@@ -166,120 +239,124 @@ custom_fields:
 device_fields:
   - source: "Nombre maquina"
     target: "name"
-    skip_if_empty: true
+    skip_if_empty: true      # opcional en NetBox; puede ser unnamed
+
+  - source: "Rol"
+    target: "role"           # resuelto o creado por nombre (ensure_device_role)
+    skip_if_empty: false     # OBLIGATORIO en NetBox 4.x para Device
 
   - source: "Serial Number"
     target: "serial"
-    skip_if_empty: false
+    skip_if_empty: true      # opcional
 
   - source: "Nro Inventario"
     target: "asset_tag"
-    skip_if_empty: false
+    skip_if_empty: true      # opcional
 
   - source: "Rack"
-    target: "rack"           # resuelto a ID por el script
-    skip_if_empty: false
+    target: "rack"
+    skip_if_empty: true      # opcional
 
   - source: "Posicion (U)"
     target: "position"
-    skip_if_empty: false
+    skip_if_empty: true      # opcional (solo aplica si hay rack)
     cast: "int"
 
   - source: "Altura (U)"
-    target: "_u_height"      # se usa solo para crear/actualizar DeviceType
-    skip_if_empty: false
+    target: "_u_height"
+    skip_if_empty: true      # opcional; DeviceType se crea con u_height=1 si falta
     cast: "int"
 
   - source: "SO Host"
-    target: "platform"       # resuelto o creado por nombre
-    skip_if_empty: false
+    target: "platform"
+    skip_if_empty: true      # opcional
 
   # Descripción: concatenación de 'Descripcion' + '. ' + 'Notas'.
   # La lógica de concatenación está en el script.
   - source: ["Descripcion", "Notas"]
     target: "description"
     transform: "concat_dot"
-    skip_if_empty: false
+    skip_if_empty: true      # opcional
 
 # ── Custom fields de Device ───────────────────────────────────
 device_custom_fields:
   - source: "UUID"
     target: "inventory_uuid"
-    skip_if_empty: false     # clave de idempotencia
+    skip_if_empty: false     # clave de idempotencia; sin UUID la fila se salta
 
   - source: "Service Tag"
     target: "service_tag"
-    skip_if_empty: false
+    skip_if_empty: true
 
   - source: "CPU Modelo"
     target: "cpu_model"
-    skip_if_empty: false
+    skip_if_empty: true
 
   - source: "Cores"
     target: "cpu_cores"
-    skip_if_empty: false
+    skip_if_empty: true
     cast: "int"
 
   - source: "Threads"
     target: "cpu_threads"
-    skip_if_empty: false
+    skip_if_empty: true
     cast: "int"
 
   - source: "Sockets"
     target: "cpu_sockets"
-    skip_if_empty: false
+    skip_if_empty: true
     cast: "int"
 
   - source: "Discos"
     target: "disks"
-    skip_if_empty: false
+    skip_if_empty: true
 
   - source: "RAID"
     target: "raid"
-    skip_if_empty: false
+    skip_if_empty: true
 
   - source: "Version BIOS"
     target: "bios_version"
-    skip_if_empty: false
+    skip_if_empty: true
 
   - source: "Fecha BIOS"
     target: "bios_date"
-    skip_if_empty: false
+    skip_if_empty: true
 
   - source: "Estado operativo"
     target: "operational_status"
-    skip_if_empty: false
+    skip_if_empty: true
     map: "operational_status_map"
 
   - source: "Nodo Rundeck"
     target: "rundeck_node"
-    skip_if_empty: false
-    cast: "bool_si_no"       # "si" → True, "no" → False
+    skip_if_empty: true
+    cast: "bool_si_no"
 
 # ── Campos nativos de VirtualMachine ─────────────────────────
 vm_fields:
   - source: "Nombre maquina"
     target: "name"
-    skip_if_empty: true
+    skip_if_empty: false     # OBLIGATORIO en NetBox para VirtualMachine
 
   - source: "SO Host"
     target: "platform"
-    skip_if_empty: false
+    skip_if_empty: true
 
   - source: "RAM (GB)"
     target: "memory"
-    skip_if_empty: false
-    cast: "int_gb_to_mb"     # CSV en GB; NetBox espera MB (entero)
+    skip_if_empty: true
+    cast: "int_gb_to_mb"    # CSV en GB; NetBox espera MB (entero)
 
   - source: "Capacidad visible (GB)"
     target: "disk"
-    skip_if_empty: false
+    skip_if_empty: true
     cast: "int"
 
   - source: ["Descripcion", "Notas"]
     target: "description"
     transform: "concat_dot"
-    skip_if_empty: false
+    skip_if_empty: true
 
 # ── Custom fields de VirtualMachine ──────────────────────────
 vm_custom_fields:
@@ -289,25 +366,25 @@ vm_custom_fields:
 
   - source: "CPU Modelo"
     target: "cpu_model"
-    skip_if_empty: false
+    skip_if_empty: true
 
   - source: "Cores"
     target: "cpu_cores"
-    skip_if_empty: false
+    skip_if_empty: true
     cast: "int"
 
   - source: "Discos"
     target: "disks"
-    skip_if_empty: false
+    skip_if_empty: true
 
   - source: "Estado operativo"
     target: "operational_status"
-    skip_if_empty: false
+    skip_if_empty: true
     map: "operational_status_map"
 
   - source: "Nodo Rundeck"
     target: "rundeck_node"
-    skip_if_empty: false
+    skip_if_empty: true
     cast: "bool_si_no"
 
 # ── Interfaces de red ─────────────────────────────────────────

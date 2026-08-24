@@ -438,22 +438,48 @@ def ensure_custom_fields(
     Garantiza que todos los custom fields del YAML existen en NetBox.
     Si no existen, los crea vía POST a /api/extras/custom-fields/.
 
-    NOTA NetBox 4.x:
-    - El campo se llama "object_types" (plural).
-    - Los tipos se identifican por su app_label.model en
-      /api/core/object-types/ (desde NetBox 4.5;
-      /api/extras/object-types/ fue eliminado).
+    NetBox 4.5+:
+    - Los Object Types se consultan mediante /api/core/object-types/.
+    - El endpoint /api/extras/object-types/ fue eliminado en NetBox 4.5.
+    - Los tipos se identifican mediante app_label y model.
     """
+    # Resolver el endpoint de Object Types.
+    try:
+        object_types_endpoint = nb.core.object_types
+    except AttributeError:
+        log.error("La instancia de pynetbox no expone 'core.object_types'.\n"
+            "Este script requiere NetBox 4.5+ y está diseñado "
+            "para NetBox 4.6.5+, donde el endpoint de Object Types "
+            "es '/api/core/object-types/'.")
+        sys.exit(1)
+
     # Construir mapa nombre → ID de object_type.
     object_type_cache: dict[str, int] = {}
 
     def get_object_type_id(app_model: str) -> int | None:
         if app_model in object_type_cache:
             return object_type_cache[app_model]
+        if "." not in app_model:
+            log.warning(
+                "Formato de Object Type inválido: %s. "
+                "Se esperaba 'app_label.model'.",
+                app_model
+            )
+            return None
         app_label, model = app_model.split(".", 1)
-        results = list(
-            nb.core.object_types.filter(app_label=app_label, model=model)
-        )
+        try:
+            results = list(
+                object_types_endpoint.filter(app_label=app_label, model=model)
+            )
+        except Exception as exc:
+            # TODO: Distinguir correctamente los tipos de errores
+            log.error(
+                "Error consultando Object Type '%s' "
+                "en '/api/core/object-types/': %s",
+                app_model,
+                exc,
+            )
+            return None
         if not results:
             log.warning("object_type no encontrado en NetBox: %s", app_model)
             return None
@@ -461,8 +487,10 @@ def ensure_custom_fields(
         object_type_cache[app_model] = ot_id
         return ot_id
 
+    # Obtener Custom Fields existentes.
     existing_cfs = {cf.name: cf for cf in nb.extras.custom_fields.all()}
 
+    # Garantizar existencia de cada Custom Field definido en el YAML
     for cf_def in cfg.get("custom_fields", []):
         name = cf_def["name"]
         if name in existing_cfs:
@@ -748,13 +776,28 @@ def sync_device(
         log.warning("SKIP (UUID vacío): %s", machine_name)
         return "SKIPPED"
 
-    device_fields_cfg = config.get("device_fields", [])
-    device_cf_cfg     = config.get("device_custom_fields", [])
+    device_fields_cfg: list[dict] = config.get("device_fields", [])
+    device_cf_cfg: list[dict]     = config.get("device_custom_fields", [])
 
     payload, _ = build_payload(row, device_fields_cfg, device_cf_cfg, config)
 
     # ── Resolución de objetos relacionados ──────────────────
-    # Manufacturer y DeviceType.
+    # Role (obligatorio en NetBox 4.x).
+    rol_csv = row.get("Rol", "").strip()
+    role_obj = resolve_device_role(rol_csv, caches)
+    if role_obj is None:
+        log.error(
+            "ERROR (%s): no existe el DeviceRole 'Others' en la configuración.",
+            machine_name,
+        )
+        return "ERROR"
+    if not is_empty(rol_csv) and rol_csv.lower() != "others" and rol_csv.lower() not in caches["device_roles"]:
+        log.warning(
+            "Rol '%s' no reconocido para %s. Se utilizará 'Others'.",
+            rol_csv, machine_name,
+        )
+
+    # Manufacturer y DeviceType (obligatorios para Device).
     marca  = row.get("Marca", "").strip()
     modelo = row.get("Modelo", "").strip()
 
@@ -768,31 +811,24 @@ def sync_device(
         nb, manufacturer, modelo, u_height, caches["device_types"], dry_run
     )
 
-    # Platform.
+    # Platform (opcional).
     platform_name = row.get("SO Host", "").strip()
     if not is_empty(platform_name):
         platform = ensure_platform(nb, platform_name, caches["platforms"], dry_run)
         payload["platform"] = getattr(platform, "id", platform.get("id", 0))
 
-    # Rack.
+    # Rack (opcional).
     rack_name = row.get("Rack", "").strip()
     if not is_empty(rack_name):
         rack = ensure_rack(nb, rack_name, site, caches["racks"], dry_run)
         payload["rack"] = getattr(rack, "id", rack.get("id", 0))
 
-    # DeviceType y Site son siempre obligatorios en NetBox.
+    # Campos obligatorios para POST.
     payload["device_type"] = getattr(device_type, "id", device_type.get("id", 0))
     payload["site"]        = getattr(site, "id", site.get("id", 0))
+    payload["role"]        = getattr(role_obj, "id", role_obj.get("id", 0))
 
-    # Role: NetBox 4.x usa "role" (no "device_role").
-    # Dado que el Descripcion del CSV no mapea a roles predefinidos de NetBox,
-    # se omite aquí y se incluye en la descripción (ver concat_dot).
-    # NetBox requiere el campo role → se usa un rol genérico "Sin clasificar"
-    # que se garantiza que existe.
-    role = _ensure_generic_role(nb, caches, dry_run)
-    payload["role"] = getattr(role, "id", role.get("id", 0))
-
-    # Estado.
+    # Estado (opcional).
     estado = row.get("Estado", "").strip()
     if not is_empty(estado):
         status_mapped = config.get("status_map", {}).get(estado)
@@ -869,8 +905,8 @@ def sync_vm(
         log.warning("SKIP (UUID vacío): %s", machine_name)
         return "SKIPPED"
 
-    vm_fields_cfg = config.get("vm_fields", [])
-    vm_cf_cfg     = config.get("vm_custom_fields", [])
+    vm_fields_cfg: list[dict] = config.get("vm_fields", [])
+    vm_cf_cfg: list[dict]     = config.get("vm_custom_fields", [])
 
     payload, _ = build_payload(row, vm_fields_cfg, vm_cf_cfg, config)
 
@@ -951,33 +987,58 @@ def sync_vm(
 
 
 # ============================================================
-# ROL GENÉRICO
+# ROLES DE DISPOSITIVO
 # ============================================================
 
-def _ensure_generic_role(nb: pynetbox.api, caches: dict, dry_run: bool) -> Any:
+def ensure_all_device_roles(
+    nb: pynetbox.api,
+    cfg: dict,
+    caches: dict,
+    dry_run: bool,
+) -> None:
     """
-    Garantiza que existe un DeviceRole genérico "Sin clasificar" en NetBox.
-    NetBox 4.x: el endpoint es /api/dcim/device-roles/, el campo en
-    Device se llama "role".
+    Garantiza que todos los device roles definidos en el YAML
+    existen en NetBox (/api/dcim/device-roles/).
+    Puebla caches['device_roles'] con {nombre_lower: objeto}.
     """
-    name = "Sin clasificar"
-    if "generic_role" in caches:
-        return caches["generic_role"]
+    roles_cfg: list[dict] = cfg.get("device_roles", [])
+    for role_def in roles_cfg:
+        name = role_def["name"]
+        slug = role_def.get("slug") or slugify(name)
+        color = role_def.get("color", "9e9e9e")
+        key = name.lower()
 
-    results = list(nb.dcim.device_roles.filter(name=name))
-    if results:
-        caches["generic_role"] = results[0]
-        return results[0]
+        if key in caches["device_roles"]:
+            continue
 
-    if dry_run:
-        obj = {"id": 0, "name": name}
-        caches["generic_role"] = obj
-        return obj
+        results = list(nb.dcim.device_roles.filter(name=name))
+        if results:
+            caches["device_roles"][key] = results[0]
+            continue
 
-    obj = nb.dcim.device_roles.create(name=name, slug=slugify(name), color="9e9e9e")
-    log.info("DeviceRole creado: %s", name)
-    caches["generic_role"] = obj
-    return obj
+        if dry_run:
+            log.info("[DRY-RUN] Crearía DeviceRole: %s", name)
+            caches["device_roles"][key] = {"id": 0, "name": name}
+            continue
+
+        obj = nb.dcim.device_roles.create(name=name, slug=slug, color=color)
+        log.info("DeviceRole creado: %s", name)
+        caches["device_roles"][key] = obj
+
+
+def resolve_device_role(
+    role_name: str,
+    caches: dict,
+) -> Any | None:
+    """
+    Busca un DeviceRole por nombre (insensible a mayúsculas).
+    Si el rol no existe o está vacío, utiliza "Others" como fallback.
+    """
+    roles = caches["device_roles"]
+    normalized = role_name.strip().lower()
+    if normalized in roles:
+        return roles[normalized]
+    return roles.get("others")
 
 
 # ============================================================
@@ -1043,7 +1104,10 @@ def main() -> None:
         "platforms":     {},
         "racks":         {},
         "clusters":      {},
+        "device_roles":  {},
     }
+
+    ensure_all_device_roles(nb, config, caches, args.dry_run)
 
     # ── Leer CSV ─────────────────────────────────────────────
     _headers, rows = read_csv(args.csv)

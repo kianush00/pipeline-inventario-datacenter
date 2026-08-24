@@ -403,6 +403,8 @@ normalize_os_name() {
             echo "RHEL Workstation" ;;
         "Rocky Linux")
             echo "Rocky Linux" ;;
+        "Kali GNU/Linux")
+            echo "Kali Linux" ;;
         "AlmaLinux")
             echo "AlmaLinux" ;;
         "Oracle Linux Server"|"Oracle Linux")
