@@ -772,13 +772,15 @@ def sync_device(
     """
     machine_name = row.get("Nombre maquina", "").strip()
     uuid = row.get("UUID", "").strip()
-    if is_empty(uuid):
-        log.warning("SKIP (UUID vacío): %s", machine_name)
+    machine_type = row.get("Tipo de maquina", "").strip()
+    if is_empty(machine_name):
+        log.warning("SKIP (Nombre maquina vacío).")
         return "SKIPPED"
-
+    if is_empty(machine_type):
+        log.warning("SKIP (%s): campo 'Tipo de maquina' vacío.", machine_name)
+        return "SKIPPED"
     device_fields_cfg: list[dict] = config.get("device_fields", [])
-    device_cf_cfg: list[dict]     = config.get("device_custom_fields", [])
-
+    device_cf_cfg: list[dict] = config.get("device_custom_fields", [])
     payload, _ = build_payload(row, device_fields_cfg, device_cf_cfg, config)
 
     # ── Resolución de objetos relacionados ──────────────────
@@ -786,19 +788,26 @@ def sync_device(
     rol_csv = row.get("Rol", "").strip()
     role_obj = resolve_device_role(rol_csv, caches)
     if role_obj is None:
-        log.error(
-            "ERROR (%s): no existe el DeviceRole 'Others' en la configuración.",
-            machine_name,
-        )
-        return "ERROR"
-    if not is_empty(rol_csv) and rol_csv.lower() != "others" and rol_csv.lower() not in caches["device_roles"]:
-        log.warning(
-            "Rol '%s' no reconocido para %s. Se utilizará 'Others'.",
-            rol_csv, machine_name,
-        )
+        role_obj = resolve_device_role("Others", caches)
+        if role_obj is None:
+            log.error(
+                "ERROR (%s): no existe el DeviceRole 'Others' en la configuración.",
+                machine_name,
+            )
+            return "ERROR"
+        if not is_empty(rol_csv):
+            log.warning(
+                "Rol '%s' no reconocido para %s. Se utilizará 'Others'.",
+                rol_csv, machine_name,
+            )
+        else:
+            log.warning(
+                "Rol vacío para %s. Se utilizará 'Others'.",
+                machine_name,
+            )
 
     # Manufacturer y DeviceType (obligatorios para Device).
-    marca  = row.get("Marca", "").strip()
+    marca = row.get("Marca", "").strip()
     modelo = row.get("Modelo", "").strip()
 
     if is_empty(marca) or is_empty(modelo):
@@ -825,15 +834,13 @@ def sync_device(
 
     # Campos obligatorios para POST.
     payload["device_type"] = getattr(device_type, "id", device_type.get("id", 0))
-    payload["site"]        = getattr(site, "id", site.get("id", 0))
-    payload["role"]        = getattr(role_obj, "id", role_obj.get("id", 0))
+    payload["site"] = getattr(site, "id", site.get("id", 0))
+    payload["role"] = getattr(role_obj, "id", role_obj.get("id", 0))
 
     # Estado (opcional).
     estado = row.get("Estado", "").strip()
-    if not is_empty(estado):
-        status_mapped = config.get("status_map", {}).get(estado)
-        if status_mapped:
-            payload["status"] = status_mapped
+    status_mapped = config.get("status_map", {}).get(estado)
+    payload["status"] = status_mapped or "inventory"
 
     # Cluster para hipervisores.
     tipo = row.get("Tipo de maquina", "").strip()
@@ -850,36 +857,78 @@ def sync_device(
 
     # ── GET o CREATE/UPDATE ──────────────────────────────────
     try:
-        existing = list(nb.dcim.devices.filter(cf_inventory_uuid=uuid))
+        existing = []
+        found_by_uuid = False
+        found_by_name = False
+
+        if not is_empty(uuid):
+            existing = list(nb.dcim.devices.filter(cf_inventory_uuid=uuid))
+            found_by_uuid = bool(existing)
+
+        if not existing:
+            existing_by_name = list(nb.dcim.devices.filter(name=machine_name))
+            found_by_name = bool(existing_by_name)
+            if found_by_name:
+                existing = existing_by_name
     except Exception as exc:
-        # TODO: Distinguir correctamente los tipos de errores
-        log.error("ERROR buscando device UUID=%s: %s", uuid, exc)
+        log.error(
+            "ERROR buscando device '%s' (UUID=%s): %s",
+            machine_name,
+            uuid or "N/A",
+            exc,
+        )
         return "ERROR"
 
+    if not is_empty(uuid) and not found_by_uuid and found_by_name:
+        log.warning(
+            "SKIP device '%s': UUID=%s no encontrado en NetBox, "
+            "pero ya existe un device con el mismo nombre.",
+            machine_name,
+            uuid,
+        )
+        return "SKIPPED"
     if dry_run:
-        action = "Actualizaría" if existing else "Crearía"
-        log.info("[DRY-RUN] %s device: %s (UUID=%s)", action, machine_name, uuid)
-        return "CREATED" if not existing else "UPDATED"
-
+        if existing:
+            if is_empty(uuid):
+                log.info(
+                    "[DRY-RUN] Actualizaría device: %s (encontrado por nombre; UUID vacío)",
+                    machine_name,
+                )
+            else:
+                log.info(
+                    "[DRY-RUN] Actualizaría device: %s (UUID=%s)",
+                    machine_name,
+                    uuid,
+                )
+            return "UPDATED"
+        log.info(
+            "[DRY-RUN] Crearía device: %s (UUID=%s)",
+            machine_name,
+            uuid or "N/A",
+        )
+        return "CREATED"
     if not existing:
         try:
             nb.dcim.devices.create(**payload)
             log.info("CREATED device: %s", machine_name)
             return "CREATED"
         except Exception as exc:
-            # TODO: Distinguir correctamente los tipos de errores
             log.error("ERROR creando device %s: %s", machine_name, exc)
             return "ERROR"
-    else:
-        dev = existing[0]
-        try:
-            dev.update(payload)
-            log.info("UPDATED device: %s", machine_name)
-            return "UPDATED"
-        except Exception as exc:
-            # TODO: Distinguir correctamente los tipos de errores
-            log.error("ERROR actualizando device %s: %s", machine_name, exc)
-            return "ERROR"
+    dev = existing[0]
+    if is_empty(uuid):
+        log.warning(
+            "SKIP actualización de device '%s': UUID vacío.",
+            machine_name,
+        )
+        return "SKIPPED"
+    try:
+        dev.update(payload)
+        log.info("UPDATED device: %s", machine_name)
+        return "UPDATED"
+    except Exception as exc:
+        log.error("ERROR actualizando device %s: %s", machine_name, exc)
+        return "ERROR"
 
 
 # ============================================================
@@ -901,13 +950,16 @@ def sync_vm(
     """
     machine_name = row.get("Nombre maquina", "").strip()
     uuid = row.get("UUID", "").strip()
-    if is_empty(uuid):
-        log.warning("SKIP (UUID vacío): %s", machine_name)
+    machine_type = row.get("Tipo de maquina", "").strip()
+    if is_empty(machine_name):
+        log.warning("SKIP (Nombre maquina vacío).")
+        return "SKIPPED"
+    if is_empty(machine_type):
+        log.warning("SKIP (%s): campo 'Tipo de maquina' vacío.", machine_name)
         return "SKIPPED"
 
     vm_fields_cfg: list[dict] = config.get("vm_fields", [])
-    vm_cf_cfg: list[dict]     = config.get("vm_custom_fields", [])
-
+    vm_cf_cfg: list[dict] = config.get("vm_custom_fields", [])
     payload, _ = build_payload(row, vm_fields_cfg, vm_cf_cfg, config)
 
     # Platform.
@@ -926,23 +978,25 @@ def sync_vm(
         nb, host_name, cluster_type, site, caches["clusters"], dry_run
     )
     payload["cluster"] = getattr(cluster, "id", cluster.get("id", 0))
-    payload["site"]    = getattr(site, "id", site.get("id", 0))
+    payload["site"] = getattr(site, "id", site.get("id", 0))
 
     # Device del hipervisor host (opcional pero recomendado en NetBox 4.x).
     try:
         host_devices = list(nb.dcim.devices.filter(name=host_name))
         if host_devices:
             payload["device"] = host_devices[0].id
-    except Exception:
-        #TODO: Distinguir correctamente los tipos de errores
-        pass
+    except Exception as exc:
+        log.warning(
+            "No se pudo resolver el Device host '%s' para VM '%s': %s",
+            host_name,
+            machine_name,
+            exc,
+        )
 
     # Estado.
     estado = row.get("Estado", "").strip()
-    if not is_empty(estado):
-        status_mapped = config.get("status_map", {}).get(estado)
-        if status_mapped:
-            payload["status"] = status_mapped
+    status_mapped = config.get("status_map", {}).get(estado)
+    payload["status"] = status_mapped or "staged"
 
     # vcpus (Cores).
     cores = row.get("Cores", "").strip()
@@ -952,38 +1006,84 @@ def sync_vm(
 
     # ── GET o CREATE/UPDATE ──────────────────────────────────
     try:
-        existing = list(
-            nb.virtualization.virtual_machines.filter(cf_inventory_uuid=uuid)
-        )
+        existing = []
+        found_by_uuid = False
+        found_by_name = False
+
+        if not is_empty(uuid):
+            existing = list(
+                nb.virtualization.virtual_machines.filter(
+                    cf_inventory_uuid=uuid
+                )
+            )
+            found_by_uuid = bool(existing)
+
+        if not existing:
+            existing_by_name = list(
+                nb.virtualization.virtual_machines.filter(name=machine_name)
+            )
+            found_by_name = bool(existing_by_name)
+            if found_by_name:
+                existing = existing_by_name
     except Exception as exc:
-        # TODO: Distinguir correctamente los tipos de errores
-        log.error("ERROR buscando VM UUID=%s: %s", uuid, exc)
+        log.error(
+            "ERROR buscando VM '%s' (UUID=%s): %s",
+            machine_name,
+            uuid or "N/A",
+            exc,
+        )
         return "ERROR"
 
+    if not is_empty(uuid) and not found_by_uuid and found_by_name:
+        log.warning(
+            "SKIP VM '%s': UUID=%s no encontrado en NetBox, "
+            "pero ya existe una VM con el mismo nombre.",
+            machine_name,
+            uuid,
+        )
+        return "SKIPPED"
     if dry_run:
-        action = "Actualizaría" if existing else "Crearía"
-        log.info("[DRY-RUN] %s VM: %s (UUID=%s)", action, machine_name, uuid)
-        return "CREATED" if not existing else "UPDATED"
-
+        if existing:
+            if is_empty(uuid):
+                log.info(
+                    "[DRY-RUN] Actualizaría VM: %s (encontrada por nombre; UUID vacío)",
+                    machine_name,
+                )
+            else:
+                log.info(
+                    "[DRY-RUN] Actualizaría VM: %s (UUID=%s)",
+                    machine_name,
+                    uuid,
+                )
+            return "UPDATED"
+        log.info(
+            "[DRY-RUN] Crearía VM: %s (UUID=%s)",
+            machine_name,
+            uuid or "N/A",
+        )
+        return "CREATED"
     if not existing:
         try:
             nb.virtualization.virtual_machines.create(**payload)
             log.info("CREATED VM: %s", machine_name)
             return "CREATED"
         except Exception as exc:
-            # TODO: Distinguir correctamente los tipos de errores
             log.error("ERROR creando VM %s: %s", machine_name, exc)
             return "ERROR"
-    else:
-        vm = existing[0]
-        try:
-            vm.update(payload)
-            log.info("UPDATED VM: %s", machine_name)
-            return "UPDATED"
-        except Exception as exc:
-            # TODO: Distinguir correctamente los tipos de errores
-            log.error("ERROR actualizando VM %s: %s", machine_name, exc)
-            return "ERROR"
+    vm = existing[0]
+    if is_empty(uuid):
+        log.warning(
+            "SKIP actualización de VM '%s': UUID vacío.",
+            machine_name,
+        )
+        return "SKIPPED"
+    try:
+        vm.update(payload)
+        log.info("UPDATED VM: %s", machine_name)
+        return "UPDATED"
+    except Exception as exc:
+        log.error("ERROR actualizando VM %s: %s", machine_name, exc)
+        return "ERROR"
 
 
 # ============================================================
