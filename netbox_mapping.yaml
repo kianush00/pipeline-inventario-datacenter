@@ -144,6 +144,12 @@ environment:
       - value: "development"
         label: "Desarrollo"
 
+environment_map:
+  "Producción": "production"
+  "Certificación": "certification"
+  "Desarrollo": "development"
+
+
 # ── Tipo de máquina → modelo NetBox ──────────────────────────
 # Determina si la fila se exporta como Device o VirtualMachine.
 machine_type_map:
@@ -333,6 +339,7 @@ device_custom_fields:
   - source: "Entorno"
     target: "environment"
     skip_if_empty: true
+    map: "environment_map"
 
   - source: "Service Tag"
     target: "service_tag"
@@ -416,6 +423,7 @@ vm_custom_fields:
   - source: "Entorno"
     target: "environment"
     skip_if_empty: true
+    map: "environment_map"
 
   - source: "CPU Modelo"
     target: "cpu_model"
