@@ -1406,8 +1406,7 @@ def main() -> None:
 
         # ── Parsear interfaces ────────────────────────────────
         interfaces = parse_network_interfaces(row, net_cfg)
-        net_error  = interfaces is None
-        if net_error:
+        if interfaces is None:
             machine_name = row.get("Nombre maquina", f"fila {row_num}")
             log.warning(
                 "Interfaces de '%s' tienen longitudes inconsistentes; "
@@ -1428,33 +1427,85 @@ def main() -> None:
 
         counts[result] = counts.get(result, 0) + 1
 
-        # ── Sincronizar interfaces ────────────────────────────
-        if result in ("CREATED", "UPDATED") and interfaces and not args.dry_run:
-            machine_name = row.get("Nombre maquina", "").strip()
-            uuid = row.get("UUID", "").strip()
+        if result not in ("CREATED", "UPDATED") or not interfaces:
+            continue
 
-            if nb_type == "device":
-                objs = list(nb.dcim.devices.filter(cf_inventory_uuid=uuid))
-                if objs:
-                    _sync_interfaces_for_object(
-                        nb, objs[0].id, "device", interfaces, args.dry_run
-                    )
-            else:
-                objs = list(
-                    nb.virtualization.virtual_machines.filter(cf_inventory_uuid=uuid)
-                )
-                if objs:
-                    _sync_interfaces_for_object(
-                        nb, objs[0].id, "virtual_machine", interfaces, args.dry_run
-                    )
-
-        elif result in ("CREATED", "UPDATED") and interfaces and args.dry_run:
+        if args.dry_run:
             machine_name = row.get("Nombre maquina", f"fila {row_num}")
             for iface in interfaces:
                 log.info(
                     "[DRY-RUN] Sincronizaría interfaz %s en '%s'",
-                    iface["name"], machine_name,
+                    iface["name"],
+                    machine_name,
                 )
+            continue
+
+        # ── Resolver nuevamente el objeto sincronizado ────────
+        #
+        # El UUID puede ser vacío, por lo que no se puede depender
+        # exclusivamente de cf_inventory_uuid. Se utiliza la misma
+        # política de identificación: UUID cuando existe, nombre
+        # como fallback.
+        machine_name = row.get("Nombre maquina", "").strip()
+        uuid = row.get("UUID", "").strip()
+
+        try:
+            if nb_type == "device":
+                endpoint = nb.dcim.devices
+                object_type = "device"
+            else:
+                endpoint = nb.virtualization.virtual_machines
+                object_type = "virtual_machine"
+
+            existing, found_by_uuid, found_by_name = find_existing_object(
+                uuid,
+                machine_name,
+                endpoint,
+            )
+        except Exception as exc:
+            log.error(
+                "ERROR buscando objeto NetBox para sincronizar interfaces "
+                "de '%s' (UUID=%s): %s",
+                machine_name,
+                uuid or "N/A",
+                exc,
+            )
+            counts["ERROR"] += 1
+            continue
+
+        # ----------------------------------------------------
+        # Si el UUID está informado y no coincide con un objeto
+        # existente, pero el nombre sí existe, se considera un
+        # conflicto de identidad y las interfaces no se fusionan.
+        # ----------------------------------------------------
+        if validate_identity_conflict(
+            object_type,
+            machine_name,
+            uuid,
+            found_by_uuid,
+            found_by_name,
+        ):
+            log.warning(
+                "SKIP interfaces de '%s': conflicto de identidad.",
+                machine_name,
+            )
+            continue
+
+        if not existing:
+            log.warning(
+                "SKIP interfaces de '%s': no se encontró el objeto "
+                "sincronizado en NetBox.",
+                machine_name,
+            )
+            continue
+
+        _sync_interfaces_for_object(
+            nb,
+            existing[0].id,
+            object_type,
+            interfaces,
+            args.dry_run,
+        )
 
     # ── Resumen ──────────────────────────────────────────────
     print()
