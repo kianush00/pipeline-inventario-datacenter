@@ -1279,24 +1279,17 @@ def sync_device(
     rol_csv: str = row.get(INVENTORY_COLUMNS.get("role", ""), "").strip()
     role_obj = resolve_device_role(rol_csv, caches)
     if role_obj is None:
-        role_obj = resolve_device_role("Others", caches)
-        if role_obj is None:
-            log.error(
-                "ERROR (%s): no existe el DeviceRole 'Others' en la configuración.",
-                machine_name,
-            )
-            return "ERROR"
-        if not is_empty(rol_csv):
-            log.warning(
-                "Rol '%s' no reconocido para %s. Se utilizará 'Others'.",
-                rol_csv,
-                machine_name,
-            )
-        else:
-            log.warning(
-                "Rol vacío para %s. Se utilizará 'Others'.",
-                machine_name,
-            )
+        log.error(
+            "ERROR (%s): no existe el DeviceRole 'Others' en la configuración.",
+            machine_name,
+        )
+        return "ERROR"
+
+    payload["role"] = getattr(
+        role_obj,
+        "id",
+        role_obj.get("id", 0),
+    )
 
     # Manufacturer y DeviceType.
     marca: str = row.get(INVENTORY_COLUMNS.get("manufacturer", ""), "").strip()
@@ -1316,6 +1309,8 @@ def sync_device(
         "_u_height",
         config,
     ) or 1
+
+    # Resolver DeviceType.
     device_type = ensure_device_type(
         endpoints,
         manufacturer,
@@ -1323,6 +1318,11 @@ def sync_device(
         u_height,
         caches["device_types"],
         dry_run,
+    )
+    payload["device_type"] = getattr(
+        device_type,
+        "id",
+        device_type.get("id", 0),
     )
 
     # Platform.
@@ -1345,20 +1345,10 @@ def sync_device(
         )
 
     # Campos obligatorios.
-    payload["device_type"] = getattr(
-        device_type,
-        "id",
-        device_type.get("id", 0),
-    )
     payload["site"] = getattr(
         site,
         "id",
         site.get("id", 0),
-    )
-    payload["role"] = getattr(
-        role_obj,
-        "id",
-        role_obj.get("id", 0),
     )
     payload["status"] = resolve_netbox_status(
         row,
@@ -1451,6 +1441,22 @@ def sync_vm(
         vm_fields_cfg,
         vm_cf_cfg,
         config,
+    )
+
+    # Role.
+    rol_csv: str = row.get(INVENTORY_COLUMNS.get("role", ""), "").strip()
+    role_obj = resolve_device_role(rol_csv, caches)
+    if role_obj is None:
+        log.error(
+            "ERROR (%s): no existe el DeviceRole 'Others' en la configuración.",
+            machine_name,
+        )
+        return "ERROR"
+
+    payload["role"] = getattr(
+        role_obj,
+        "id",
+        role_obj.get("id", 0),
     )
 
     # Platform.
@@ -1559,9 +1565,10 @@ def ensure_all_device_roles(
     """
     Garantiza que todos los device roles definidos en el YAML
     existen en NetBox (/api/dcim/device-roles/).
+    Todos los roles se habilitan para su uso en Virtual Machines.
     Puebla caches['device_roles'] con {nombre_lower: objeto}.
     """
-    roles_cfg: list[dict[str, str]] = cfg.get("device_roles", [])
+    roles_cfg: list[dict] = cfg.get("device_roles", [])
     for role_def in roles_cfg:
         name = role_def["name"]
         slug = role_def.get("slug") or slugify(name)
@@ -1573,15 +1580,54 @@ def ensure_all_device_roles(
 
         results = list(endpoints.device_roles.filter(name=name))
         if results:
-            caches["device_roles"][key] = results[0]
+            role_obj = results[0]
+
+            if not getattr(role_obj, "vm_role", False):
+                if dry_run:
+                    log.info(
+                        "[DRY-RUN] Actualizaría DeviceRole para permitir VM: %s",
+                        name,
+                    )
+                else:
+                    try:
+                        role_obj.update({"vm_role": True})
+                        log.info(
+                            "DeviceRole actualizado para permitir VM: %s",
+                            name,
+                        )
+                    except Exception:
+                        log.exception(
+                            "Error actualizando DeviceRole '%s'",
+                            name,
+                        )
+                        continue
+
+            caches["device_roles"][key] = role_obj
             continue
 
         if dry_run:
             log.info("[DRY-RUN] Crearía DeviceRole: %s", name)
-            caches["device_roles"][key] = {"id": 0, "name": name}
+            caches["device_roles"][key] = {
+                "id": 0,
+                "name": name,
+                "vm_role": True,
+            }
             continue
 
-        obj = endpoints.device_roles.create(name=name, slug=slug, color=color)
+        try:
+            obj = endpoints.device_roles.create(
+                name=name,
+                slug=slug,
+                color=color,
+                vm_role=True,
+            )
+        except Exception:
+            log.exception(
+                "Error creando DeviceRole '%s'",
+                name,
+            )
+            continue
+
         log.info("DeviceRole creado: %s", name)
         caches["device_roles"][key] = obj
 
@@ -1592,13 +1638,17 @@ def resolve_device_role(
 ) -> Any | None:
     """
     Busca un DeviceRole por nombre (insensible a mayúsculas).
-    Si el rol no existe o está vacío, utiliza "Others" como fallback.
+    Si el nombre está vacío o no existe, utiliza "Others" como fallback.
     """
     roles = caches["device_roles"]
+    if is_empty(role_name):
+        return roles.get("others")
+    
     normalized = role_name.strip().lower()
-    if normalized in roles:
-        return roles[normalized]
-    return roles.get("others")
+    if normalized not in roles:
+        return roles.get("others")
+    
+    return roles[normalized]
 
 
 # ============================================================
