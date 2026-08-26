@@ -62,10 +62,7 @@ log = logging.getLogger("export_to_netbox")
 # ============================================================
 
 EMPTY_VALUES: set[str] = set()
-COL_NOMBRE_MAQUINA: str = ""
-COL_TIPO_MAQUINA: str = ""
-COL_OS: str = ""
-
+INVENTORY_COLUMNS: dict[str, str] = {}
 
 # ============================================================
 # CARGA DE CONFIGURACIÓN
@@ -975,7 +972,7 @@ def resolve_netbox_status(
         device         -> inventory
         virtual_machine -> staged
     """
-    estado = row.get("Estado", "").strip()
+    estado = row.get(INVENTORY_COLUMNS.get("status"), "").strip()
     status_mapped = config.get("status_map", {}).get(estado)
     if status_mapped:
         return status_mapped
@@ -997,7 +994,7 @@ def resolve_platform(
     dry_run: bool,
 ) -> None:
     """Resuelve el Platform desde la columna OS y lo agrega al payload si existe."""
-    platform_name = row.get(COL_OS, "").strip()
+    platform_name = row.get(INVENTORY_COLUMNS.get("os"), "").strip()
     if not is_empty(platform_name):
         platform = ensure_platform(
             nb,
@@ -1169,14 +1166,14 @@ def sync_device(
     Sincroniza una fila de tipo "device" o "hipervisor" con NetBox.
     Retorna: "CREATED" | "UPDATED" | "UNCHANGED" | "SKIPPED" | "ERROR"
     """
-    machine_name = row.get(COL_NOMBRE_MAQUINA, "").strip()
-    uuid = row.get("UUID", "").strip()
-    machine_type = row.get(COL_TIPO_MAQUINA, "").strip()
+    machine_name = row.get(INVENTORY_COLUMNS.get("machine_name"), "").strip()
+    uuid = row.get(INVENTORY_COLUMNS.get("uuid"), "").strip()
+    machine_type = row.get(INVENTORY_COLUMNS.get("machine_type"), "").strip()
     if is_empty(machine_name):
-        log.warning(f"SKIP ({COL_NOMBRE_MAQUINA} vacío).")
+        log.warning(f"SKIP ({INVENTORY_COLUMNS.get("machine_name")} vacío).")
         return "SKIPPED"
     if is_empty(machine_type):
-        log.warning(f"SKIP ({machine_name}): campo '{COL_TIPO_MAQUINA}' vacío.")
+        log.warning(f"SKIP ({machine_name}): campo '{INVENTORY_COLUMNS.get("machine_type")}' vacío.")
         return "SKIPPED"
     device_fields_cfg: list[dict] = config.get("device_fields", [])
     device_cf_cfg: list[dict] = config.get("device_custom_fields", [])
@@ -1184,7 +1181,7 @@ def sync_device(
 
     # ── Resolución de objetos relacionados ──────────────────
     # Role.
-    rol_csv = row.get("Rol", "").strip()
+    rol_csv = row.get(INVENTORY_COLUMNS.get("role"), "").strip()
     role_obj = resolve_device_role(rol_csv, caches)
     if role_obj is None:
         role_obj = resolve_device_role("Others", caches)
@@ -1207,8 +1204,8 @@ def sync_device(
             )
 
     # Manufacturer y DeviceType.
-    marca = row.get("Marca", "").strip()
-    modelo = row.get("Modelo", "").strip()
+    marca = row.get(INVENTORY_COLUMNS.get("manufacturer"), "").strip()
+    modelo = row.get(INVENTORY_COLUMNS.get("model"), "").strip()
     if is_empty(marca) or is_empty(modelo):
         log.warning("SKIP (%s): sin Marca o Modelo.", machine_name)
         return "SKIPPED"
@@ -1237,7 +1234,7 @@ def sync_device(
     resolve_platform(nb, row, payload, caches, dry_run)
 
     # Rack.
-    rack_name = row.get("Rack", "").strip()
+    rack_name = row.get(INVENTORY_COLUMNS.get("rack"), "").strip()
     if not is_empty(rack_name):
         rack = ensure_rack(
             nb,
@@ -1342,14 +1339,14 @@ def sync_vm(
     Sincroniza una fila de tipo "virtual_machine" con NetBox.
     Retorna: "CREATED" | "UPDATED" | "UNCHANGED" | "SKIPPED" | "ERROR"
     """
-    machine_name = row.get(COL_NOMBRE_MAQUINA, "").strip()
-    uuid = row.get("UUID", "").strip()
-    machine_type = row.get(COL_TIPO_MAQUINA, "").strip()
+    machine_name = row.get(INVENTORY_COLUMNS.get("machine_name"), "").strip()
+    uuid = row.get(INVENTORY_COLUMNS.get("uuid"), "").strip()
+    machine_type = row.get(INVENTORY_COLUMNS.get("machine_type"), "").strip()
     if is_empty(machine_name):
-        log.warning(f"SKIP ({COL_NOMBRE_MAQUINA} vacío).")
+        log.warning(f"SKIP ({INVENTORY_COLUMNS.get('machine_name')} vacío).")
         return "SKIPPED"
     if is_empty(machine_type):
-        log.warning(f"SKIP ({machine_name}): campo '{COL_TIPO_MAQUINA}' vacío.")
+        log.warning(f"SKIP ({machine_name}): campo '{INVENTORY_COLUMNS.get('machine_type')}' vacío.")
         return "SKIPPED"
 
     vm_fields_cfg: list[dict] = config.get("vm_fields", [])
@@ -1365,10 +1362,10 @@ def sync_vm(
     resolve_platform(nb, row, payload, caches, dry_run)
 
     # Cluster.
-    host_name = row.get("Host/Cluster/Chassis", "").strip()
+    host_name = row.get(INVENTORY_COLUMNS.get("cluster"), "").strip()
     if is_empty(host_name):
         log.warning(
-            f"SKIP ({machine_name}): VM sin Host/Cluster/Chassis.",
+            f"SKIP ({machine_name}): VM sin {INVENTORY_COLUMNS.get('cluster')}.",
         )
         return "SKIPPED"
     cluster = ensure_cluster(
@@ -1414,7 +1411,7 @@ def sync_vm(
     )
 
     # vcpus.
-    cores = row.get("Cores", "").strip()
+    cores = row.get(INVENTORY_COLUMNS.get("cores"), "").strip()
     cores_int = safe_int(cores)
     if cores_int is not None:
         payload["vcpus"] = float(cores_int)
@@ -1552,14 +1549,29 @@ def main() -> None:
     # ── Cargar configuración ─────────────────────────────────
     config = load_config(mapping_path)
     EMPTY_VALUES.update(config.get("empty_values", []))
-    COL_NOMBRE_MAQUINA = config.get("inventory_columns", {}).get("machine_name", "")
-    COL_TIPO_MAQUINA = config.get("inventory_columns", {}).get("machine_type", "")
-    COL_OS = config.get("inventory_columns", {}).get("os", "")
 
-    if not COL_NOMBRE_MAQUINA or not COL_TIPO_MAQUINA or not COL_OS:
+    INVENTORY_COLUMNS = config.get("inventory_columns", {})
+    required_columns = (
+        "machine_name",
+        "machine_type",
+        "os",
+        "status",
+        "role",
+        "manufacturer",
+        "model",
+        "rack",
+        "cluster",
+        "cores",
+        "uuid",
+    )
+    missing_columns = [
+        key for key in required_columns
+        if not INVENTORY_COLUMNS.get(key)
+    ]
+    if missing_columns:
         log.error(
-            "La configuración 'inventory_columns' debe definir "
-            "'machine_name', 'machine_type' y 'os'."
+            "Faltan columnas en 'inventory_columns': %s",
+            ", ".join(missing_columns),
         )
         sys.exit(1)
 
@@ -1606,12 +1618,12 @@ def main() -> None:
 
     # ── Procesar filas ───────────────────────────────────────
     for row_num, row in enumerate(rows, start=2):
-        tipo_raw = row.get(COL_TIPO_MAQUINA, "").strip()
+        tipo_raw = row.get(INVENTORY_COLUMNS.get("machine_type"), "").strip()
         nb_type  = machine_type_map.get(tipo_raw)
 
         if nb_type is None:
             log.warning(
-                f"Fila %d SKIP: {COL_TIPO_MAQUINA} '%s' no está en machine_type_map.",
+                f"Fila %d SKIP: {INVENTORY_COLUMNS.get('machine_type')} '%s' no está en machine_type_map.",
                 row_num, tipo_raw,
             )
             counts["SKIPPED"] += 1
@@ -1620,7 +1632,7 @@ def main() -> None:
         # ── Parsear interfaces ────────────────────────────────
         interfaces = parse_network_interfaces(row, net_cfg)
         if interfaces is None:
-            machine_name = row.get(COL_NOMBRE_MAQUINA, f"fila {row_num}")
+            machine_name = row.get(INVENTORY_COLUMNS.get("machine_name"), f"fila {row_num}")
             log.warning(
                 "Interfaces de '%s' tienen longitudes inconsistentes; "
                 "se omitirán para esta fila.",
@@ -1644,7 +1656,7 @@ def main() -> None:
             continue
 
         if args.dry_run:
-            machine_name = row.get(COL_NOMBRE_MAQUINA, f"fila {row_num}")
+            machine_name = row.get(INVENTORY_COLUMNS.get("machine_name"), f"fila {row_num}")
             for iface in interfaces:
                 log.info(
                     "[DRY-RUN] Sincronizaría interfaz %s en '%s'",
@@ -1659,8 +1671,8 @@ def main() -> None:
         # exclusivamente de cf_inventory_uuid. Se utiliza la misma
         # política de identificación: UUID cuando existe, nombre
         # como fallback.
-        machine_name = row.get(COL_NOMBRE_MAQUINA, "").strip()
-        uuid = row.get("UUID", "").strip()
+        machine_name = row.get(INVENTORY_COLUMNS.get("machine_name"), "").strip()
+        uuid = row.get(INVENTORY_COLUMNS.get("uuid"), "").strip()
 
         try:
             if nb_type == "device":
