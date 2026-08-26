@@ -62,6 +62,8 @@ log = logging.getLogger("export_to_netbox")
 # ============================================================
 
 EMPTY_VALUES = {"", "N/A", "None", "n/a", "none"}
+COL_NOMBRE_MAQUINA = "Nombre maquina"
+COL_TIPO_MAQUINA = "Tipo de maquina"
 
 
 # ============================================================
@@ -107,9 +109,8 @@ def build_nb_client(url: str, token: str, verify_ssl: bool) -> pynetbox.api:
     # Verificar conectividad con una llamada liviana.
     try:
         nb.dcim.sites.filter(limit=1)
-    except Exception as exc:
-        # TODO: Distinguir correctamente los tipos de errores
-        log.error("No se pudo conectar con NetBox (%s): %s", url, exc)
+    except Exception:
+        log.exception("No se pudo conectar con NetBox (%s)", url)
         sys.exit(1)
 
     log.info("Conectado a NetBox %s", url)
@@ -489,12 +490,11 @@ def ensure_custom_fields(
                     model=model,
                 )
             )
-        except Exception as exc:
-            log.error(
+        except Exception:
+            log.exception(
                 "Error consultando Object Type '%s' "
-                "en '/api/core/object-types/': %s",
-                app_model,
-                exc,
+                "en '/api/core/object-types/'",
+                app_model
             )
             return None
 
@@ -594,10 +594,9 @@ def ensure_custom_fields(
                             "Choice Set creado: %s",
                             choice_set_name,
                         )
-                    except Exception as exc:
-                        log.error(
-                            "Error creando Choice Set '%s': %s",
-                            choice_set_name, exc,
+                    except Exception:
+                        log.exception(
+                            "Error al crear custom field '%s'", name
                         )
                         continue
             else:
@@ -642,9 +641,9 @@ def ensure_custom_fields(
             log.info(
                 "Custom field creado: %s", name
             )
-        except Exception as exc:
-            log.error(
-                "Error al crear custom field '%s': %s", name, exc
+        except Exception:
+            log.exception(
+                "Error al crear custom field '%s'", name
             )
 
 
@@ -771,16 +770,14 @@ def _sync_interfaces_for_object(
         elif name in existing:
             try:
                 existing[name].update(payload)
-            except Exception as exc:
-                # TODO: Distinguir correctamente los tipos de errores
-                log.error("Error actualizando interfaz %s: %s", name, exc)
+            except Exception:
+                log.exception("Error actualizando interfaz %s", name)
                 continue
         else:
             try:
                 existing[name] = iface_endpoint.create(**payload)
-            except Exception as exc:
-                # TODO: Distinguir correctamente los tipos de errores
-                log.error("Error creando interfaz %s: %s", name, exc)
+            except Exception:
+                log.exception("Error creando interfaz %s", name)
                 continue
 
         # Asignar IP si hay CIDR.
@@ -813,9 +810,8 @@ def _assign_ip(
                 "assigned_object_type": assigned_type,
                 "assigned_object_id":   iface_obj.id,
             })
-        except Exception as exc:
-            # TODO: Distinguir correctamente los tipos de errores
-            log.error("Error actualizando IP %s: %s", cidr, exc)
+        except Exception:
+            log.exception("Error actualizando IP %s", cidr)
     else:
         try:
             nb.ipam.ip_addresses.create(
@@ -824,9 +820,8 @@ def _assign_ip(
                 assigned_object_type=assigned_type,
                 assigned_object_id=iface_obj.id,
             )
-        except Exception as exc:
-            # TODO: Distinguir correctamente los tipos de errores
-            log.error("Error creando IP %s: %s", cidr, exc)
+        except Exception:
+            log.exception("Error creando IP %s", cidr)
 
 
 # ============================================================
@@ -1023,13 +1018,8 @@ def apply_sync(
             endpoint.create(**payload)
             log.info("CREATED %s: %s", object_label, machine_name)
             return "CREATED"
-        except Exception as exc:
-            log.error(
-                "ERROR creando %s %s: %s",
-                object_label,
-                machine_name,
-                exc,
-            )
+        except Exception:
+            log.exception("ERROR creando %s %s", object_label, machine_name)
             return "ERROR"
     if is_empty(uuid):
         log.warning(
@@ -1042,12 +1032,11 @@ def apply_sync(
         existing[0].update(payload)
         log.info("UPDATED %s: %s", object_label, machine_name)
         return "UPDATED"
-    except Exception as exc:
-        log.error(
-            "ERROR actualizando %s %s: %s",
+    except Exception:
+        log.exception(
+            "ERROR actualizando %s %s",
             object_label,
             machine_name,
-            exc,
         )
         return "ERROR"
 
@@ -1069,14 +1058,14 @@ def sync_device(
     Sincroniza una fila de tipo "device" o "hipervisor" con NetBox.
     Retorna: "CREATED" | "UPDATED" | "UNCHANGED" | "SKIPPED" | "ERROR"
     """
-    machine_name = row.get("Nombre maquina", "").strip()
+    machine_name = row.get(COL_NOMBRE_MAQUINA, "").strip()
     uuid = row.get("UUID", "").strip()
-    machine_type = row.get("Tipo de maquina", "").strip()
+    machine_type = row.get(COL_TIPO_MAQUINA, "").strip()
     if is_empty(machine_name):
-        log.warning("SKIP (Nombre maquina vacío).")
+        log.warning(f"SKIP ({COL_NOMBRE_MAQUINA} vacío).")
         return "SKIPPED"
     if is_empty(machine_type):
-        log.warning("SKIP (%s): campo 'Tipo de maquina' vacío.", machine_name)
+        log.warning(f"SKIP ({machine_name}): campo '{COL_TIPO_MAQUINA}' vacío.")
         return "SKIPPED"
     device_fields_cfg: list[dict] = config.get("device_fields", [])
     device_cf_cfg: list[dict] = config.get("device_custom_fields", [])
@@ -1209,12 +1198,11 @@ def sync_device(
             machine_name,
             nb.dcim.devices,
         )
-    except Exception as exc:
-        log.error(
-            "ERROR buscando device '%s' (UUID=%s): %s",
+    except Exception:
+        log.exception(
+            "ERROR buscando device '%s' (UUID=%s)",
             machine_name,
             uuid or "N/A",
-            exc,
         )
         return "ERROR"
 
@@ -1255,14 +1243,14 @@ def sync_vm(
     Sincroniza una fila de tipo "virtual_machine" con NetBox.
     Retorna: "CREATED" | "UPDATED" | "UNCHANGED" | "SKIPPED" | "ERROR"
     """
-    machine_name = row.get("Nombre maquina", "").strip()
+    machine_name = row.get(COL_NOMBRE_MAQUINA, "").strip()
     uuid = row.get("UUID", "").strip()
-    machine_type = row.get("Tipo de maquina", "").strip()
+    machine_type = row.get(COL_TIPO_MAQUINA, "").strip()
     if is_empty(machine_name):
-        log.warning("SKIP (Nombre maquina vacío).")
+        log.warning(f"SKIP ({COL_NOMBRE_MAQUINA} vacío).")
         return "SKIPPED"
     if is_empty(machine_type):
-        log.warning("SKIP (%s): campo 'Tipo de maquina' vacío.", machine_name)
+        log.warning(f"SKIP ({machine_name}): campo '{COL_TIPO_MAQUINA}' vacío.")
         return "SKIPPED"
 
     vm_fields_cfg: list[dict] = config.get("vm_fields", [])
@@ -1293,8 +1281,7 @@ def sync_vm(
     host_name = row.get("Host/Cluster/Chassis", "").strip()
     if is_empty(host_name):
         log.warning(
-            "SKIP (%s): VM sin Host/Cluster/Chassis.",
-            machine_name,
+            f"SKIP ({machine_name}): VM sin Host/Cluster/Chassis.",
         )
         return "SKIPPED"
     cluster = ensure_cluster(
@@ -1323,12 +1310,11 @@ def sync_vm(
         )
         if host_devices:
             payload["device"] = host_devices[0].id
-    except Exception as exc:
-        log.warning(
-            "No se pudo resolver el Device host '%s' para VM '%s': %s",
+    except Exception:
+        log.exception(
+            "No se pudo resolver el Device host '%s' para VM '%s'",
             host_name,
             machine_name,
-            exc,
         )
 
     # Estado.
@@ -1351,12 +1337,11 @@ def sync_vm(
             machine_name,
             nb.virtualization.virtual_machines,
         )
-    except Exception as exc:
-        log.error(
-            "ERROR buscando VM '%s' (UUID=%s): %s",
+    except Exception:
+        log.exception(
+            "ERROR buscando VM '%s' (UUID=%s)",
             machine_name,
-            uuid or "N/A",
-            exc,
+            uuid or "N/A"
         )
         return "ERROR"
 
@@ -1520,12 +1505,12 @@ def main() -> None:
 
     # ── Procesar filas ───────────────────────────────────────
     for row_num, row in enumerate(rows, start=2):
-        tipo_raw = row.get("Tipo de maquina", "").strip()
+        tipo_raw = row.get(COL_TIPO_MAQUINA, "").strip()
         nb_type  = machine_type_map.get(tipo_raw)
 
         if nb_type is None:
             log.warning(
-                "Fila %d SKIP: Tipo de maquina '%s' no está en machine_type_map.",
+                f"Fila %d SKIP: {COL_TIPO_MAQUINA} '%s' no está en machine_type_map.",
                 row_num, tipo_raw,
             )
             counts["SKIPPED"] += 1
@@ -1534,7 +1519,7 @@ def main() -> None:
         # ── Parsear interfaces ────────────────────────────────
         interfaces = parse_network_interfaces(row, net_cfg)
         if interfaces is None:
-            machine_name = row.get("Nombre maquina", f"fila {row_num}")
+            machine_name = row.get(COL_NOMBRE_MAQUINA, f"fila {row_num}")
             log.warning(
                 "Interfaces de '%s' tienen longitudes inconsistentes; "
                 "se omitirán para esta fila.",
@@ -1558,7 +1543,7 @@ def main() -> None:
             continue
 
         if args.dry_run:
-            machine_name = row.get("Nombre maquina", f"fila {row_num}")
+            machine_name = row.get(COL_NOMBRE_MAQUINA, f"fila {row_num}")
             for iface in interfaces:
                 log.info(
                     "[DRY-RUN] Sincronizaría interfaz %s en '%s'",
@@ -1573,7 +1558,7 @@ def main() -> None:
         # exclusivamente de cf_inventory_uuid. Se utiliza la misma
         # política de identificación: UUID cuando existe, nombre
         # como fallback.
-        machine_name = row.get("Nombre maquina", "").strip()
+        machine_name = row.get(COL_NOMBRE_MAQUINA, "").strip()
         uuid = row.get("UUID", "").strip()
 
         try:
@@ -1589,13 +1574,12 @@ def main() -> None:
                 machine_name,
                 endpoint,
             )
-        except Exception as exc:
-            log.error(
+        except Exception:
+            log.exception(
                 "ERROR buscando objeto NetBox para sincronizar interfaces "
-                "de '%s' (UUID=%s): %s",
+                "de '%s' (UUID=%s)",
                 machine_name,
-                uuid or "N/A",
-                exc,
+                uuid or "N/A"
             )
             counts["ERROR"] += 1
             continue
