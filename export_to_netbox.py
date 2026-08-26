@@ -562,17 +562,16 @@ def ensure_custom_fields(
 
         if cf_def.get("type") == "selection" and choice_set_cfg:
             choice_set_name = choice_set_cfg["name"]
+            choices = [
+                [
+                    choice["value"],
+                    choice.get("label", choice["value"]),
+                ]
+                for choice in choice_set_cfg.get("choices", [])
+            ]
             choice_set = existing_choice_sets.get(choice_set_name)
 
             if choice_set is None:
-                choices = [
-                    [
-                        choice["value"],
-                        choice.get("label", choice["value"]),
-                    ]
-                    for choice in choice_set_cfg.get("choices", [])
-                ]
-
                 if dry_run:
                     log.info(
                         "[DRY-RUN] Crearía Choice Set: %s",
@@ -596,11 +595,40 @@ def ensure_custom_fields(
                         )
                     except Exception:
                         log.exception(
-                            "Error al crear custom field '%s'", name
+                            "Error al crear Choice Set '%s'",
+                            choice_set_name,
                         )
                         continue
             else:
                 choice_set_id = choice_set.id
+                current_choices = getattr(
+                    choice_set,
+                    "extra_choices",
+                    None,
+                )
+
+                if current_choices != choices:
+                    if dry_run:
+                        log.info(
+                            "[DRY-RUN] Actualizaría Choice Set: %s",
+                            choice_set_name,
+                        )
+                    else:
+                        try:
+                            choice_set.update({
+                                "extra_choices": choices,
+                                "order_alphabetically": False,
+                            })
+                            log.info(
+                                "Choice Set actualizado: %s",
+                                choice_set_name,
+                            )
+                        except Exception:
+                            log.exception(
+                                "Error al actualizar Choice Set '%s'",
+                                choice_set_name,
+                            )
+                            continue
 
         if name in existing_cfs:
             log.debug(
@@ -731,7 +759,7 @@ def parse_network_interfaces(
 # SINCRONIZACIÓN DE INTERFACES
 # ============================================================
 
-def _sync_interfaces_for_object(
+def sync_interfaces_for_object(
     nb: pynetbox.api,
     obj_id: int,
     obj_type: str,   # "device" | "virtual_machine"
@@ -1615,7 +1643,7 @@ def main() -> None:
             )
             continue
 
-        _sync_interfaces_for_object(
+        sync_interfaces_for_object(
             nb,
             existing[0].id,
             object_type,
