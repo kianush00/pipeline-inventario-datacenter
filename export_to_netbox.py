@@ -202,51 +202,6 @@ def read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
 
 
 # ============================================================
-# NORMALIZACIÓN DE VALORES DE FILA
-# ============================================================
-
-def resolve_field_value(
-    row: dict[str, str],
-    field_def: dict,
-    config: dict,
-) -> Any:
-    """
-    Resuelve el valor de un campo según su definición en el YAML.
-    Retorna None si el valor está vacío y skip_if_empty=True.
-    """
-    source = field_def.get("source")
-    skip_if_empty = field_def.get("skip_if_empty", True)
-    transform = field_def.get("transform")
-    cast = field_def.get("cast")
-    map_key = field_def.get("map")
-
-    # Transformación multi-source (concat_dot).
-    if isinstance(source, list) and transform == "concat_dot":
-        parts = [row.get(s, "") for s in source]
-        value = concat_dot(parts)
-        if not value and skip_if_empty:
-            return None
-        return value
-
-    # Campo simple.
-    value = row.get(source, "")
-
-    if is_empty(value):
-        return None if skip_if_empty else ""
-
-    # Mapeo de valores (ej. status_map, operational_status_map).
-    if map_key:
-        mapping = config.get(map_key, {})
-        value = mapping.get(value.strip(), value)
-
-    # Cast de tipo.
-    if cast:
-        value = apply_cast(value, cast)
-
-    return value
-
-
-# ============================================================
 # TAXONOMÍA: ensure_* (GET o CREATE)
 # ============================================================
 
@@ -903,6 +858,83 @@ def _assign_ip(
             )
         except Exception:
             log.exception("Error creando IP %s", cidr)
+
+
+# ============================================================
+# NORMALIZACIÓN DE VALORES DE FILA
+# ============================================================
+
+def _get_custom_field_definition(
+    target: str,
+    config: dict,
+) -> dict | None:
+    """Busca la definición global de un Custom Field por su nombre."""
+    custom_fields = _build_custom_field_definitions(config)
+
+    for cf_def in custom_fields:
+        if cf_def.get("name") == target:
+            return cf_def
+
+    return None
+
+
+def resolve_field_value(
+    row: dict[str, str],
+    field_def: dict,
+    config: dict,
+) -> Any:
+    """
+    Resuelve el valor de un campo según su definición en el YAML.
+
+    Los valores específicos del origen se obtienen desde field_def.
+    Los atributos globales del Custom Field, como 'default', se
+    obtienen desde la definición global del Custom Field.
+    """
+    source = field_def.get("source")
+    target = field_def.get("target")
+    skip_if_empty = field_def.get("skip_if_empty", True)
+    transform = field_def.get("transform")
+    cast = field_def.get("cast")
+    map_key = field_def.get("map")
+
+    custom_field_def = _get_custom_field_definition(target, config)
+    default = (
+        custom_field_def.get("default")
+        if custom_field_def is not None
+        else None
+    )
+
+    # Transformación multi-source (concat_dot).
+    if isinstance(source, list) and transform == "concat_dot":
+        parts = [row.get(s, "") for s in source]
+        value = concat_dot(parts)
+
+        if not value:
+            if default is not None:
+                return default
+            if skip_if_empty:
+                return None
+
+        return value
+
+    # Campo simple.
+    value = row.get(source, "")
+
+    if is_empty(value):
+        if default is not None:
+            return default
+        return None if skip_if_empty else ""
+
+    # Mapeo de valores (ej. status_map, operational_status_map).
+    if map_key:
+        mapping = config.get(map_key, {})
+        value = mapping.get(value.strip(), value)
+
+    # Cast de tipo.
+    if cast:
+        value = apply_cast(value, cast)
+
+    return value
 
 
 # ============================================================
