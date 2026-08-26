@@ -430,6 +430,215 @@ def ensure_cluster(
 # CUSTOM FIELDS: ensure_custom_fields
 # ============================================================
 
+def _get_object_type_id(
+    object_types_endpoint: Any,
+    app_model: str,
+    cache: dict[str, int],
+) -> int | None:
+    if app_model in cache:
+        return cache[app_model]
+
+    if "." not in app_model:
+        log.warning(
+            "Formato de Object Type inválido: %s. "
+            "Se esperaba 'app_label.model'.",
+            app_model,
+        )
+        return None
+
+    app_label, model = app_model.split(".", 1)
+
+    try:
+        results = list(
+            object_types_endpoint.filter(
+                app_label=app_label,
+                model=model,
+            )
+        )
+    except Exception:
+        log.exception(
+            "Error consultando Object Type '%s' "
+            "en '/api/core/object-types/'",
+            app_model
+        )
+        return None
+
+    if not results:
+        log.warning(
+            "Object Type no encontrado en NetBox: %s",
+            app_model,
+        )
+        return None
+
+    ot_id = results[0].id
+    cache[app_model] = ot_id
+    return ot_id
+
+
+def _build_custom_field_definitions(cfg: dict) -> list[dict]:
+    cf_definitions: list[dict] = list(
+        cfg.get("custom_fields", [])
+    )
+
+    for special_key in ("machine_type", "environment"):
+        special_def = cfg.get(special_key)
+        if not special_def:
+            continue
+
+        cf_definitions.append({
+            "name": special_def["field_name"],
+            "label": special_def.get("label", special_def["field_name"]),
+            "type": special_def.get("type", "text"),
+            "required": special_def.get("required", False),
+            "object_types": special_def.get("object_types", []),
+            "choice_set": special_def.get("choice_set"),
+        })
+
+    return cf_definitions
+
+
+def _get_choice_set_choices(choice_set_cfg: dict) -> list[list[str]]:
+    return [
+        [
+            choice["value"],
+            choice.get("label", choice["value"]),
+        ]
+        for choice in choice_set_cfg.get("choices", [])
+    ]
+
+
+def _normalize_choices(choices: Any) -> list[list[str]]:
+    if not choices:
+        return []
+
+    return [
+        [str(choice[0]), str(choice[1])]
+        for choice in choices
+        if isinstance(choice, (list, tuple)) and len(choice) >= 2
+    ]
+
+
+def _ensure_choice_set(
+    choice_sets_endpoint: Any,
+    existing_choice_sets: dict,
+    choice_set_cfg: dict,
+    dry_run: bool,
+) -> int | None:
+    choice_set_name = choice_set_cfg["name"]
+    choices = _get_choice_set_choices(choice_set_cfg)
+    choice_set = existing_choice_sets.get(choice_set_name)
+
+    if choice_set is None:
+        if dry_run:
+            log.info(
+                "[DRY-RUN] Crearía Choice Set: %s",
+                choice_set_name,
+            )
+            return 0
+
+        try:
+            choice_set = choice_sets_endpoint.create(
+                name=choice_set_name,
+                extra_choices=choices,
+                order_alphabetically=False,
+            )
+        except Exception:
+            log.exception(
+                "Error al crear Choice Set '%s'",
+                choice_set_name,
+            )
+            return None
+
+        existing_choice_sets[choice_set_name] = choice_set
+        log.info(
+            "Choice Set creado: %s",
+            choice_set_name,
+        )
+        return choice_set.id
+
+    current_choices = _normalize_choices(
+        getattr(choice_set, "extra_choices", None)
+    )
+
+    if current_choices != choices:
+        if dry_run:
+            log.info(
+                "[DRY-RUN] Actualizaría Choice Set: %s",
+                choice_set_name,
+            )
+        else:
+            try:
+                choice_set.update({
+                    "extra_choices": choices,
+                    "order_alphabetically": False,
+                })
+                log.info(
+                    "Choice Set actualizado: %s",
+                    choice_set_name,
+                )
+            except Exception:
+                log.exception(
+                    "Error al actualizar Choice Set '%s'",
+                    choice_set_name,
+                )
+                return None
+
+    return choice_set.id
+
+
+def _ensure_custom_field(
+    custom_fields_endpoint: Any,
+    existing_cfs: dict,
+    cf_def: dict,
+    ot_ids: list[int],
+    choice_set_id: int | None,
+    dry_run: bool,
+) -> None:
+    name = cf_def["name"]
+
+    if name in existing_cfs:
+        log.debug(
+            "Custom field ya existe: %s",
+            name,
+        )
+        return
+
+    if dry_run:
+        log.info(
+            "[DRY-RUN] Crearía custom field: %s (%s)",
+            name, cf_def.get("type"),
+        )
+        return
+
+    create_kwargs = {
+        "name": name,
+        "label": cf_def.get("label", name),
+        "type": cf_def.get("type", "text"),
+        "required": cf_def.get("required", False),
+        "object_types": ot_ids,
+    }
+
+    if choice_set_id is not None:
+        create_kwargs["choice_set"] = choice_set_id
+
+    default_value = cf_def.get("default")
+    if default_value is not None:
+        create_kwargs["default"] = default_value
+
+    try:
+        custom_fields_endpoint.create(
+            **create_kwargs
+        )
+        existing_cfs[name] = True   # marcar como existente
+        log.info(
+            "Custom field creado: %s", name
+        )
+    except Exception:
+        log.exception(
+            "Error al crear custom field '%s'", name
+        )
+
+
 def ensure_custom_fields(
     nb: pynetbox.api,
     cfg: dict,
@@ -453,7 +662,7 @@ def ensure_custom_fields(
     - Los Choice Sets se gestionan mediante
       /api/extras/custom-field-choice-sets/.
     """
-    # Resolver el endpoint de Object Types.
+    # Resolver los endpoints requeridos.
     try:
         object_types_endpoint = nb.core.object_types
         custom_fields_endpoint = nb.extras.custom_fields
@@ -466,49 +675,6 @@ def ensure_custom_fields(
         )
         sys.exit(1)
 
-    # Construir mapa nombre → ID de Object Type.
-    object_type_cache: dict[str, int] = {}
-
-    def get_object_type_id(app_model: str) -> int | None:
-        if app_model in object_type_cache:
-            return object_type_cache[app_model]
-
-        if "." not in app_model:
-            log.warning(
-                "Formato de Object Type inválido: %s. "
-                "Se esperaba 'app_label.model'.",
-                app_model,
-            )
-            return None
-
-        app_label, model = app_model.split(".", 1)
-
-        try:
-            results = list(
-                object_types_endpoint.filter(
-                    app_label=app_label,
-                    model=model,
-                )
-            )
-        except Exception:
-            log.exception(
-                "Error consultando Object Type '%s' "
-                "en '/api/core/object-types/'",
-                app_model
-            )
-            return None
-
-        if not results:
-            log.warning(
-                "Object Type no encontrado en NetBox: %s",
-                app_model,
-            )
-            return None
-
-        ot_id = results[0].id
-        object_type_cache[app_model] = ot_id
-        return ot_id
-
     # Obtener Custom Fields y Choice Sets existentes.
     existing_cfs = {
         cf.name: cf
@@ -520,39 +686,23 @@ def ensure_custom_fields(
         for choice_set in choice_sets_endpoint.all()
     }
 
-    # --------------------------------------------------------
+    # Construir mapa nombre → ID de Object Type.
+    object_type_cache: dict[str, int] = {}
+
     # Construir lista unificada de definiciones de Custom Field.
     #
     # 'custom_fields' contiene los campos normales.
     # 'machine_type' y 'environment' son definiciones especiales
     # pero deben terminar igualmente como Custom Fields en NetBox.
-    # --------------------------------------------------------
-    cf_definitions: list[dict] = list(
-        cfg.get("custom_fields", [])
-    )
+    cf_definitions = _build_custom_field_definitions(cfg)
 
-    for special_key in ("machine_type", "environment"):
-        special_def = cfg.get(special_key)
-        if not special_def:
-            continue
-
-        cf_definitions.append({
-            "name": special_def["field_name"],
-            "label": special_def.get("label", special_def["field_name"]),
-            "type": special_def.get("type", "text"),
-            "required": special_def.get("required", False),
-            "object_types": special_def.get("object_types", []),
-            "choice_set": special_def.get("choice_set"),
-        })
-
-    # --------------------------------------------------------
-    # Garantizar existencia de cada Custom Field.
-    # --------------------------------------------------------
     for cf_def in cf_definitions:
-        name = cf_def["name"]
-
         ot_ids = [
-            get_object_type_id(ot)
+            _get_object_type_id(
+                object_types_endpoint,
+                ot,
+                object_type_cache,
+            )
             for ot in cf_def.get("object_types", [])
         ]
         ot_ids = [i for i in ot_ids if i is not None]
@@ -561,119 +711,25 @@ def ensure_custom_fields(
         choice_set_cfg = cf_def.get("choice_set")
 
         if cf_def.get("type") == "selection" and choice_set_cfg:
-            choice_set_name = choice_set_cfg["name"]
-            choices = [
-                [
-                    choice["value"],
-                    choice.get("label", choice["value"]),
-                ]
-                for choice in choice_set_cfg.get("choices", [])
-            ]
-            choice_set = existing_choice_sets.get(choice_set_name)
-
-            if choice_set is None:
-                if dry_run:
-                    log.info(
-                        "[DRY-RUN] Crearía Choice Set: %s",
-                        choice_set_name,
-                    )
-                    choice_set_id = 0
-                else:
-                    try:
-                        choice_set = (
-                            choice_sets_endpoint.create(
-                                name=choice_set_name,
-                                extra_choices=choices,
-                                order_alphabetically=False,
-                            )
-                        )
-                        existing_choice_sets[choice_set_name] = choice_set
-                        choice_set_id = choice_set.id
-                        log.info(
-                            "Choice Set creado: %s",
-                            choice_set_name,
-                        )
-                    except Exception:
-                        log.exception(
-                            "Error al crear Choice Set '%s'",
-                            choice_set_name,
-                        )
-                        continue
-            else:
-                choice_set_id = choice_set.id
-                current_choices = getattr(
-                    choice_set,
-                    "extra_choices",
-                    None,
-                )
-
-                if current_choices != choices:
-                    if dry_run:
-                        log.info(
-                            "[DRY-RUN] Actualizaría Choice Set: %s",
-                            choice_set_name,
-                        )
-                    else:
-                        try:
-                            choice_set.update({
-                                "extra_choices": choices,
-                                "order_alphabetically": False,
-                            })
-                            log.info(
-                                "Choice Set actualizado: %s",
-                                choice_set_name,
-                            )
-                        except Exception:
-                            log.exception(
-                                "Error al actualizar Choice Set '%s'",
-                                choice_set_name,
-                            )
-                            continue
-
-        if name in existing_cfs:
-            log.debug(
-                "Custom field ya existe: %s",
-                name,
-            )
-            continue
-
-        if dry_run:
-            log.info(
-                "[DRY-RUN] Crearía custom field: %s (%s)",
-                name, cf_def.get("type"),
-            )
-            continue
-
-        try:
-            create_kwargs = {
-                "name": name,
-                "label": cf_def.get("label", name),
-                "type": cf_def.get("type", "text"),
-                "required": cf_def.get("required", False),
-                "object_types": ot_ids,
-            }
-
-            if choice_set_id is not None:
-                create_kwargs["choice_set"] = choice_set_id
-
-            default_value = cf_def.get("default")
-            if default_value is not None:
-                create_kwargs["default"] = default_value
-
-            custom_fields_endpoint.create(
-                **create_kwargs
+            choice_set_id = _ensure_choice_set(
+                choice_sets_endpoint,
+                existing_choice_sets,
+                choice_set_cfg,
+                dry_run,
             )
 
-            existing_cfs[name] = True
+            if choice_set_id is None:
+                continue
 
-            log.info(
-                "Custom field creado: %s", name
-            )
-        except Exception:
-            log.exception(
-                "Error al crear custom field '%s'", name
-            )
-
+        _ensure_custom_field(
+            custom_fields_endpoint,
+            existing_cfs,
+            cf_def,
+            ot_ids,
+            choice_set_id,
+            dry_run,
+        )
+    
 
 # ============================================================
 # PARSEO DE RED
