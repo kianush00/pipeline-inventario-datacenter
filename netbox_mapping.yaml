@@ -464,6 +464,17 @@ network:
     "down": false
 
 
+# ── Columnas principales del inventario ──────────────────────
+# Nombres exactos de las columnas utilizadas por el exportador.
+# Estos valores deben coincidir con los encabezados de
+# merged_inventory.csv.
+
+inventory_columns:
+  machine_name: "Nombre maquina"
+  machine_type: "Tipo de maquina"
+  os: "SO Host"
+
+
 # ── Valores vacíos ─────────────────────────────────────────
 # Valores vacíos que se consideran equivalentes a None/N/A y 
 # se omiten en la exportación.
@@ -472,3 +483,5 @@ empty_values:
   - "N/A"
   - ""
   - "None"
+  - "n/a"
+  - "none"

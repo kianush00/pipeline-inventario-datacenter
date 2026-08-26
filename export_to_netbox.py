@@ -58,12 +58,13 @@ log = logging.getLogger("export_to_netbox")
 
 
 # ============================================================
-# CONSTANTES
+# ESTADO GLOBAL DE CONFIGURACIÓN
 # ============================================================
 
-EMPTY_VALUES = {"", "N/A", "None", "n/a", "none"}
-COL_NOMBRE_MAQUINA = "Nombre maquina"
-COL_TIPO_MAQUINA = "Tipo de maquina"
+EMPTY_VALUES: set[str] = set()
+COL_NOMBRE_MAQUINA: str = ""
+COL_TIPO_MAQUINA: str = ""
+COL_OS: str = ""
 
 
 # ============================================================
@@ -745,12 +746,11 @@ def parse_network_interfaces(
 
     Retorna None si los arrays tienen longitudes distintas.
     """
-    empty_vals = set(net_cfg.get("empty_values", ["N/A", "", "None"]))
     status_map: dict[str, bool] = net_cfg.get("interface_status_map", {})
 
     def split_col(col_name: str) -> list[str]:
         raw = row.get(col_name, "")
-        if raw.strip() in empty_vals:
+        if raw.strip() in EMPTY_VALUES:
             return []
         return [v.strip() for v in raw.split(",")]
 
@@ -780,15 +780,15 @@ def parse_network_interfaces(
 
     interfaces = []
     for i, name in enumerate(names):
-        if not name or name in empty_vals:
+        if not name or name in EMPTY_VALUES:
             continue
 
         status_raw = statuses[i].lower().strip()
         enabled = status_map.get(status_raw, True)
 
-        ip_raw   = ips[i]     if ips[i] not in empty_vals     else None
-        pfx_raw  = prefixes[i] if prefixes[i] not in empty_vals else None
-        mac_raw  = macs[i]    if macs[i] not in empty_vals    else None
+        ip_raw   = ips[i]     if ips[i] not in EMPTY_VALUES     else None
+        pfx_raw  = prefixes[i] if prefixes[i] not in EMPTY_VALUES else None
+        mac_raw  = macs[i]    if macs[i] not in EMPTY_VALUES    else None
 
         # Construir dirección CIDR si tenemos IP y prefijo.
         cidr = None
@@ -996,8 +996,8 @@ def resolve_platform(
     caches: dict,
     dry_run: bool,
 ) -> None:
-    """Resuelve el Platform desde 'SO Host' y lo agrega al payload si existe."""
-    platform_name = row.get("SO Host", "").strip()
+    """Resuelve el Platform desde la columna OS y lo agrega al payload si existe."""
+    platform_name = row.get(COL_OS, "").strip()
     if not is_empty(platform_name):
         platform = ensure_platform(
             nb,
@@ -1551,6 +1551,18 @@ def main() -> None:
 
     # ── Cargar configuración ─────────────────────────────────
     config = load_config(mapping_path)
+    EMPTY_VALUES.update(config.get("empty_values", []))
+    COL_NOMBRE_MAQUINA = config.get("inventory_columns", {}).get("machine_name", "")
+    COL_TIPO_MAQUINA = config.get("inventory_columns", {}).get("machine_type", "")
+    COL_OS = config.get("inventory_columns", {}).get("os", "")
+
+    if not COL_NOMBRE_MAQUINA or not COL_TIPO_MAQUINA or not COL_OS:
+        log.error(
+            "La configuración 'inventory_columns' debe definir "
+            "'machine_name', 'machine_type' y 'os'."
+        )
+        sys.exit(1)
+
     url, token, verify_ssl = load_env()
 
     if args.dry_run:
