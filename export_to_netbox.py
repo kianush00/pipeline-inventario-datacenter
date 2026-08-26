@@ -902,6 +902,33 @@ def resolve_netbox_status(
 
 
 # ============================================================
+# RESOLVER PLATFORM
+# ============================================================
+
+def resolve_platform(
+    nb: pynetbox.api,
+    row: dict[str, str],
+    payload: dict,
+    caches: dict,
+    dry_run: bool,
+) -> None:
+    """Resuelve el Platform desde 'SO Host' y lo agrega al payload si existe."""
+    platform_name = row.get("SO Host", "").strip()
+    if not is_empty(platform_name):
+        platform = ensure_platform(
+            nb,
+            platform_name,
+            caches["platforms"],
+            dry_run,
+        )
+        payload["platform"] = getattr(
+            platform,
+            "id",
+            platform.get("id", 0),
+        )
+
+
+# ============================================================
 # BUSCAR OBJETO POR UUID Y NOMBRE
 # ============================================================
 
@@ -1123,19 +1150,7 @@ def sync_device(
     )
 
     # Platform.
-    platform_name = row.get("SO Host", "").strip()
-    if not is_empty(platform_name):
-        platform = ensure_platform(
-            nb,
-            platform_name,
-            caches["platforms"],
-            dry_run,
-        )
-        payload["platform"] = getattr(
-            platform,
-            "id",
-            platform.get("id", 0),
-        )
+    resolve_platform(nb, row, payload, caches, dry_run)
 
     # Rack.
     rack_name = row.get("Rack", "").strip()
@@ -1263,19 +1278,7 @@ def sync_vm(
     )
 
     # Platform.
-    platform_name = row.get("SO Host", "").strip()
-    if not is_empty(platform_name):
-        platform = ensure_platform(
-            nb,
-            platform_name,
-            caches["platforms"],
-            dry_run,
-        )
-        payload["platform"] = getattr(
-            platform,
-            "id",
-            platform.get("id", 0),
-        )
+    resolve_platform(nb, row, payload, caches, dry_run)
 
     # Cluster.
     host_name = row.get("Host/Cluster/Chassis", "").strip()
@@ -1297,6 +1300,8 @@ def sync_vm(
         "id",
         cluster.get("id", 0),
     )
+
+    # Campos obligatorios.
     payload["site"] = getattr(
         site,
         "id",
