@@ -1,0 +1,134 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0">
+  <diagram id="inventario-datacenter" name="Inventory pipeline">
+    <mxGraphModel grid="1" page="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" pageScale="1" pageWidth="890" pageHeight="1205" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="setup" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EBEBEB;strokeColor=#666666;fontSize=14;spacing=10;align=left;shadow=1;glass=1;" value="&lt;b&gt;Prerequisites&lt;/b&gt;&lt;br&gt;&lt;br&gt;• Python 3.10+&lt;br&gt;• source .venv/bin/activate&lt;br&gt;• pip install -r requirements.txt&lt;br&gt;• LibreOffice (ODS/XLSX)" vertex="1">
+          <mxGeometry height="140" width="240" x="500" y="23" as="geometry" />
+        </mxCell>
+        <mxCell id="nodes" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=14;spacing=10;fontStyle=1" value="Target nodes&lt;br&gt;&lt;span style=&quot;font-weight:normal;font-size:12px&quot;&gt;Physical servers, VMs, hypervisors&lt;/span&gt;" vertex="1">
+          <mxGeometry height="80" width="220" x="14" y="6" as="geometry" />
+        </mxCell>
+        <mxCell id="rundeck" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;spacing=10;" value="&lt;b&gt;1. Rundeck collection&lt;/b&gt;&lt;br&gt;&lt;br&gt;asset_information.sh" vertex="1">
+          <mxGeometry height="90" width="220" x="14" y="145" as="geometry" />
+        </mxCell>
+        <mxCell id="raw" parent="1" style="shape=document;whiteSpace=wrap;html=1;boundedLbl=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;spacing=10;" value="&lt;b&gt;Raw job output&lt;/b&gt;&lt;br&gt;.log / text" vertex="1">
+          <mxGeometry height="80" width="220" x="14" y="297" as="geometry" />
+        </mxCell>
+        <mxCell id="parse" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;spacing=10;" value="&lt;b&gt;2. Parse and validate&lt;/b&gt;&lt;br&gt;&lt;br&gt;parse_job_output.py" vertex="1">
+          <mxGeometry height="90" width="220" x="14" y="423" as="geometry" />
+        </mxCell>
+        <mxCell id="parsed" parent="1" style="shape=document;whiteSpace=wrap;html=1;boundedLbl=1;fillColor=#e2f0d9;strokeColor=#70ad47;fontSize=14;fontStyle=1;spacing=10;" value="Parsed inventory&lt;br&gt;.csv" vertex="1">
+          <mxGeometry height="80" width="220" x="14" y="573" as="geometry" />
+        </mxCell>
+        <mxCell id="master" parent="1" style="shape=document;whiteSpace=wrap;html=1;boundedLbl=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=14;spacing=10;" value="&lt;b&gt;Master inventory&lt;/b&gt;&lt;br&gt;.ods or .xlsx&lt;br&gt;(source of truth)" vertex="1">
+          <mxGeometry height="90" width="220" x="420" y="292" as="geometry" />
+        </mxCell>
+        <mxCell id="prepare" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=14;spacing=10;" value="&lt;b&gt;3. Prepare master inventory&lt;/b&gt;&lt;br&gt;&lt;br&gt;prepare_master_inventory.py" vertex="1">
+          <mxGeometry height="90" width="220" x="420" y="423" as="geometry" />
+        </mxCell>
+        <mxCell id="prepared" parent="1" style="shape=document;whiteSpace=wrap;html=1;boundedLbl=1;fillColor=#fde9d9;strokeColor=#c55a11;fontSize=14;fontStyle=1;spacing=10;" value="Prepared master inventory&lt;br&gt;.csv" vertex="1">
+          <mxGeometry height="80" width="220" x="420" y="573" as="geometry" />
+        </mxCell>
+        <mxCell id="merge" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e4dfec;strokeColor=#9673a6;fontSize=14;spacing=10;" value="&lt;b&gt;4. Merge inventories&lt;/b&gt;&lt;br&gt;&lt;br&gt;merge_inventories.py" vertex="1">
+          <mxGeometry height="90" width="260" x="219" y="701" as="geometry" />
+        </mxCell>
+        <mxCell id="merged" parent="1" style="shape=document;whiteSpace=wrap;html=1;boundedLbl=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14;fontStyle=1;spacing=10;" value="Merged inventory&lt;br&gt;.csv" vertex="1">
+          <mxGeometry height="80" width="260" x="219" y="829" as="geometry" />
+        </mxCell>
+        <mxCell id="update_script" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=14;spacing=10;" value="&lt;b&gt;5a. Update master (Optional)&lt;/b&gt;&lt;br&gt;&lt;br&gt;update_master_inventory.py" vertex="1">
+          <mxGeometry height="90" width="240" x="14" y="969" as="geometry" />
+        </mxCell>
+        <mxCell id="updated" parent="1" style="shape=document;whiteSpace=wrap;html=1;boundedLbl=1;fillColor=#c6e0b4;strokeColor=#548235;fontSize=14;fontStyle=1;spacing=10;" value="Updated master copy&lt;br&gt;.ods or .xlsx" vertex="1">
+          <mxGeometry height="90" width="240" x="14" y="1107" as="geometry" />
+        </mxCell>
+        <mxCell id="export" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;spacing=10;" value="&lt;b&gt;5b. Export to NetBox&lt;/b&gt;&lt;br&gt;&lt;br&gt;export_to_netbox.py" vertex="1">
+          <mxGeometry height="90" width="240" x="410" y="969" as="geometry" />
+        </mxCell>
+        <mxCell id="netbox" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c6e0b4;strokeColor=#548235;fontSize=16;fontStyle=1;spacing=10;" value="NetBox 4.6+&lt;br&gt;&lt;span style=&quot;font-size:13px;font-weight:normal&quot;&gt;Central infrastructure inventory&lt;/span&gt;" vertex="1">
+          <mxGeometry height="90" width="240" x="410" y="1107" as="geometry" />
+        </mxCell>
+        <mxCell id="mapping" parent="1" style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;spacing=10;align=left;" value="&lt;b&gt;Mapping contract&lt;/b&gt;&lt;br&gt;netbox_mapping.yaml" vertex="1">
+          <mxGeometry height="70" width="190" x="690" y="910" as="geometry" />
+        </mxCell>
+        <mxCell id="env" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=13;spacing=10;align=left;" value="&lt;b&gt;Environment variables&lt;/b&gt;&lt;br&gt;NETBOX_URL&lt;br&gt;NETBOX_TOKEN" vertex="1">
+          <mxGeometry height="80" width="190" x="690" y="1059" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="nodes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;strokeWidth=2;fontColor=#333333;" target="rundeck" value="Collect data">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="rundeck" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;strokeWidth=2;fontColor=#333333;" target="raw" value="Output logs">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="raw" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;strokeWidth=2;fontColor=#333333;" target="parse">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="parse" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;strokeWidth=2;fontColor=#333333;" target="parsed" value="Normalized">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="master" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;strokeWidth=2;fontColor=#333333;" target="prepare">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="prepare" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;strokeWidth=2;fontColor=#333333;" target="prepared" value="Converted">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="parsed" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;strokeWidth=2;fontColor=#333333;" target="merge">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="124" y="672.06" />
+              <mxPoint x="304" y="672.06" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="prepared" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;strokeWidth=2;fontColor=#333333;" target="merge">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="530" y="672.06" />
+              <mxPoint x="394" y="672.06" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e9" edge="1" parent="1" source="merge" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;strokeWidth=2;fontColor=#333333;" target="merged">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="merged" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;strokeWidth=2;fontColor=#333333;" target="update_script">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="304" y="940" />
+              <mxPoint x="134" y="940" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="1" source="update_script" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;strokeWidth=2;fontColor=#333333;" target="updated">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" edge="1" parent="1" source="merged" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;strokeWidth=2;fontColor=#333333;" target="export">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="394" y="940" />
+              <mxPoint x="530" y="940" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e13" edge="1" parent="1" source="export" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;strokeWidth=2;fontColor=#333333;" target="netbox" value="Sync API">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e14" edge="1" parent="1" source="mapping" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;strokeWidth=2;dashed=1;fontColor=#333333;" target="export">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="724" y="1002.06" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e15" edge="1" parent="1" source="env" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;strokeWidth=2;dashed=1;fontColor=#333333;" target="export">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="724" y="1032.06" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -1,141 +1,176 @@
-# Datacenter Inventory Pipeline
+# 🏢 Datacenter Inventory Pipeline
 
-![Datacenter inventory pipeline](./assets/flujo_inventario_datacenter.png)
+[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![NetBox Integration](https://img.shields.io/badge/NetBox-4.6%2B-0060B8.svg)](https://netbox.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## Overview
+> **Automated, idempotent, and validated ETL pipeline to collect, consolidate, and synchronize physical and virtual datacenter infrastructure directly into NetBox.**
 
-This project implements an automated datacenter inventory pipeline that collects infrastructure metadata from remote nodes, normalizes the raw output, and merges it into a centralized, validated inventory. The process is driven by Rundeck for remote execution and by a Python-based ETL flow for cleaning, transforming, and consolidating data.
+---
 
-The pipeline is designed to answer a common operational need: keep an accurate and reproducible inventory of servers, virtual machines, hypervisors, networking details, OS information, hardware attributes, and BIOS metadata without relying on manual spreadsheets or ad hoc collection procedures.
+### About The Project
 
-The workflow follows the project’s actual operational architecture:
+Managing datacenter infrastructure across physical servers, hypervisors, and virtual machines often leads to fragmented data between runtime environments and static spreadsheets. 
 
-1. Rundeck executes a Bash script on each target node.
-2. Raw node metadata is collected in a semi-structured text format.
-3. A Python parser converts the output into a consistent CSV schema.
-4. A master inventory is prepared from an ODS source and normalized to CSV.
-5. The parsed output is merged into the master inventory using a controlled key-based join.
-6. The final result is a consolidated inventory ready for downstream use.
+This repository provides an end-to-end **Data Center Inventory ETL Pipeline** designed to bridge that gap. It automatically gathers hardware and system metadata from target nodes using **Rundeck**, cleanses and normalizes raw outputs, merges them deterministically against a master spreadsheet (source of truth), and idempotently synchronizes the consolidated inventory into **NetBox**.
+
+### Key Features
+
+* **Automated Data Collection:** Leverages Rundeck and shell collection agents (`asset_information.sh`) to query live OS, CPU, RAM, BIOS, network interfaces, and storage data.
+* **Master Spreadsheet Integration:** Processes `.ods` or `.xlsx` files seamlessly using LibreOffice, preserving manual metadata and extra columns.
+* **Controlled Merging:** Uses unique machine UUIDs as merge keys with configurable column update flags (`0`: preserve master, `1`: allow update, `2`: merge key).
+* **NetBox Synchronization:** Idempotent export stage powered by `pynetbox` with dry-run capabilities (`--dry-run`), mapping custom fields, roles, sites, interfaces, and IP allocations via a decoupled YAML contract (`netbox_mapping.yaml`).
+* **Strict Validation & Data Quality:** Atomic output handling, header contract checks, and rejection of malformed or duplicate keys.
+
+---
 
 ## Architecture and data flow
 
 The project follows the sequence represented in the diagram under the assets folder.
 
-```text
-Many nodes
-  |
-  v
-Rundeck job
-  |
-  v
-Combined raw output
-  |
-  v
-Parse output to CSV
-  |
-  v
-Prepare master inventory (ODS -> CSV)
-  |
-  v
-Merge / update master inventory
-  |
-  v
-Final consolidated inventory
+<img src="./assets/inventory_pipeline.png" alt="Datacenter inventory pipeline" width="60%">
+
+Generated `.log`, `.csv`, `.ods`, and `.xlsx` files are runtime artifacts and are ignored by Git. They are shown here only to describe the files passed between scripts.
+
+## Requirements
+
+- Python 3.10 or newer
+- `pip`
+- LibreOffice available as `libreoffice` or `soffice` in `PATH` for ODS/XLSX conversion and ODS updates
+- NetBox 4.6 or newer for the NetBox export stage
+
+Python dependencies are pinned in [`requirements.txt`](requirements.txt). The NetBox exporter uses `pynetbox`, `PyYAML`, `requests`, and `urllib3`; spreadsheet processing uses `openpyxl`.
+
+## Virtual environment setup
+
+Create and activate a project-local virtual environment from the repository root:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+Activate the environment again whenever a new shell is opened:
+
+```bash
+source .venv/bin/activate
+```
+
+The shell prompt normally shows `(.venv)` while the environment is active. To leave it, run:
+
+```bash
+deactivate
 ```
 
 ## Main components
 
-### 1) Rundeck collection script
+### Rundeck collection
 
-The Bash script `asset_information.sh` is the node-side collector. It is intended to be executed by Rundeck against datacenter machines and gathers information such as:
+[`asset_information.sh`](asset_information.sh) is executed on each target node by Rundeck. It collects machine identity, operating system, virtualization, network interfaces, CPU, memory, BIOS, DMI, storage, and related metadata. Its output is intended to be saved as a job result log.
 
-- machine name and type
-- host OS and version
-- hypervisor / virtualization signature
-- network interfaces and IP addresses
-- MAC addresses
-- CPU model, core, thread, socket counts
-- RAM
-- BIOS version and release date
-- system UUID
-- DMI / manufacturer / product metadata
-- disk and storage information, when available
+### Schema and merge rules
 
-The script is defensive and resilient: it resolves system paths under `/sys`, uses `dmidecode` when needed, normalizes values, handles command availability checks, and avoids failing the entire job on non-critical read errors. It also normalizes blanks and values such as N/A to keep the downstream CSV consistent.
-
-### 2) Schema definition
-
-The file `rundeck_header_list.txt` defines the output schema for the pipeline and the merge behavior. Each entry follows the pattern:
+[`rundeck_header_list.txt`](rundeck_header_list.txt) is the schema contract for collection, parsing, master preparation, and merging. Each entry uses:
 
 ```text
 COLUMN_NAME|FLAG
 ```
 
-Where:
+- `0`: preserve the master value and do not update it during the merge
+- `1`: allow a non-empty parsed value to update the master value
+- `2`: use the column as the unique merge key; exactly one such column must exist
 
-- `0` = column is preserved but not processed for update
-- `1` = column is included in the normal merge/update logic
-- `2` = column is the unique join key used to match rows between inventories
+The merge key is currently the machine UUID. The parsers resolve columns by name, so column order does not have to match.
 
-This file acts as the contract between the raw Rundeck output and the final inventory structure.
+### Raw-output parser
 
-### 3) Raw-output parser
+[`parse_job_output.py`](parse_job_output.py) converts Rundeck output into a normalized CSV. It accepts fields in any order, validates keys against `rundeck_header_list.txt`, rejects malformed or duplicate fields, fills missing processed values with `N/A`, and ignores lines that are not valid inventory rows.
 
-The Python script `parse_job_output.py` reads the text output from Rundeck and normalizes it into a CSV that matches the schema declared in `rundeck_header_list.txt`.
+### Master inventory preparation
 
-Key behaviors:
+[`prepare_master_inventory.py`](prepare_master_inventory.py) accepts an ODS or XLSX master spreadsheet, uses LibreOffice to convert it to CSV, locates and validates the real header, preserves additional columns, and writes a clean CSV for the merge stage.
 
-- it accepts fields in any order
-- it validates that every key in the raw output exists in `rundeck_header_list.txt`
-- it detects malformed rows and duplicate keys
-- it fills missing values with `N/A` when required
-- it emits a clean CSV ready for the next stage
+### Merge and consolidation
 
-The parser is intentionally strict: it fails fast when key names do not match the expected layout, which prevents silent corruption of the centralized inventory.
+[`merge_inventories.py`](merge_inventories.py) overlays the parsed inventory onto the prepared master inventory using the column flagged with `2`. It preserves every master row and extra column, updates only fields flagged with `1`, never overwrites the key, and excludes rows with invalid or duplicate keys from merging.
 
-### 4) Master inventory preparation
+### Optional master spreadsheet update
 
-The script `prepare_master_inventory.py` prepares the authoritative master inventory. In this project, the master inventory originates in ODS format and is converted to CSV for processing.
+[`update_master_inventory.py`](update_master_inventory.py) writes the merged values back to a copy of the original ODS or XLSX master spreadsheet. The original master is never modified. The output must use the same extension as the input. For ODS files, LibreOffice is required for the conversion round trip.
 
-This stage:
+### NetBox export
 
-- converts the ODS file to CSV using LibreOffice in headless mode
-- validates the header against `rundeck_header_list.txt`
-- checks that required columns exist in the master inventory
-- rejects duplicated headers or missing required fields
-- emits a clean master CSV while preserving extra columns that are not part of the merge model
+[`export_to_netbox.py`](export_to_netbox.py) is the downstream ETL stage. It reads the merged CSV and creates or updates NetBox Devices and Virtual Machines, along with the configured sites, cluster types, manufacturers, device types, platforms, racks, clusters, roles, custom fields, interfaces, and IP addresses.
 
-This means the master inventory remains the source of truth, while the parsed result enriches it without overwriting fields that should remain controlled.
+The exporter is idempotent: it primarily identifies existing Devices and Virtual Machines by the `inventory_uuid` custom field, using the object name as a fallback according to the script's identity rules. Rows whose machine type is not defined in the mapping are skipped. A row with inconsistent network column lengths still synchronizes its Device or VM, but its interfaces are skipped.
 
-### 5) Merge and consolidation
+### NetBox mapping contract
 
-The script `merge_inventories.py` is the core of the ETL merge step. It performs a left join-like merge between:
+[`netbox_mapping.yaml`](netbox_mapping.yaml) is the single source of truth for the mapping between `merged_inventory.csv` and NetBox. It defines:
 
-- the parsed inventory generated from Rundeck output
-- the master inventory prepared from the ODS master
+- the target site and cluster type
+- canonical device roles
+- machine type and environment choice sets and mappings
+- inventory status mappings and defaults
+- NetBox custom fields and their object types
+- native Device and Virtual Machine field mappings
+- network column mappings and interface status values
+- the exact inventory column names consumed by the exporter
+- values treated as empty and therefore omitted
 
-The logic is controlled by the single column flagged as `2` in `rundeck_header_list.txt`, which is the join key. In this project, the key is the machine UUID.
+Keep this file aligned with the merged CSV header. It is independent of `rundeck_header_list.txt`, which controls collection and merge behavior.
 
-Merge rules:
+## Usage
 
-- all rows from the master inventory are preserved
-- rows with empty, N/A, or non-settable keys are left untouched
-- duplicate keys are excluded from merging to avoid ambiguous updates
-- only non-empty values coming from the parsed inventory override matching fields flagged with `1`
-- the key field itself is never overwritten
+Run the stages from the repository root with the virtual environment active.
 
-This preserves the master inventory as the base while updating only the fields intended to be refreshed.
+```bash
+# 1. Parse the Rundeck job output
+python parse_job_output.py job_output.log parsed_job_output.csv
 
-### 6) Shared helper layer
+# 2. Prepare the master spreadsheet
+python prepare_master_inventory.py master_inventory.ods prepared_master_inventory.csv
 
-`base_inventory.py` centralizes the common CSV and validation utilities used by the three Python scripts. It provides functions for:
+# 3. Merge parsed data into the master CSV
+python merge_inventories.py parsed_job_output.csv prepared_master_inventory.csv merged_inventory.csv
 
-- validating `rundeck_header_list.txt`
-- parsing CSV values while respecting quoted fields
-- cleaning values and normalizing N/A conditions
-- identifying malformed lines and invalid data structures
+# 4. Optionally update a copy of the master spreadsheet
+python update_master_inventory.py merged_inventory.csv master_inventory.ods master_inventory_updated.ods
 
-This keeps the ETL logic consistent across parsing, master preparation, and final merge.
+# 5. Preview the NetBox synchronization
+python export_to_netbox.py merged_inventory.csv --dry-run
+
+# 6. Apply the synchronization to NetBox
+python export_to_netbox.py merged_inventory.csv
+```
+
+Each script also supports optional paths for its input and output files as described in its module help text. The NetBox mapping path is optional; by default, `export_to_netbox.py` loads `netbox_mapping.yaml` from the same directory as the script. A custom mapping can be provided as the second positional argument:
+
+```bash
+python export_to_netbox.py merged_inventory.csv custom_netbox_mapping.yaml --dry-run
+```
+
+Use `--verbose` with the exporter to enable DEBUG logging:
+
+```bash
+python export_to_netbox.py merged_inventory.csv --dry-run --verbose
+```
+
+## NetBox configuration
+
+The exporter requires these environment variables:
+
+```bash
+export NETBOX_URL="https://netbox.example.com"
+export NETBOX_TOKEN="<write-enabled-token>"
+export NETBOX_VERIFY_SSL="true"
+```
+
+`NETBOX_VERIFY_SSL` defaults to `true`; set it to `false` only when the deployment explicitly requires disabling certificate verification. The token must have write permissions for the NetBox areas used by the exporter, including `dcim`, `virtualization`, `ipam`, `extras`, and `core`.
+
+Never store `NETBOX_TOKEN` in `netbox_mapping.yaml`, source control, command history, or generated inventory files. Run `--dry-run` first to inspect the planned synchronization. The exporter exits with code `0` when no row-level errors occur and code `1` when at least one row produces an error.
 
 ## Project structure
 
@@ -143,75 +178,26 @@ This keeps the ETL logic consistent across parsing, master preparation, and fina
 .
 ├── asset_information.sh
 ├── base_inventory.py
-├── rundeck_header_list.txt
+├── export_to_netbox.py
 ├── merge_inventories.py
+├── netbox_mapping.yaml
 ├── parse_job_output.py
 ├── prepare_master_inventory.py
-├── assets/
-│   ├── flujo_inventario_datacenter.drawio
-│   └── flujo_inventario_datacenter.png
+├── rundeck_header_list.txt
+├── update_master_inventory.py
+├── requirements.txt
 ├── LICENSE
 ├── README.md
-└── .gitignore
+└── assets/
+  └── flujo_inventario_datacenter.drawio
 ```
 
-NOTE: `export_to_netbox.py` requires NetBox 4.6+
+## Data quality and security
 
-## Typical pipeline execution
+The pipeline validates required headers, rejects duplicate columns and malformed key-value fields, detects invalid or duplicate merge keys, and validates the mapping's required inventory columns before contacting NetBox. Temporary output files are replaced atomically where supported by the individual script.
 
-The expected flow is:
+Because the inventory contains infrastructure, network, hardware, and operating-system information, restrict access to Rundeck jobs, NetBox credentials, source spreadsheets, generated files, and logs. Avoid committing runtime artifacts or sensitive inventory data.
 
-1. Run the Bash inventory script against the fleet of servers using Rundeck.
-2. Save the raw output as a job result log.
-3. Parse the raw output with `parse_job_output.py`.
-4. Convert the master ODS inventory to CSV with `prepare_master_inventory.py`.
-5. Merge the parsed inventory into the master inventory with `merge_inventories.py`.
-6. Review the final CSV and use it as the centralized datacenter registry.
+## License
 
-Example usage:
-
-```bash
-python3 parse_job_output.py job_output.log parsed_job_output.csv
-python3 prepare_master_inventory.py master_inventory.ods
-python3 merge_inventories.py parsed_job_output.csv master_inventory.csv merged_inventory.csv
-```
-
-## Operational goals
-
-This project is designed to support infrastructure governance and operational awareness by providing:
-
-- an automatic inventory of datacenter nodes
-- a repeatable and auditable collection process
-- a standard schema for downstream automation
-- a safe merge model that preserves source-of-truth records
-- a centralized inventory for reporting, validation, and planning
-
-## Data quality and correctness constraints
-
-The scripts enforce stricter data-quality controls than a typical CSV importer:
-
-- required columns must exist in the expected source files
-- duplicate columns and duplicate IDs are treated as risk conditions
-- malformed key-value pairs are rejected
-- unknown fields in Rundeck output raise an error
-- invalid or duplicate merge keys are excluded from the update process
-
-This makes the pipeline safer for operational use, especially when the output becomes a trusted inventory record.
-
-## Security considerations
-
-Because the pipeline touches servers, hardware metadata, network information, and operating-system details, it is important to avoid exposing sensitive data in logs or repositories.
-
-Recommended practices:
-
-- keep credentials out of source control
-- restrict access to Rundeck jobs and target nodes
-- use secure transport or vaulted credentials for remote execution
-- avoid committing raw inventory outputs if they contain sensitive details
-- review job permissions and audit access to generated files
-
-## Summary
-
-This repository implements a practical ETL pipeline for datacenter inventory management. It combines Rundeck-driven system collection, strict schema normalization, master inventory validation, and controlled merge logic to generate a trustworthy centralized inventory from heterogeneous raw machine data.
-
-The design focuses on reliability, traceability, and repeatability, which are essential for infrastructure operations in medium or large datacenter environments.
+See [`LICENSE`](LICENSE).
