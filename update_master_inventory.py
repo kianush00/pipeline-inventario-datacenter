@@ -54,15 +54,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+import openpyxl
+from openpyxl.cell.cell import Cell, MergedCell
+from openpyxl.workbook.workbook import Workbook
+from openpyxl.worksheet.worksheet import Worksheet
+
 from base_inventory import error, strip_quotes, usage
 from merge_inventories import load_csv_data, validate_rows
 from prepare_master_inventory import find_libreoffice
-
-try:
-    import openpyxl
-except ImportError:
-    openpyxl = None
-
 
 SUPPORTED_EXTENSIONS = {".ods", ".xlsx"}
 
@@ -90,7 +89,7 @@ def normalize_value(value) -> str:
     return str(as_float)
 
 
-def coerce_for_cell(value_str: str):
+def coerce_for_cell(value_str: str) -> int | float | str | None:
     """
     Convierte un valor string proveniente del CSV al tipo Python
     más apropiado para escribirlo en una celda, preservando el
@@ -166,7 +165,7 @@ def convert_with_libreoffice(
 # LOCALIZAR HEADER Y CONTAR FILAS DE DATOS EN EL MAESTRO
 # ============================================================
 
-def find_header_row_number(ws, merged_header: list[str]) -> int | None:
+def find_header_row_number(ws: Worksheet, merged_header: list[str]) -> int | None:
     """
     Busca la primera fila cuyo contenido, en el mismo orden,
     coincida EXACTAMENTE con merged_header. Esto valida a la vez
@@ -189,7 +188,7 @@ def find_header_row_number(ws, merged_header: list[str]) -> int | None:
     return None
 
 
-def count_master_data_rows(ws, header_row_number: int, n_cols: int) -> int:
+def count_master_data_rows(ws: Worksheet, header_row_number: int, n_cols: int) -> int:
     """
     Cuenta filas de datos a partir de header_row_number + 1,
     considerando como límite la última fila con al menos un valor
@@ -214,6 +213,32 @@ def count_master_data_rows(ws, header_row_number: int, n_cols: int) -> int:
 # ACTUALIZAR UN ARCHIVO XLSX (EDICIÓN DIRECTA)
 # ============================================================
 
+def get_active_worksheet(wb: Workbook) -> Worksheet:
+    """Obtiene la hoja de cálculo activa de un libro de trabajo."""
+    ws = wb.active
+
+    if not isinstance(ws, Worksheet):
+        error(
+            "El spreadsheet no contiene una hoja de cálculo activa "
+            "válida para actualizar."
+        )
+
+    return ws
+
+
+def get_cell(ws: Worksheet, row: int, column: int) -> Cell:
+    """Obtiene una celda normal y rechaza celdas combinadas."""
+    cell = ws.cell(row=row, column=column)
+
+    if isinstance(cell, MergedCell):
+        error(
+            "No se puede actualizar una celda combinada "
+            f"en {column_letter(column - 1)}{row}."
+        )
+
+    return cell
+
+
 def update_xlsx(
     path: Path,
     merged_header: list[str],
@@ -226,10 +251,9 @@ def update_xlsx(
     {nombre_columna: [direcciones_de_celda_modificadas]}.
     """
     wb = openpyxl.load_workbook(path)
-    ws = wb.active
+    ws = get_active_worksheet(wb)
 
     n_cols = len(merged_header)
-
     header_row_number = find_header_row_number(ws, merged_header)
     if header_row_number is None:
         error(
@@ -259,13 +283,13 @@ def update_xlsx(
     for row_offset, merged_row in enumerate(merged_rows):
         sheet_row_number = first_data_row + row_offset
         for col_idx in range(n_cols):
-            cell = ws.cell(row=sheet_row_number, column=col_idx + 1)
+            cell = get_cell(ws, sheet_row_number, col_idx + 1)
             current_norm = normalize_value(cell.value)
             new_value_str = merged_row[col_idx]
             new_norm = normalize_value(new_value_str)
 
             if current_norm == new_norm:
-                continue
+                continue    # No hay cambio, no sobrescribir.
 
             cell.value = coerce_for_cell(new_value_str)
 
@@ -325,13 +349,6 @@ def main() -> None:
             "merged_inventory.csv "
             "master_inventory.(ods|xlsx) "
             "[master_inventory_updated.(ods|xlsx)]"
-        )
-
-    if openpyxl is None:
-        error(
-            "No se pudo importar la dependencia 'openpyxl'.\n"
-            "Verifique que el entorno virtual .venv esté activado:\n"
-            "  source .venv/bin/activate"
         )
 
     merged_csv_path = Path(sys.argv[1])

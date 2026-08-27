@@ -183,10 +183,7 @@ def main() -> None:
         for index, (name, _flag) in enumerate(rundeck_header_list)
     }
 
-    header_flags = {
-        name: flag
-        for name, flag in rundeck_header_list
-    }
+    header_flags = dict(rundeck_header_list)
 
     # --------------------------------------------------------
     # Construir la línea de header del CSV de salida.
