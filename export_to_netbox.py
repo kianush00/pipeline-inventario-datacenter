@@ -379,7 +379,7 @@ def ensure_manufacturer(
 
 def ensure_device_type(
     endpoints: NetBoxEndpoints,
-    manufacturer: Any,
+    manufacturer: NetBoxObject,
     model: str,
     u_height: int,
     cache: dict[tuple[str, str], NetBoxObject],
@@ -445,7 +445,7 @@ def ensure_platform(
 def ensure_rack(
     endpoints: NetBoxEndpoints,
     name: str,
-    site: Any,
+    site: NetBoxObject,
     cache: dict[str, NetBoxObject],
     dry_run: bool,
 ) -> NetBoxObject:
@@ -474,8 +474,8 @@ def ensure_rack(
 def ensure_cluster(
     endpoints: NetBoxEndpoints,
     name: str,
-    cluster_type: Any,
-    site: Any,
+    cluster_type: NetBoxObject,
+    site: NetBoxObject,
     cache: dict[str, NetBoxObject],
     dry_run: bool,
 ) -> NetBoxObject:
@@ -516,45 +516,46 @@ def ensure_cluster(
 
 
 def _get_object_type_id(
-    object_types_endpoint: Endpoint,
-    app_model: str,
-    cache: dict[str, int],
+    ots_endpoint: Endpoint,
+    object_type: str,
+    ot_cache: dict[str, int],
 ) -> int | None:
     """Obtiene el ID de Object Type en NetBox para un app_label.model dado."""
-    if app_model in cache:
-        return cache[app_model]
+    if object_type in ot_cache:
+        return ot_cache[object_type]
 
-    if "." not in app_model:
+    if "." not in object_type:
         log.warning(
             "Formato de Object Type inválido: %s. Se esperaba 'app_label.model'.",
-            app_model,
+            object_type,
         )
         return None
 
-    app_label, model = app_model.split(".", 1)
+    app_label, model = object_type.split(".", 1)
 
     try:
         results: list[Record] = list(
-            object_types_endpoint.filter(
+            ots_endpoint.filter(
                 app_label=app_label,
                 model=model,
             )
         )
     except Exception:
         log.exception(
-            "Error consultando Object Type '%s' en '/api/core/object-types/'", app_model
+            "Error consultando Object Type '%s' en '/api/core/object-types/'",
+            object_type,
         )
         return None
 
     if not results:
         log.warning(
             "Object Type no encontrado en NetBox: %s",
-            app_model,
+            object_type,
         )
         return None
 
     ot_id = get_netbox_object_id(results[0])
-    cache[app_model] = ot_id
+    ot_cache[object_type] = ot_id
     return ot_id
 
 
@@ -602,7 +603,7 @@ def _normalize_choices(choices: Any) -> list[list[str]]:
 
 
 def _ensure_choice_set(
-    choice_sets_endpoint: Any,
+    choice_sets_endpoint: Endpoint,
     existing_choice_sets: dict,
     choice_set_cfg: dict,
     dry_run: bool,
@@ -620,10 +621,13 @@ def _ensure_choice_set(
             return 0
 
         try:
-            choice_set = choice_sets_endpoint.create(
-                name=choice_set_name,
-                extra_choices=choices,
-                order_alphabetically=False,
+            choice_set = cast(
+                Record,
+                choice_sets_endpoint.create(
+                    name=choice_set_name,
+                    extra_choices=choices,
+                    order_alphabetically=False,
+                ),
             )
         except Exception:
             log.exception(
@@ -639,7 +643,7 @@ def _ensure_choice_set(
         )
         return choice_set.id
 
-    current_choices = _normalize_choices(getattr(choice_set, "extra_choices", None))
+    current_choices = _normalize_choices(choice_set.extra_choices)
 
     if current_choices != choices:
         if dry_run:
@@ -1299,8 +1303,8 @@ def sync_device(
     endpoints: NetBoxEndpoints,
     row: dict[str, str],
     config: dict[str, Any],
-    site: Any,
-    cluster_type: Any,
+    site: NetBoxObject,
+    cluster_type: NetBoxObject,
     caches: CacheStore,
     dry_run: bool,
 ) -> str:
@@ -1446,8 +1450,8 @@ def sync_vm(
     endpoints: NetBoxEndpoints,
     row: dict[str, str],
     config: dict[str, Any],
-    site: Any,
-    cluster_type: Any,
+    site: NetBoxObject,
+    cluster_type: NetBoxObject,
     caches: CacheStore,
     dry_run: bool,
 ) -> str:
