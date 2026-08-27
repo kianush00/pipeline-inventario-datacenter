@@ -39,13 +39,14 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypeAlias, TypedDict, cast
 
 import pynetbox
 import requests
 import urllib3
 import yaml
 from pynetbox.core.endpoint import Endpoint
+from pynetbox.core.response import Record
 
 # ============================================================
 # LOGGER
@@ -66,10 +67,10 @@ log = logging.getLogger("export_to_netbox")
 EMPTY_VALUES: set[str] = set()
 INVENTORY_COLUMNS: dict[str, str] = {}
 
-
 # ============================================================
 # ENDPOINTS DE NETBOX
 # ============================================================
+
 
 @dataclass(frozen=True)
 class NetBoxEndpoints:
@@ -91,9 +92,26 @@ class NetBoxEndpoints:
     ip_addresses: Endpoint
 
 
+# ===========================================================
+# CACHE DE DATOS
+# ===========================================================
+
+NetBoxObject: TypeAlias = Record | dict[str, Any]
+
+
+class CacheStore(TypedDict):
+    manufacturers: dict[str, NetBoxObject]
+    device_types: dict[tuple[str, str], NetBoxObject]
+    platforms: dict[str, NetBoxObject]
+    racks: dict[str, NetBoxObject]
+    clusters: dict[str, NetBoxObject]
+    device_roles: dict[str, NetBoxObject]
+
+
 # ============================================================
 # CARGA DE CONFIGURACIÓN
 # ============================================================
+
 
 def load_config(mapping_path: Path) -> dict[str, Any]:
     if not mapping_path.is_file():
@@ -120,6 +138,7 @@ def load_env() -> tuple[str, str, bool]:
 # ============================================================
 # CLIENTE PYNETBOX
 # ============================================================
+
 
 def build_nb_client(url: str, token: str, verify_ssl: bool) -> pynetbox.api:
     if not verify_ssl:
@@ -182,6 +201,7 @@ def build_netbox_endpoints(nb: pynetbox.api) -> NetBoxEndpoints:
 # UTILIDADES
 # ============================================================
 
+
 def slugify(name: str) -> str:
     """Genera un slug válido para NetBox desde un nombre."""
     slug = name.lower().strip()
@@ -193,12 +213,14 @@ def slugify(name: str) -> str:
 
 
 def is_empty(value: Any) -> bool:
+    """Determina si un valor es considerado vacío según EMPTY_VALUES."""
     if value is None:
         return True
     return str(value).strip() in EMPTY_VALUES
 
 
 def safe_int(value: Any) -> int | None:
+    """Convierte un valor a int, retornando None si no es convertible."""
     try:
         return int(str(value).strip())
     except (ValueError, TypeError):
@@ -215,7 +237,10 @@ def safe_int_gb_to_mb(value: Any) -> int | None:
 
 
 def safe_bool_si_no(value: Any) -> bool | None:
-    """'si'/'sí' → True, 'no' → False, otro → None."""
+    """
+    Convierte un valor a booleano según reglas específicas de 'si/no'.
+    'si'/'sí' → True, 'no' → False, otro → None.
+    """
     v = str(value).strip().lower()
     if v in ("si", "sí", "yes", "true", "1"):
         return True
@@ -225,6 +250,7 @@ def safe_bool_si_no(value: Any) -> bool | None:
 
 
 def apply_cast(value: Any, cast: str) -> Any:
+    """Aplica un cast específico a un valor según la definición del campo."""
     if cast == "int":
         return safe_int(value)
     if cast == "int_gb_to_mb":
@@ -243,6 +269,7 @@ def concat_dot(parts: list[str]) -> str:
 # ============================================================
 # LEER CSV
 # ============================================================
+
 
 def read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     """
@@ -268,15 +295,26 @@ def read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
 # TAXONOMÍA: ensure_* (GET o CREATE)
 # ============================================================
 
+
+def get_netbox_object_id(obj: NetBoxObject) -> int:
+    if isinstance(obj, dict):
+        return int(obj.get("id", 0))
+    obj_id = obj.id
+    if obj_id is None:
+        return 0
+    return int(obj_id)
+
+
 def ensure_site(
     endpoints: NetBoxEndpoints,
     cfg: dict[str, Any],
     dry_run: bool,
-) -> Any:
+) -> NetBoxObject:
+    """Garantiza que el Site definido en el YAML exista en NetBox."""
     name = cfg["site"]["name"]
     slug = cfg["site"].get("slug") or slugify(name)
 
-    results = list(endpoints.sites.filter(name=name))
+    results: list[Record] = list(endpoints.sites.filter(name=name))
     if results:
         return results[0]
 
@@ -284,12 +322,15 @@ def ensure_site(
         log.info("[DRY-RUN] Crearía Site: %s", name)
         return {"id": 0, "name": name}
 
-    obj = endpoints.sites.create(name=name, slug=slug)
+    obj = cast(Record, endpoints.sites.create(name=name, slug=slug))
     log.info("Site creado: %s", name)
     return obj
 
 
-def ensure_cluster_type(endpoints: NetBoxEndpoints, cfg: dict[str, Any], dry_run: bool) -> Any:
+def ensure_cluster_type(
+    endpoints: NetBoxEndpoints, cfg: dict[str, Any], dry_run: bool
+) -> NetBoxObject:
+    """Garantiza que el ClusterType definido en el YAML exista en NetBox."""
     name = cfg["cluster_type"]["name"]
     slug = cfg["cluster_type"].get("slug") or slugify(name)
 
@@ -301,18 +342,19 @@ def ensure_cluster_type(endpoints: NetBoxEndpoints, cfg: dict[str, Any], dry_run
         log.info("[DRY-RUN] Crearía ClusterType: %s", name)
         return {"id": 0, "name": name}
 
-    obj = endpoints.cluster_types.create(name=name, slug=slug)
+    obj = cast(Record, endpoints.cluster_types.create(name=name, slug=slug))
     log.info("ClusterType creado: %s", name)
     return obj
 
 
 def ensure_manufacturer(
-    endpoints: NetBoxEndpoints, name: str, cache: dict[str, Any], dry_run: bool
-) -> Any:
+    endpoints: NetBoxEndpoints, name: str, cache: dict[str, NetBoxObject], dry_run: bool
+) -> NetBoxObject:
+    """Garantiza que el Manufacturer exista en NetBox."""
     if name in cache:
         return cache[name]
 
-    results = list(endpoints.manufacturers.filter(name=name))
+    results: list[Record] = list(endpoints.manufacturers.filter(name=name))
     if results:
         cache[name] = results[0]
         return results[0]
@@ -323,7 +365,13 @@ def ensure_manufacturer(
         cache[name] = obj
         return obj
 
-    obj = endpoints.manufacturers.create(name=name, slug=slugify(name))
+    obj = cast(
+        Record,
+        endpoints.manufacturers.create(
+            name=name,
+            slug=slugify(name),
+        ),
+    )
     log.info("Manufacturer creado: %s", name)
     cache[name] = obj
     return obj
@@ -334,15 +382,18 @@ def ensure_device_type(
     manufacturer: Any,
     model: str,
     u_height: int,
-    cache: dict,
+    cache: dict[tuple[str, str], NetBoxObject],
     dry_run: bool,
-) -> Any:
-    key = (str(getattr(manufacturer, "id", manufacturer.get("id", 0))), model)
+) -> NetBoxObject:
+    """Garantiza que el DeviceType exista en NetBox."""
+    manufacturer_id = get_netbox_object_id(manufacturer)
+    key = (str(manufacturer_id), model)
     if key in cache:
         return cache[key]
 
-    manufacturer_id = getattr(manufacturer, "id", manufacturer.get("id", 0))
-    results = list(endpoints.device_types.filter(model=model, manufacturer_id=manufacturer_id))
+    results: list[Record] = list(
+        endpoints.device_types.filter(model=model, manufacturer_id=manufacturer_id)
+    )
     if results:
         cache[key] = results[0]
         return results[0]
@@ -353,11 +404,14 @@ def ensure_device_type(
         cache[key] = obj
         return obj
 
-    obj = endpoints.device_types.create(
-        model=model,
-        slug=slugify(model),
-        manufacturer=manufacturer_id,
-        u_height=u_height or 1,
+    obj = cast(
+        Record,
+        endpoints.device_types.create(
+            model=model,
+            slug=slugify(model),
+            manufacturer=manufacturer_id,
+            u_height=u_height or 1,
+        ),
     )
     log.info("DeviceType creado: %s / %s", getattr(manufacturer, "name", "?"), model)
     cache[key] = obj
@@ -365,15 +419,13 @@ def ensure_device_type(
 
 
 def ensure_platform(
-    endpoints: NetBoxEndpoints, 
-    name: str, 
-    cache: dict, 
-    dry_run: bool
-) -> Any:
+    endpoints: NetBoxEndpoints, name: str, cache: dict[str, NetBoxObject], dry_run: bool
+) -> NetBoxObject:
+    """Garantiza que el Platform exista en NetBox."""
     if name in cache:
         return cache[name]
 
-    results = list(endpoints.platforms.filter(name=name))
+    results: list[Record] = list(endpoints.platforms.filter(name=name))
     if results:
         cache[name] = results[0]
         return results[0]
@@ -384,20 +436,25 @@ def ensure_platform(
         cache[name] = obj
         return obj
 
-    obj = endpoints.platforms.create(name=name, slug=slugify(name))
+    obj = cast(Record, endpoints.platforms.create(name=name, slug=slugify(name)))
     log.info("Platform creado: %s", name)
     cache[name] = obj
     return obj
 
 
 def ensure_rack(
-    endpoints: NetBoxEndpoints, name: str, site: Any, cache: dict, dry_run: bool
-) -> Any:
+    endpoints: NetBoxEndpoints,
+    name: str,
+    site: Any,
+    cache: dict[str, NetBoxObject],
+    dry_run: bool,
+) -> NetBoxObject:
+    """Garantiza que el Rack exista en NetBox."""
     if name in cache:
         return cache[name]
 
-    site_id = getattr(site, "id", site.get("id", 0))
-    results = list(endpoints.racks.filter(name=name, site_id=site_id))
+    site_id = get_netbox_object_id(site)
+    results: list[Record] = list(endpoints.racks.filter(name=name, site_id=site_id))
     if results:
         cache[name] = results[0]
         return results[0]
@@ -408,7 +465,7 @@ def ensure_rack(
         cache[name] = obj
         return obj
 
-    obj = endpoints.racks.create(name=name, site=site_id)
+    obj = cast(Record, endpoints.racks.create(name=name, site=site_id))
     log.info("Rack creado: %s", name)
     cache[name] = obj
     return obj
@@ -419,19 +476,20 @@ def ensure_cluster(
     name: str,
     cluster_type: Any,
     site: Any,
-    cache: dict,
+    cache: dict[str, NetBoxObject],
     dry_run: bool,
-) -> Any:
+) -> NetBoxObject:
+    """Garantiza que el Cluster exista en NetBox."""
     if name in cache:
         return cache[name]
 
-    results = list(endpoints.clusters.filter(name=name))
+    results: list[Record] = list(endpoints.clusters.filter(name=name))
     if results:
         cache[name] = results[0]
         return results[0]
 
-    cluster_type_id = getattr(cluster_type, "id", cluster_type.get("id", 0))
-    site_id = getattr(site, "id", site.get("id", 0))
+    cluster_type_id = get_netbox_object_id(cluster_type)
+    site_id = get_netbox_object_id(site)
 
     if dry_run:
         log.info("[DRY-RUN] Crearía Cluster: %s", name)
@@ -439,10 +497,13 @@ def ensure_cluster(
         cache[name] = obj
         return obj
 
-    obj = endpoints.clusters.create(
-        name=name,
-        type=cluster_type_id,
-        site=site_id,
+    obj = cast(
+        Record,
+        endpoints.clusters.create(
+            name=name,
+            type=cluster_type_id,
+            site=site_id,
+        ),
     )
     log.info("Cluster creado: %s", name)
     cache[name] = obj
@@ -453,18 +514,19 @@ def ensure_cluster(
 # CUSTOM FIELDS: ensure_custom_fields
 # ============================================================
 
+
 def _get_object_type_id(
-    object_types_endpoint: Any,
+    object_types_endpoint: Endpoint,
     app_model: str,
     cache: dict[str, int],
 ) -> int | None:
+    """Obtiene el ID de Object Type en NetBox para un app_label.model dado."""
     if app_model in cache:
         return cache[app_model]
 
     if "." not in app_model:
         log.warning(
-            "Formato de Object Type inválido: %s. "
-            "Se esperaba 'app_label.model'.",
+            "Formato de Object Type inválido: %s. Se esperaba 'app_label.model'.",
             app_model,
         )
         return None
@@ -472,7 +534,7 @@ def _get_object_type_id(
     app_label, model = app_model.split(".", 1)
 
     try:
-        results = list(
+        results: list[Record] = list(
             object_types_endpoint.filter(
                 app_label=app_label,
                 model=model,
@@ -480,9 +542,7 @@ def _get_object_type_id(
         )
     except Exception:
         log.exception(
-            "Error consultando Object Type '%s' "
-            "en '/api/core/object-types/'",
-            app_model
+            "Error consultando Object Type '%s' en '/api/core/object-types/'", app_model
         )
         return None
 
@@ -493,29 +553,29 @@ def _get_object_type_id(
         )
         return None
 
-    ot_id = results[0].id
+    ot_id = get_netbox_object_id(results[0])
     cache[app_model] = ot_id
     return ot_id
 
 
 def _build_custom_field_definitions(cfg: dict[str, Any]) -> list[dict[str, Any]]:
-    cf_definitions: list[dict[str, Any]] = list(
-        cfg.get("custom_fields", [])
-    )
+    cf_definitions: list[dict[str, Any]] = list(cfg.get("custom_fields", []))
 
     for special_key in ("machine_type", "environment"):
         special_def = cfg.get(special_key)
         if not special_def:
             continue
 
-        cf_definitions.append({
-            "name": special_def["field_name"],
-            "label": special_def.get("label", special_def["field_name"]),
-            "type": special_def.get("type", "text"),
-            "required": special_def.get("required", False),
-            "object_types": special_def.get("object_types", []),
-            "choice_set": special_def.get("choice_set"),
-        })
+        cf_definitions.append(
+            {
+                "name": special_def["field_name"],
+                "label": special_def.get("label", special_def["field_name"]),
+                "type": special_def.get("type", "text"),
+                "required": special_def.get("required", False),
+                "object_types": special_def.get("object_types", []),
+                "choice_set": special_def.get("choice_set"),
+            }
+        )
 
     return cf_definitions
 
@@ -579,9 +639,7 @@ def _ensure_choice_set(
         )
         return choice_set.id
 
-    current_choices = _normalize_choices(
-        getattr(choice_set, "extra_choices", None)
-    )
+    current_choices = _normalize_choices(getattr(choice_set, "extra_choices", None))
 
     if current_choices != choices:
         if dry_run:
@@ -591,10 +649,12 @@ def _ensure_choice_set(
             )
         else:
             try:
-                choice_set.update({
-                    "extra_choices": choices,
-                    "order_alphabetically": False,
-                })
+                choice_set.update(
+                    {
+                        "extra_choices": choices,
+                        "order_alphabetically": False,
+                    }
+                )
                 log.info(
                     "Choice Set actualizado: %s",
                     choice_set_name,
@@ -629,7 +689,8 @@ def _ensure_custom_field(
     if dry_run:
         log.info(
             "[DRY-RUN] Crearía custom field: %s (%s)",
-            name, cf_def.get("type"),
+            name,
+            cf_def.get("type"),
         )
         return
 
@@ -649,17 +710,11 @@ def _ensure_custom_field(
         create_kwargs["default"] = default_value
 
     try:
-        custom_fields_endpoint.create(
-            **create_kwargs
-        )
-        existing_cfs[name] = True   # marcar como existente
-        log.info(
-            "Custom field creado: %s", name
-        )
+        custom_fields_endpoint.create(**create_kwargs)
+        existing_cfs[name] = True  # marcar como existente
+        log.info("Custom field creado: %s", name)
     except Exception:
-        log.exception(
-            "Error al crear custom field '%s'", name
-        )
+        log.exception("Error al crear custom field '%s'", name)
 
 
 def ensure_custom_fields(
@@ -685,19 +740,11 @@ def ensure_custom_fields(
     - Los Choice Sets se gestionan mediante
     /api/extras/custom-field-choice-sets/.
     """
-    object_types_endpoint = endpoints.object_types
-    custom_fields_endpoint = endpoints.custom_fields
-    choice_sets_endpoint = endpoints.choice_sets
-
     # Obtener Custom Fields y Choice Sets existentes.
-    existing_cfs = {
-        cf.name: cf
-        for cf in custom_fields_endpoint.all()
-    }
+    existing_cfs = {cf.name: cf for cf in endpoints.custom_fields.all()}
 
     existing_choice_sets = {
-        choice_set.name: choice_set
-        for choice_set in choice_sets_endpoint.all()
+        choice_set.name: choice_set for choice_set in endpoints.choice_sets.all()
     }
 
     # Construir mapa nombre → ID de Object Type.
@@ -713,7 +760,7 @@ def ensure_custom_fields(
     for cf_def in cf_definitions:
         ot_ids = [
             _get_object_type_id(
-                object_types_endpoint,
+                endpoints.object_types,
                 ot,
                 object_type_cache,
             )
@@ -726,7 +773,7 @@ def ensure_custom_fields(
 
         if cf_def.get("type") == "selection" and choice_set_cfg:
             choice_set_id = _ensure_choice_set(
-                choice_sets_endpoint,
+                endpoints.choice_sets,
                 existing_choice_sets,
                 choice_set_cfg,
                 dry_run,
@@ -736,18 +783,19 @@ def ensure_custom_fields(
                 continue
 
         _ensure_custom_field(
-            custom_fields_endpoint,
+            endpoints.custom_fields,
             existing_cfs,
             cf_def,
             ot_ids,
             choice_set_id,
             dry_run,
         )
-    
+
 
 # ============================================================
 # PARSEO DE RED
 # ============================================================
+
 
 def parse_network_interfaces(
     row: dict[str, str],
@@ -768,11 +816,11 @@ def parse_network_interfaces(
         return [v.strip() for v in raw.split(",")]
 
     cols = net_cfg["columns"]
-    names   = split_col(cols["names"])
+    names = split_col(cols["names"])
     statuses = split_col(cols["status"])
-    ips     = split_col(cols["ip"])
+    ips = split_col(cols["ip"])
     prefixes = split_col(cols["prefix"])
-    macs    = split_col(cols["mac"])
+    macs = split_col(cols["mac"])
 
     if not names:
         return []
@@ -787,9 +835,9 @@ def parse_network_interfaces(
         return lst + [""] * (max_len - len(lst))
 
     statuses = pad(statuses)
-    ips      = pad(ips)
+    ips = pad(ips)
     prefixes = pad(prefixes)
-    macs     = pad(macs)
+    macs = pad(macs)
 
     interfaces = []
     for i, name in enumerate(names):
@@ -799,9 +847,9 @@ def parse_network_interfaces(
         status_raw = statuses[i].lower().strip()
         enabled = status_map.get(status_raw, True)
 
-        ip_raw   = ips[i]     if ips[i] not in EMPTY_VALUES     else None
-        pfx_raw  = prefixes[i] if prefixes[i] not in EMPTY_VALUES else None
-        mac_raw  = macs[i]    if macs[i] not in EMPTY_VALUES    else None
+        ip_raw = ips[i] if ips[i] not in EMPTY_VALUES else None
+        pfx_raw = prefixes[i] if prefixes[i] not in EMPTY_VALUES else None
+        mac_raw = macs[i] if macs[i] not in EMPTY_VALUES else None
 
         # Construir dirección CIDR si tenemos IP y prefijo.
         cidr = None
@@ -812,14 +860,16 @@ def parse_network_interfaces(
             except IndexError:
                 cidr = None
 
-        interfaces.append({
-            "name":    name,
-            "enabled": enabled,
-            "mac":     mac_raw,
-            "ip":      ip_raw,
-            "prefix":  pfx_raw,
-            "cidr":    cidr,
-        })
+        interfaces.append(
+            {
+                "name": name,
+                "enabled": enabled,
+                "mac": mac_raw,
+                "ip": ip_raw,
+                "prefix": pfx_raw,
+                "cidr": cidr,
+            }
+        )
 
     return interfaces
 
@@ -828,10 +878,11 @@ def parse_network_interfaces(
 # SINCRONIZACIÓN DE INTERFACES
 # ============================================================
 
+
 def sync_interfaces_for_object(
     endpoints: NetBoxEndpoints,
     obj_id: int,
-    obj_type: str,   # "device" | "virtual_machine"
+    obj_type: Literal["device", "virtual_machine"],
     interfaces: list[dict],
     dry_run: bool,
 ) -> None:
@@ -839,25 +890,25 @@ def sync_interfaces_for_object(
 
     if obj_type == "device":
         iface_endpoint = endpoints.device_interfaces
-        iface_filter   = {"device_id": obj_id}
+        iface_filter = {"device_id": obj_id}
     else:
         iface_endpoint = endpoints.vm_interfaces
-        iface_filter   = {"virtual_machine_id": obj_id}
+        iface_filter = {"virtual_machine_id": obj_id}
 
     existing = {iface.name: iface for iface in iface_endpoint.filter(**iface_filter)}
 
     for iface_data in interfaces:
-        name    = iface_data["name"]
+        name = iface_data["name"]
         enabled = iface_data["enabled"]
-        mac     = iface_data["mac"]
-        cidr    = iface_data["cidr"]
+        mac = iface_data["mac"]
+        cidr = iface_data["cidr"]
 
         payload: dict[str, Any] = {"name": name, "enabled": enabled}
         if mac:
             payload["mac_address"] = mac.upper()
         if obj_type == "device":
             payload["device"] = obj_id
-            payload["type"]   = "other"   # tipo genérico; ajustable
+            payload["type"] = "other"  # tipo genérico; ajustable
         else:
             payload["virtual_machine"] = obj_id
 
@@ -891,7 +942,7 @@ def _assign_ip(
     endpoints: NetBoxEndpoints,
     cidr: str,
     iface_obj: Any,
-    obj_type: str,
+    obj_type: Literal["device", "virtual_machine"],
 ) -> None:
     """Crea o actualiza una IP address en NetBox y la asigna a la interfaz."""
     if obj_type == "device":
@@ -903,10 +954,12 @@ def _assign_ip(
     if existing:
         ip_obj = existing[0]
         try:
-            ip_obj.update({
-                "assigned_object_type": assigned_type,
-                "assigned_object_id":   iface_obj.id,
-            })
+            ip_obj.update(
+                {
+                    "assigned_object_type": assigned_type,
+                    "assigned_object_id": iface_obj.id,
+                }
+            )
         except Exception:
             log.exception("Error actualizando IP %s", cidr)
     else:
@@ -924,6 +977,7 @@ def _assign_ip(
 # ============================================================
 # NORMALIZACIÓN DE VALORES DE FILA
 # ============================================================
+
 
 def _get_custom_field_definition(
     target: str,
@@ -959,11 +1013,7 @@ def resolve_field_value(
     map_key: str | None = field_def.get("map")
 
     custom_field_def = _get_custom_field_definition(target, config)
-    default = (
-        custom_field_def.get("default")
-        if custom_field_def is not None
-        else None
-    )
+    default = custom_field_def.get("default") if custom_field_def is not None else None
 
     # Transformación multi-source (concat_dot).
     if isinstance(source, list) and transform == "concat_dot":
@@ -1001,6 +1051,7 @@ def resolve_field_value(
 # ============================================================
 # CONSTRUCCIÓN DE PAYLOAD
 # ============================================================
+
 
 def build_payload(
     row: dict[str, str],
@@ -1053,6 +1104,7 @@ def get_internal_field(
 # RESOLVER STATUS
 # ============================================================
 
+
 def resolve_netbox_status(
     row: dict[str, str],
     config: dict,
@@ -1079,11 +1131,12 @@ def resolve_netbox_status(
 # RESOLVER PLATFORM
 # ============================================================
 
+
 def resolve_platform(
     endpoints: NetBoxEndpoints,
     row: dict[str, str],
     payload: dict[str, Any],
-    caches: dict[str, dict],
+    caches: CacheStore,
     dry_run: bool,
 ) -> None:
     """Resuelve el Platform desde la columna OS y lo agrega al payload si existe."""
@@ -1095,22 +1148,19 @@ def resolve_platform(
             caches["platforms"],
             dry_run,
         )
-        payload["platform"] = getattr(
-            platform,
-            "id",
-            platform.get("id", 0),
-        )
+        payload["platform"] = get_netbox_object_id(platform)
 
 
 # ============================================================
 # BUSCAR OBJETO POR UUID Y NOMBRE
 # ============================================================
 
+
 def find_existing_object(
     uuid: str,
     machine_name: str,
-    endpoint: Any,
-) -> tuple[list[Any], bool, bool]:
+    endpoint: Endpoint,
+) -> tuple[list[Record], bool, bool]:
     """
     Busca un objeto primero por UUID y luego por nombre.
 
@@ -1122,18 +1172,14 @@ def find_existing_object(
     - UUID presente + no encontrado por UUID -> buscar por nombre.
     - UUID vacío -> buscar directamente por nombre.
     """
-    existing: list[Any] = []
+    existing: list[Record] = []
     found_by_uuid = False
     found_by_name = False
     if not is_empty(uuid):
-        existing = list(
-            endpoint.filter(cf_inventory_uuid=uuid)
-        )
+        existing = list(endpoint.filter(cf_inventory_uuid=uuid))
         found_by_uuid = bool(existing)
     if not existing:
-        existing_by_name = list(
-            endpoint.filter(name=machine_name)
-        )
+        existing_by_name: list[Record] = list(endpoint.filter(name=machine_name))
         found_by_name = bool(existing_by_name)
         if found_by_name:
             existing = existing_by_name
@@ -1144,8 +1190,9 @@ def find_existing_object(
 # VALIDAR CONFLICTO DE IDENTIDAD
 # ============================================================
 
+
 def validate_identity_conflict(
-    object_type: str,
+    object_type: Literal["device", "virtual_machine"],
     machine_name: str,
     uuid: str,
     found_by_uuid: bool,
@@ -1176,8 +1223,9 @@ def validate_identity_conflict(
 # SINCRONIZAR OBJETO EXISTENTE/NUEVO
 # ============================================================
 
+
 def apply_sync(
-    endpoint: Any,
+    endpoint: Endpoint,
     payload: dict,
     existing: list[Any],
     machine_name: str,
@@ -1246,13 +1294,14 @@ def apply_sync(
 # SINCRONIZADOR DE DEVICE
 # ============================================================
 
+
 def sync_device(
     endpoints: NetBoxEndpoints,
     row: dict[str, str],
     config: dict[str, Any],
     site: Any,
     cluster_type: Any,
-    caches: dict[str, dict],
+    caches: CacheStore,
     dry_run: bool,
 ) -> str:
     """
@@ -1262,14 +1311,16 @@ def sync_device(
     machine_name: str = row.get(INVENTORY_COLUMNS.get("machine_name", ""), "").strip()
     uuid: str = row.get(INVENTORY_COLUMNS.get("uuid", ""), "").strip()
     machine_type: str = row.get(INVENTORY_COLUMNS.get("machine_type", ""), "").strip()
-    
+
     if is_empty(machine_name):
-        log.warning(f"SKIP ({INVENTORY_COLUMNS.get("machine_name")} vacío).")
+        log.warning(f"SKIP ({INVENTORY_COLUMNS.get('machine_name')} vacío).")
         return "SKIPPED"
     if is_empty(machine_type):
-        log.warning(f"SKIP ({machine_name}): campo '{INVENTORY_COLUMNS.get("machine_type")}' vacío.")
+        log.warning(
+            f"SKIP ({machine_name}): campo '{INVENTORY_COLUMNS.get('machine_type')}' vacío."
+        )
         return "SKIPPED"
-    
+
     device_fields_cfg: list[dict[str, Any]] = config.get("device_fields", [])
     device_cf_cfg: list[dict[str, Any]] = config.get("device_custom_fields", [])
     payload, _ = build_payload(row, device_fields_cfg, device_cf_cfg, config)
@@ -1285,11 +1336,7 @@ def sync_device(
         )
         return "ERROR"
 
-    payload["role"] = getattr(
-        role_obj,
-        "id",
-        role_obj.get("id", 0),
-    )
+    payload["role"] = get_netbox_object_id(role_obj)
 
     # Manufacturer y DeviceType.
     marca: str = row.get(INVENTORY_COLUMNS.get("manufacturer", ""), "").strip()
@@ -1303,12 +1350,15 @@ def sync_device(
         caches["manufacturers"],
         dry_run,
     )
-    u_height = get_internal_field(
-        row,
-        device_fields_cfg,
-        "_u_height",
-        config,
-    ) or 1
+    u_height = (
+        get_internal_field(
+            row,
+            device_fields_cfg,
+            "_u_height",
+            config,
+        )
+        or 1
+    )
 
     # Resolver DeviceType.
     device_type = ensure_device_type(
@@ -1319,11 +1369,7 @@ def sync_device(
         caches["device_types"],
         dry_run,
     )
-    payload["device_type"] = getattr(
-        device_type,
-        "id",
-        device_type.get("id", 0),
-    )
+    payload["device_type"] = get_netbox_object_id(device_type)
 
     # Platform.
     resolve_platform(endpoints, row, payload, caches, dry_run)
@@ -1338,23 +1384,11 @@ def sync_device(
             caches["racks"],
             dry_run,
         )
-        payload["rack"] = getattr(
-            rack,
-            "id",
-            rack.get("id", 0),
-        )
+        payload["rack"] = get_netbox_object_id(rack)
 
     # Campos obligatorios.
-    payload["site"] = getattr(
-        site,
-        "id",
-        site.get("id", 0),
-    )
-    payload["status"] = resolve_netbox_status(
-        row,
-        config,
-        "device",
-    )
+    payload["site"] = get_netbox_object_id(site)
+    payload["status"] = resolve_netbox_status(row, config, "device")
 
     # Cluster para hipervisores.
     if machine_type == "Hipervisor":
@@ -1366,11 +1400,7 @@ def sync_device(
             caches["clusters"],
             dry_run,
         )
-        payload["cluster"] = getattr(
-            cluster,
-            "id",
-            cluster.get("id", 0),
-        )
+        payload["cluster"] = get_netbox_object_id(cluster)
 
     # ── GET o CREATE/UPDATE ──────────────────────────────────
     try:
@@ -1411,13 +1441,14 @@ def sync_device(
 # SINCRONIZADOR DE VM
 # ============================================================
 
+
 def sync_vm(
     endpoints: NetBoxEndpoints,
     row: dict[str, str],
     config: dict[str, Any],
     site: Any,
     cluster_type: Any,
-    caches: dict[str, dict],
+    caches: CacheStore,
     dry_run: bool,
 ) -> str:
     """
@@ -1431,7 +1462,9 @@ def sync_vm(
         log.warning(f"SKIP ({INVENTORY_COLUMNS.get('machine_name')} vacío).")
         return "SKIPPED"
     if is_empty(machine_type):
-        log.warning(f"SKIP ({machine_name}): campo '{INVENTORY_COLUMNS.get('machine_type')}' vacío.")
+        log.warning(
+            f"SKIP ({machine_name}): campo '{INVENTORY_COLUMNS.get('machine_type')}' vacío."
+        )
         return "SKIPPED"
 
     vm_fields_cfg: list[dict] = config.get("vm_fields", [])
@@ -1453,11 +1486,7 @@ def sync_vm(
         )
         return "ERROR"
 
-    payload["role"] = getattr(
-        role_obj,
-        "id",
-        role_obj.get("id", 0),
-    )
+    payload["role"] = get_netbox_object_id(role_obj)
 
     # Platform.
     resolve_platform(endpoints, row, payload, caches, dry_run)
@@ -1477,24 +1506,14 @@ def sync_vm(
         caches["clusters"],
         dry_run,
     )
-    payload["cluster"] = getattr(
-        cluster,
-        "id",
-        cluster.get("id", 0),
-    )
+    payload["cluster"] = get_netbox_object_id(cluster)
 
     # Campos obligatorios.
-    payload["site"] = getattr(
-        site,
-        "id",
-        site.get("id", 0),
-    )
+    payload["site"] = get_netbox_object_id(site)
 
     # Device del hipervisor host.
     try:
-        host_devices = list(
-            endpoints.devices.filter(name=host_name)
-        )
+        host_devices = list(endpoints.devices.filter(name=host_name))
         if host_devices:
             payload["device"] = host_devices[0].id
     except Exception:
@@ -1525,11 +1544,7 @@ def sync_vm(
             endpoints.virtual_machines,
         )
     except Exception:
-        log.exception(
-            "ERROR buscando VM '%s' (UUID=%s)",
-            machine_name,
-            uuid or "N/A"
-        )
+        log.exception("ERROR buscando VM '%s' (UUID=%s)", machine_name, uuid or "N/A")
         return "ERROR"
 
     if validate_identity_conflict(
@@ -1556,10 +1571,11 @@ def sync_vm(
 # ROLES DE DISPOSITIVO
 # ============================================================
 
+
 def ensure_all_device_roles(
     endpoints: NetBoxEndpoints,
     cfg: dict[str, Any],
-    caches: dict[str, dict],
+    caches: CacheStore,
     dry_run: bool,
 ) -> None:
     """
@@ -1615,11 +1631,14 @@ def ensure_all_device_roles(
             continue
 
         try:
-            obj = endpoints.device_roles.create(
-                name=name,
-                slug=slug,
-                color=color,
-                vm_role=True,
+            obj = cast(
+                Record,
+                endpoints.device_roles.create(
+                    name=name,
+                    slug=slug,
+                    color=color,
+                    vm_role=True,
+                ),
             )
         except Exception:
             log.exception(
@@ -1634,7 +1653,7 @@ def ensure_all_device_roles(
 
 def resolve_device_role(
     role_name: str,
-    caches: dict[str, dict],
+    caches: CacheStore,
 ) -> Any | None:
     """
     Busca un DeviceRole por nombre (insensible a mayúsculas).
@@ -1643,17 +1662,18 @@ def resolve_device_role(
     roles = caches["device_roles"]
     if is_empty(role_name):
         return roles.get("others")
-    
+
     normalized = role_name.strip().lower()
     if normalized not in roles:
         return roles.get("others")
-    
+
     return roles[normalized]
 
 
 # ============================================================
 # MAIN
 # ============================================================
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -1711,8 +1731,7 @@ def main() -> None:
         "uuid",
     )
     missing_columns = [
-        key for key in required_columns
-        if not INVENTORY_COLUMNS.get(key)
+        key for key in required_columns if not INVENTORY_COLUMNS.get(key)
     ]
     if missing_columns:
         log.error(
@@ -1736,16 +1755,17 @@ def main() -> None:
     ensure_custom_fields(endpoints, config, args.dry_run)
 
     # ── Garantizar taxonomía global ──────────────────────────
-    site         = ensure_site(endpoints, config, args.dry_run)
+    site = ensure_site(endpoints, config, args.dry_run)
     cluster_type = ensure_cluster_type(endpoints, config, args.dry_run)
 
-    caches: dict[str, dict] = {
+    # ── Inicializar caches ───────────────────────────────────
+    caches: CacheStore = {
         "manufacturers": {},
-        "device_types":  {},
-        "platforms":     {},
-        "racks":         {},
-        "clusters":      {},
-        "device_roles":  {},
+        "device_types": {},
+        "platforms": {},
+        "racks": {},
+        "clusters": {},
+        "device_roles": {},
     }
 
     ensure_all_device_roles(endpoints, config, caches, args.dry_run)
@@ -1758,22 +1778,23 @@ def main() -> None:
 
     # ── Contadores ───────────────────────────────────────────
     counts = {
-        "CREATED":   0,
-        "UPDATED":   0,
+        "CREATED": 0,
+        "UPDATED": 0,
         "UNCHANGED": 0,
-        "SKIPPED":   0,
-        "ERROR":     0,
+        "SKIPPED": 0,
+        "ERROR": 0,
     }
 
     # ── Procesar filas ───────────────────────────────────────
     for row_num, row in enumerate(rows, start=2):
         tipo_raw = row.get(INVENTORY_COLUMNS.get("machine_type", ""), "").strip()
-        nb_type  = machine_type_map.get(tipo_raw)
+        nb_type = machine_type_map.get(tipo_raw)
 
         if nb_type is None:
             log.warning(
                 f"Fila %d SKIP: {INVENTORY_COLUMNS.get('machine_type')} '%s' no está en machine_type_map.",
-                row_num, tipo_raw,
+                row_num,
+                tipo_raw,
             )
             counts["SKIPPED"] += 1
             continue
@@ -1781,7 +1802,9 @@ def main() -> None:
         # ── Parsear interfaces ────────────────────────────────
         interfaces = parse_network_interfaces(row, net_cfg)
         if interfaces is None:
-            machine_name = row.get(INVENTORY_COLUMNS.get("machine_name", ""), f"fila {row_num}")
+            machine_name = row.get(
+                INVENTORY_COLUMNS.get("machine_name", ""), f"fila {row_num}"
+            )
             log.warning(
                 "Interfaces de '%s' tienen longitudes inconsistentes; "
                 "se omitirán para esta fila.",
@@ -1805,7 +1828,9 @@ def main() -> None:
             continue
 
         if args.dry_run:
-            machine_name = row.get(INVENTORY_COLUMNS.get("machine_name", ""), f"fila {row_num}")
+            machine_name = row.get(
+                INVENTORY_COLUMNS.get("machine_name", ""), f"fila {row_num}"
+            )
             for iface in interfaces:
                 log.info(
                     "[DRY-RUN] Sincronizaría interfaz %s en '%s'",
@@ -1841,7 +1866,7 @@ def main() -> None:
                 "ERROR buscando objeto NetBox para sincronizar interfaces "
                 "de '%s' (UUID=%s)",
                 machine_name,
-                uuid or "N/A"
+                uuid or "N/A",
             )
             counts["ERROR"] += 1
             continue
@@ -1872,9 +1897,17 @@ def main() -> None:
             )
             continue
 
+        obj_id = get_netbox_object_id(existing[0])
+        if obj_id == 0:
+            log.warning(
+                "SKIP interfaces de '%s': el objeto NetBox no tiene ID.",
+                machine_name,
+            )
+            continue
+
         sync_interfaces_for_object(
             endpoints,
-            existing[0].id,
+            obj_id,
             object_type,
             interfaces,
             args.dry_run,
