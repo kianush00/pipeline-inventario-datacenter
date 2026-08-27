@@ -28,7 +28,7 @@ This repository provides an end-to-end **Data Center Inventory ETL Pipeline** de
 
 The project follows the sequence represented in the diagram under the assets folder.
 
-<img src="./assets/inventory_pipeline.png" alt="Datacenter inventory pipeline" width="60%">
+<img src="./assets/inventory_pipeline.png" alt="Datacenter inventory pipeline" width="100%">
 
 Generated `.log`, `.csv`, `.ods`, and `.xlsx` files are runtime artifacts and are ignored by Git. They are shown here only to describe the files passed between scripts.
 
