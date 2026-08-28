@@ -41,10 +41,10 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Literal, TypeAlias, TypedDict, cast
 
-import pynetbox
 import requests
 import urllib3
 import yaml
+from pynetbox.core.api import Api
 from pynetbox.core.endpoint import Endpoint
 from pynetbox.core.response import Record
 
@@ -59,12 +59,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("export_to_netbox")
 
-
-# ============================================================
-# ESTADO GLOBAL DE CONFIGURACIÓN
-# ============================================================
-
-EMPTY_VALUES: set[str] = set()
 
 # ============================================================
 # ENDPOINTS DE NETBOX
@@ -110,9 +104,6 @@ class InventoryColumns:
     """
     Nombres de columnas de merged_inventory.csv, resueltos una única
     vez al iniciar el script a partir de netbox_mapping.yaml.
-    El acceso es por atributo, no por dict.get(clave, ""), por lo que
-    un nombre de columna mal escrito falla al construir el objeto en
-    vez de degradar silenciosamente a cadenas vacías en cada fila.
     """
 
     machine_name: str
@@ -138,6 +129,40 @@ class InventoryColumns:
             )
             sys.exit(1)
         return cls(**{f.name: raw[f.name] for f in fields(cls)})
+
+
+# ============================================================
+# CONTEXTO DE EJECUCIÓN
+# ============================================================
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    """
+    Configuración resuelta una única vez al iniciar el script a
+    partir de netbox_mapping.yaml, y pasada explícitamente a cada
+    función que la necesita.
+    """
+
+    columns: InventoryColumns
+    empty_values: frozenset[str]
+
+    @classmethod
+    def from_config(cls, cfg: dict[str, Any]) -> "RuntimeConfig":
+        raw_empty = cfg.get("empty_values", [])
+        # "" siempre cuenta como vacío, esté o no listado en el YAML.
+        empty_values = frozenset(raw_empty) | {""}
+        inv_columns = InventoryColumns.from_config(cfg)
+        return cls(
+            columns=inv_columns,
+            empty_values=empty_values,
+        )
+
+    def is_empty(self, value: Any) -> bool:
+        """Determina si un valor es considerado vacío según empty_values."""
+        if value is None:
+            return True
+        return str(value).strip() in self.empty_values
 
 
 # ===========================================================
@@ -201,14 +226,14 @@ def load_env() -> tuple[str, str, bool]:
 # ============================================================
 
 
-def build_nb_client(url: str, token: str, verify_ssl: bool) -> pynetbox.api:
+def build_nb_client(url: str, token: str, verify_ssl: bool) -> Api:
     if not verify_ssl:
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     session = requests.Session()
     session.verify = verify_ssl
 
-    nb = pynetbox.api(url, token=token)
+    nb = Api(url, token=token)
     nb.http_session = session
 
     # Verificar conectividad con una llamada liviana.
@@ -222,7 +247,7 @@ def build_nb_client(url: str, token: str, verify_ssl: bool) -> pynetbox.api:
     return nb
 
 
-def build_netbox_endpoints(nb: pynetbox.api) -> NetBoxEndpoints:
+def build_netbox_endpoints(nb: Api) -> NetBoxEndpoints:
     """
     Resuelve y valida todos los endpoints de NetBox utilizados
     por el script.
@@ -273,13 +298,6 @@ def slugify(name: str) -> str:
     return slug[:100]
 
 
-def is_empty(value: Any) -> bool:
-    """Determina si un valor es considerado vacío según EMPTY_VALUES."""
-    if value is None:
-        return True
-    return str(value).strip() in EMPTY_VALUES
-
-
 def safe_int(value: Any) -> int | None:
     """Convierte un valor a int, retornando None si no es convertible."""
     try:
@@ -321,9 +339,9 @@ def apply_cast(value: Any, cast: str) -> Any:
     return value
 
 
-def concat_dot(parts: list[str]) -> str:
+def concat_dot(parts: list[str], rc: RuntimeConfig) -> str:
     """Concatena partes no vacías con '. ' como separador."""
-    clean = [p.strip() for p in parts if not is_empty(p)]
+    clean = [p.strip() for p in parts if not rc.is_empty(p)]
     return ". ".join(clean)
 
 
@@ -865,6 +883,7 @@ def ensure_custom_fields(
 def parse_network_interfaces(
     row: dict[str, str],
     net_cfg: dict,
+    rc: RuntimeConfig,
 ) -> list[dict] | None:
     """
     Parsea las 5 columnas de red del CSV (valores separados por comas)
@@ -876,7 +895,7 @@ def parse_network_interfaces(
 
     def split_col(col_name: str) -> list[str]:
         raw = row.get(col_name, "")
-        if raw.strip() in EMPTY_VALUES:
+        if rc.is_empty(raw):
             return []
         return [v.strip() for v in raw.split(",")]
 
@@ -906,15 +925,15 @@ def parse_network_interfaces(
 
     interfaces = []
     for i, name in enumerate(names):
-        if not name or name in EMPTY_VALUES:
+        if rc.is_empty(name):
             continue
 
         status_raw = statuses[i].lower().strip()
         enabled = status_map.get(status_raw, True)
 
-        ip_raw = ips[i] if ips[i] not in EMPTY_VALUES else None
-        pfx_raw = prefixes[i] if prefixes[i] not in EMPTY_VALUES else None
-        mac_raw = macs[i] if macs[i] not in EMPTY_VALUES else None
+        ip_raw = ips[i] if not rc.is_empty(ips[i]) else None
+        pfx_raw = prefixes[i] if not rc.is_empty(prefixes[i]) else None
+        mac_raw = macs[i] if not rc.is_empty(macs[i]) else None
 
         # Construir dirección CIDR si tenemos IP y prefijo.
         cidr = None
@@ -1062,6 +1081,7 @@ def resolve_field_value(
     row: dict[str, str],
     field_def: dict[str, Any],
     config: dict[str, Any],
+    rc: RuntimeConfig,
 ) -> Any:
     """
     Resuelve el valor de un campo según su definición en el YAML.
@@ -1083,7 +1103,7 @@ def resolve_field_value(
     # Transformación multi-source (concat_dot).
     if isinstance(source, list) and transform == "concat_dot":
         parts = [row.get(s, "") for s in source]
-        value = concat_dot(parts)
+        value = concat_dot(parts, rc)
 
         if not value:
             if default is not None:
@@ -1096,7 +1116,7 @@ def resolve_field_value(
     # Campo simple.
     value = row.get(source, "")
 
-    if is_empty(value):
+    if rc.is_empty(value):
         if default is not None:
             return default
         return None if skip_if_empty else ""
@@ -1123,6 +1143,7 @@ def build_payload(
     field_defs: list[dict[str, Any]],
     cf_defs: list[dict[str, Any]],
     config: dict[str, Any],
+    rc: RuntimeConfig,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """
     Construye (payload_nativo, payload_cf) para una fila del CSV.
@@ -1136,13 +1157,13 @@ def build_payload(
         if target.startswith("_"):
             # Campo interno del script (ej. _u_height), no va al API directamente.
             continue
-        value = resolve_field_value(row, fd, config)
+        value = resolve_field_value(row, fd, config, rc)
         if value is not None:
             payload[target] = value
 
     for fd in cf_defs:
         target: str = fd.get("target", "")
-        value = resolve_field_value(row, fd, config)
+        value = resolve_field_value(row, fd, config, rc)
         if value is not None:
             cf_payload[target] = value
 
@@ -1157,11 +1178,12 @@ def get_internal_field(
     field_defs: list[dict[str, Any]],
     internal_key: str,
     config: dict,
+    rc: RuntimeConfig,
 ) -> Any:
     """Extrae un campo interno (prefijado con '_') de los field_defs."""
     for fd in field_defs:
         if fd.get("target") == internal_key:
-            return resolve_field_value(row, fd, config)
+            return resolve_field_value(row, fd, config, rc)
     return None
 
 
@@ -1204,11 +1226,11 @@ def resolve_platform(
     payload: dict[str, Any],
     caches: CacheStore,
     dry_run: bool,
-    columns: InventoryColumns,
+    rc: RuntimeConfig,
 ) -> None:
     """Resuelve el Platform desde la columna OS y lo agrega al payload si existe."""
-    platform_name = row.get(columns.os, "").strip()
-    if not is_empty(platform_name):
+    platform_name = row.get(rc.columns.os, "").strip()
+    if not rc.is_empty(platform_name):
         platform = ensure_platform(
             endpoints,
             platform_name,
@@ -1227,6 +1249,7 @@ def find_existing_object(
     uuid: str,
     machine_name: str,
     endpoint: Endpoint,
+    rc: RuntimeConfig,
 ) -> tuple[list[Record], bool, bool]:
     """
     Busca un objeto primero por UUID y luego por nombre.
@@ -1242,7 +1265,7 @@ def find_existing_object(
     existing: list[Record] = []
     found_by_uuid = False
     found_by_name = False
-    if not is_empty(uuid):
+    if not rc.is_empty(uuid):
         existing = list(endpoint.filter(cf_inventory_uuid=uuid))
         found_by_uuid = bool(existing)
     if not existing:
@@ -1264,6 +1287,7 @@ def validate_identity_conflict(
     uuid: str,
     found_by_uuid: bool,
     found_by_name: bool,
+    rc: RuntimeConfig,
 ) -> bool:
     """
     Determina si existe un conflicto de identidad.
@@ -1273,7 +1297,7 @@ def validate_identity_conflict(
     Política:
     - UUID presente + UUID no encontrado + nombre encontrado -> SKIP.
     """
-    if not is_empty(uuid) and not found_by_uuid and found_by_name:
+    if not rc.is_empty(uuid) and not found_by_uuid and found_by_name:
         log.warning(
             "SKIP %s '%s': UUID=%s no encontrado en NetBox, "
             "pero ya existe un %s con el mismo nombre.",
@@ -1299,6 +1323,7 @@ def apply_sync(
     uuid: str,
     object_label: str,
     dry_run: bool,
+    rc: RuntimeConfig,
 ) -> str:
     """
     Ejecuta CREATE, UPDATE o DRY-RUN según el objeto encontrado.
@@ -1307,7 +1332,7 @@ def apply_sync(
     """
     if dry_run:
         if existing:
-            if is_empty(uuid):
+            if rc.is_empty(uuid):
                 log.info(
                     "[DRY-RUN] SKIP actualización de %s: %s "
                     "(encontrado por nombre; UUID vacío)",
@@ -1337,7 +1362,7 @@ def apply_sync(
         except Exception:
             log.exception("ERROR creando %s %s", object_label, machine_name)
             return "ERROR"
-    if is_empty(uuid):
+    if rc.is_empty(uuid):
         log.warning(
             "SKIP actualización de %s '%s': UUID vacío.",
             object_label,
@@ -1370,31 +1395,31 @@ def sync_device(
     cluster_type: NetBoxObject,
     caches: CacheStore,
     dry_run: bool,
-    columns: InventoryColumns,
+    rc: RuntimeConfig,
 ) -> str:
     """
     Sincroniza una fila de tipo "device" o "hipervisor" con NetBox.
     Retorna: "CREATED" | "UPDATED" | "UNCHANGED" | "SKIPPED" | "ERROR"
     """
-    machine_name: str = row.get(columns.machine_name, "").strip()
-    uuid: str = row.get(columns.uuid, "").strip()
-    machine_type: str = row.get(columns.machine_type, "").strip()
+    machine_name: str = row.get(rc.columns.machine_name, "").strip()
+    uuid: str = row.get(rc.columns.uuid, "").strip()
+    machine_type: str = row.get(rc.columns.machine_type, "").strip()
 
-    if is_empty(machine_name):
-        log.warning(f"SKIP ({columns.machine_name} vacío).")
+    if rc.is_empty(machine_name):
+        log.warning(f"SKIP ({rc.columns.machine_name} vacío).")
         return "SKIPPED"
-    if is_empty(machine_type):
-        log.warning(f"SKIP ({machine_name}): campo '{columns.machine_type}' vacío.")
+    if rc.is_empty(machine_type):
+        log.warning(f"SKIP ({machine_name}): campo '{rc.columns.machine_type}' vacío.")
         return "SKIPPED"
 
     device_fields_cfg: list[dict[str, Any]] = config.get("device_fields", [])
     device_cf_cfg: list[dict[str, Any]] = config.get("device_custom_fields", [])
-    payload, _ = build_payload(row, device_fields_cfg, device_cf_cfg, config)
+    payload, _ = build_payload(row, device_fields_cfg, device_cf_cfg, config, rc)
 
     # ── Resolución de objetos relacionados ──────────────────
     # Role.
-    rol_csv: str = row.get(columns.role, "").strip()
-    role_obj = resolve_device_role(rol_csv, caches)
+    rol_csv: str = row.get(rc.columns.role, "").strip()
+    role_obj = resolve_device_role(rol_csv, caches, rc)
     if role_obj is None:
         log.error(
             "ERROR (%s): no existe el DeviceRole 'Others' en la configuración.",
@@ -1405,9 +1430,9 @@ def sync_device(
     payload["role"] = get_netbox_object_id(role_obj)
 
     # Manufacturer y DeviceType.
-    marca: str = row.get(columns.manufacturer, "").strip()
-    modelo: str = row.get(columns.model, "").strip()
-    if is_empty(marca) or is_empty(modelo):
+    marca: str = row.get(rc.columns.manufacturer, "").strip()
+    modelo: str = row.get(rc.columns.model, "").strip()
+    if rc.is_empty(marca) or rc.is_empty(modelo):
         log.warning("SKIP (%s): sin Marca o Modelo.", machine_name)
         return "SKIPPED"
     manufacturer = ensure_manufacturer(
@@ -1422,6 +1447,7 @@ def sync_device(
             device_fields_cfg,
             "_u_height",
             config,
+            rc,
         )
         or 1
     )
@@ -1438,11 +1464,11 @@ def sync_device(
     payload["device_type"] = get_netbox_object_id(device_type)
 
     # Platform.
-    resolve_platform(endpoints, row, payload, caches, dry_run, columns)
+    resolve_platform(endpoints, row, payload, caches, dry_run, rc)
 
     # Rack.
-    rack_name: str = row.get(columns.rack, "").strip()
-    if not is_empty(rack_name):
+    rack_name: str = row.get(rc.columns.rack, "").strip()
+    if not rc.is_empty(rack_name):
         rack = ensure_rack(
             endpoints,
             rack_name,
@@ -1454,7 +1480,7 @@ def sync_device(
 
     # Campos obligatorios.
     payload["site"] = get_netbox_object_id(site)
-    payload["status"] = resolve_netbox_status(row, config, "device", columns)
+    payload["status"] = resolve_netbox_status(row, config, "device", rc.columns)
 
     # Cluster para hipervisores.
     if machine_type == "Hipervisor":
@@ -1474,6 +1500,7 @@ def sync_device(
             uuid,
             machine_name,
             endpoints.devices,
+            rc,
         )
     except Exception:
         log.exception(
@@ -1489,6 +1516,7 @@ def sync_device(
         uuid,
         found_by_uuid,
         found_by_name,
+        rc,
     ):
         return "SKIPPED"
 
@@ -1500,6 +1528,7 @@ def sync_device(
         uuid,
         "device",
         dry_run,
+        rc,
     )
 
 
@@ -1516,20 +1545,20 @@ def sync_vm(
     cluster_type: NetBoxObject,
     caches: CacheStore,
     dry_run: bool,
-    columns: InventoryColumns,
+    rc: RuntimeConfig,
 ) -> str:
     """
     Sincroniza una fila de tipo "virtual_machine" con NetBox.
     Retorna: "CREATED" | "UPDATED" | "UNCHANGED" | "SKIPPED" | "ERROR"
     """
-    machine_name: str = row.get(columns.machine_name, "").strip()
-    uuid: str = row.get(columns.uuid, "").strip()
-    machine_type: str = row.get(columns.machine_type, "").strip()
-    if is_empty(machine_name):
-        log.warning(f"SKIP ({columns.machine_name} vacío).")
+    machine_name: str = row.get(rc.columns.machine_name, "").strip()
+    uuid: str = row.get(rc.columns.uuid, "").strip()
+    machine_type: str = row.get(rc.columns.machine_type, "").strip()
+    if rc.is_empty(machine_name):
+        log.warning(f"SKIP ({rc.columns.machine_name} vacío).")
         return "SKIPPED"
-    if is_empty(machine_type):
-        log.warning(f"SKIP ({machine_name}): campo '{columns.machine_type}' vacío.")
+    if rc.is_empty(machine_type):
+        log.warning(f"SKIP ({machine_name}): campo '{rc.columns.machine_type}' vacío.")
         return "SKIPPED"
 
     vm_fields_cfg: list[dict] = config.get("vm_fields", [])
@@ -1539,11 +1568,12 @@ def sync_vm(
         vm_fields_cfg,
         vm_cf_cfg,
         config,
+        rc,
     )
 
     # Role.
-    rol_csv: str = row.get(columns.role, "").strip()
-    role_obj = resolve_device_role(rol_csv, caches)
+    rol_csv: str = row.get(rc.columns.role, "").strip()
+    role_obj = resolve_device_role(rol_csv, caches, rc)
     if role_obj is None:
         log.error(
             "ERROR (%s): no existe el DeviceRole 'Others' en la configuración.",
@@ -1554,12 +1584,12 @@ def sync_vm(
     payload["role"] = get_netbox_object_id(role_obj)
 
     # Platform.
-    resolve_platform(endpoints, row, payload, caches, dry_run, columns)
+    resolve_platform(endpoints, row, payload, caches, dry_run, rc)
 
     # Cluster.
-    host_name: str = row.get(columns.cluster, "").strip()
-    if is_empty(host_name):
-        log.warning(f"SKIP ({machine_name}): VM sin {columns.cluster}.")
+    host_name: str = row.get(rc.columns.cluster, "").strip()
+    if rc.is_empty(host_name):
+        log.warning(f"SKIP ({machine_name}): VM sin {rc.columns.cluster}.")
         return "SKIPPED"
     cluster = ensure_cluster(
         endpoints,
@@ -1591,11 +1621,11 @@ def sync_vm(
         row,
         config,
         "virtual_machine",
-        columns,
+        rc.columns,
     )
 
     # vcpus.
-    cores: str = row.get(columns.cores, "").strip()
+    cores: str = row.get(rc.columns.cores, "").strip()
     cores_int = safe_int(cores)
     if cores_int is not None:
         payload["vcpus"] = float(cores_int)
@@ -1606,6 +1636,7 @@ def sync_vm(
             uuid,
             machine_name,
             endpoints.virtual_machines,
+            rc,
         )
     except Exception:
         log.exception("ERROR buscando VM '%s' (UUID=%s)", machine_name, uuid or "N/A")
@@ -1617,6 +1648,7 @@ def sync_vm(
         uuid,
         found_by_uuid,
         found_by_name,
+        rc,
     ):
         return "SKIPPED"
 
@@ -1628,6 +1660,7 @@ def sync_vm(
         uuid,
         "VM",
         dry_run,
+        rc,
     )
 
 
@@ -1718,13 +1751,14 @@ def ensure_all_device_roles(
 def resolve_device_role(
     role_name: str,
     caches: CacheStore,
+    rc: RuntimeConfig,
 ) -> Any | None:
     """
     Busca un DeviceRole por nombre (insensible a mayúsculas).
     Si el nombre está vacío o no existe, utiliza "Others" como fallback.
     """
     roles = caches["device_roles"]
-    if is_empty(role_name):
+    if rc.is_empty(role_name):
         return roles.get("others")
 
     normalized = role_name.strip().lower()
@@ -1777,10 +1811,8 @@ def main() -> None:
 
     # ── Cargar configuración ─────────────────────────────────
     config: dict[str, Any] = load_config(mapping_path)
-    EMPTY_VALUES.update(config.get("empty_values", []))
-
-    # ── Validar columnas ────────────────────────────────────
-    columns: InventoryColumns = InventoryColumns.from_config(config)
+    rc = RuntimeConfig.from_config(config)
+    columns: InventoryColumns = rc.columns
 
     # ── Cargar credenciales ──────────────────────────────────
     url, token, verify_ssl = load_env()
@@ -1789,10 +1821,10 @@ def main() -> None:
         log.info("Modo DRY-RUN activado. No se modificará NetBox.")
 
     # ── Conectar ─────────────────────────────────────────────
-    nb = build_nb_client(url, token, verify_ssl)
+    nb: Api = build_nb_client(url, token, verify_ssl)
 
     # ── Validar endpoints requeridos ─────────────────────────
-    endpoints = build_netbox_endpoints(nb)
+    endpoints: NetBoxEndpoints = build_netbox_endpoints(nb)
 
     # ── Garantizar custom fields ─────────────────────────────
     ensure_custom_fields(endpoints, config, args.dry_run)
@@ -1844,7 +1876,7 @@ def main() -> None:
             continue
 
         # ── Parsear interfaces ────────────────────────────────
-        interfaces = parse_network_interfaces(row, net_cfg)
+        interfaces = parse_network_interfaces(row, net_cfg, rc)
         if interfaces is None:
             machine_name = row.get(columns.machine_name, f"fila {row_num}")
             log.warning(
@@ -1864,7 +1896,7 @@ def main() -> None:
                 cluster_type,
                 caches,
                 args.dry_run,
-                columns,
+                rc,
             )
         else:
             result = sync_vm(
@@ -1875,7 +1907,7 @@ def main() -> None:
                 cluster_type,
                 caches,
                 args.dry_run,
-                columns,
+                rc,
             )
 
         counts[result] = counts.get(result, 0) + 1
@@ -1914,6 +1946,7 @@ def main() -> None:
                 uuid,
                 machine_name,
                 endpoint,
+                rc,
             )
         except Exception:
             log.exception(
@@ -1936,6 +1969,7 @@ def main() -> None:
             uuid,
             found_by_uuid,
             found_by_name,
+            rc,
         ):
             log.warning(
                 "SKIP interfaces de '%s': conflicto de identidad.",
