@@ -8,4 +8,5 @@ packaging==26.3
 pynetbox==7.8.0
 PyYAML==6.0.3
 requests==2.34.2
+types-PyYAML==6.0.12.20260815
 urllib3==2.7.0

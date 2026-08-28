@@ -37,7 +37,7 @@ import logging
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Literal, TypeAlias, TypedDict, cast
 
@@ -65,7 +65,6 @@ log = logging.getLogger("export_to_netbox")
 # ============================================================
 
 EMPTY_VALUES: set[str] = set()
-INVENTORY_COLUMNS: dict[str, str] = {}
 
 # ============================================================
 # ENDPOINTS DE NETBOX
@@ -74,6 +73,15 @@ INVENTORY_COLUMNS: dict[str, str] = {}
 
 @dataclass(frozen=True)
 class NetBoxEndpoints:
+    """
+    Representa los endpoints de NetBox utilizados por el script.
+
+    La clase se utiliza para centralizar el acceso a los endpoints
+    de NetBox y asegurar que todos los endpoints requeridos estén
+    disponibles antes de comenzar cualquier operación de
+    sincronización.
+    """
+
     object_types: Endpoint
     custom_fields: Endpoint
     choice_sets: Endpoint
@@ -92,6 +100,46 @@ class NetBoxEndpoints:
     ip_addresses: Endpoint
 
 
+# ============================================================
+# COLUMNAS DEL INVENTARIO
+# ============================================================
+
+
+@dataclass(frozen=True)
+class InventoryColumns:
+    """
+    Nombres de columnas de merged_inventory.csv, resueltos una única
+    vez al iniciar el script a partir de netbox_mapping.yaml.
+    El acceso es por atributo, no por dict.get(clave, ""), por lo que
+    un nombre de columna mal escrito falla al construir el objeto en
+    vez de degradar silenciosamente a cadenas vacías en cada fila.
+    """
+
+    machine_name: str
+    machine_type: str
+    os: str
+    status: str
+    role: str
+    manufacturer: str
+    model: str
+    rack: str
+    cluster: str
+    cores: str
+    uuid: str
+
+    @classmethod
+    def from_config(cls, cfg: dict[str, Any]) -> "InventoryColumns":
+        raw: dict[str, str] = cfg.get("inventory_columns", {})
+        missing = [f.name for f in fields(cls) if not raw.get(f.name)]
+        if missing:
+            log.error(
+                "Faltan columnas en 'inventory_columns': %s",
+                ", ".join(missing),
+            )
+            sys.exit(1)
+        return cls(**{f.name: raw[f.name] for f in fields(cls)})
+
+
 # ===========================================================
 # CACHE DE DATOS
 # ===========================================================
@@ -100,6 +148,19 @@ NetBoxObject: TypeAlias = Record | dict[str, Any]
 
 
 class CacheStore(TypedDict):
+    """
+    Representa el cache de objetos de NetBox que se mantiene
+    durante toda la ejecución del script.
+
+    Incluye:
+        manufacturers: mapea nombre → Manufacturer
+        device_types: mapea (fabricante, modelo) → DeviceType
+        platforms: mapea nombre → Platform
+        racks: mapea "site_name/rack_name" → Rack
+        clusters: mapea nombre → Cluster
+        device_roles: mapea nombre → DeviceRole
+    """
+
     manufacturers: dict[str, NetBoxObject]
     device_types: dict[tuple[str, str], NetBoxObject]
     platforms: dict[str, NetBoxObject]
@@ -1113,6 +1174,7 @@ def resolve_netbox_status(
     row: dict[str, str],
     config: dict,
     object_type: str,
+    columns: InventoryColumns,
 ) -> str:
     """
     Resuelve el status NetBox a partir de la columna 'Estado'.
@@ -1121,7 +1183,7 @@ def resolve_netbox_status(
         device         -> inventory
         virtual_machine -> staged
     """
-    estado = row.get(INVENTORY_COLUMNS.get("status", ""), "").strip()
+    estado = row.get(columns.status, "").strip()
     status_mapped = config.get("status_map", {}).get(estado)
     if status_mapped:
         return status_mapped
@@ -1142,9 +1204,10 @@ def resolve_platform(
     payload: dict[str, Any],
     caches: CacheStore,
     dry_run: bool,
+    columns: InventoryColumns,
 ) -> None:
     """Resuelve el Platform desde la columna OS y lo agrega al payload si existe."""
-    platform_name = row.get(INVENTORY_COLUMNS.get("os", ""), "").strip()
+    platform_name = row.get(columns.os, "").strip()
     if not is_empty(platform_name):
         platform = ensure_platform(
             endpoints,
@@ -1307,22 +1370,21 @@ def sync_device(
     cluster_type: NetBoxObject,
     caches: CacheStore,
     dry_run: bool,
+    columns: InventoryColumns,
 ) -> str:
     """
     Sincroniza una fila de tipo "device" o "hipervisor" con NetBox.
     Retorna: "CREATED" | "UPDATED" | "UNCHANGED" | "SKIPPED" | "ERROR"
     """
-    machine_name: str = row.get(INVENTORY_COLUMNS.get("machine_name", ""), "").strip()
-    uuid: str = row.get(INVENTORY_COLUMNS.get("uuid", ""), "").strip()
-    machine_type: str = row.get(INVENTORY_COLUMNS.get("machine_type", ""), "").strip()
+    machine_name: str = row.get(columns.machine_name, "").strip()
+    uuid: str = row.get(columns.uuid, "").strip()
+    machine_type: str = row.get(columns.machine_type, "").strip()
 
     if is_empty(machine_name):
-        log.warning(f"SKIP ({INVENTORY_COLUMNS.get('machine_name')} vacío).")
+        log.warning(f"SKIP ({columns.machine_name} vacío).")
         return "SKIPPED"
     if is_empty(machine_type):
-        log.warning(
-            f"SKIP ({machine_name}): campo '{INVENTORY_COLUMNS.get('machine_type')}' vacío."
-        )
+        log.warning(f"SKIP ({machine_name}): campo '{columns.machine_type}' vacío.")
         return "SKIPPED"
 
     device_fields_cfg: list[dict[str, Any]] = config.get("device_fields", [])
@@ -1331,7 +1393,7 @@ def sync_device(
 
     # ── Resolución de objetos relacionados ──────────────────
     # Role.
-    rol_csv: str = row.get(INVENTORY_COLUMNS.get("role", ""), "").strip()
+    rol_csv: str = row.get(columns.role, "").strip()
     role_obj = resolve_device_role(rol_csv, caches)
     if role_obj is None:
         log.error(
@@ -1343,8 +1405,8 @@ def sync_device(
     payload["role"] = get_netbox_object_id(role_obj)
 
     # Manufacturer y DeviceType.
-    marca: str = row.get(INVENTORY_COLUMNS.get("manufacturer", ""), "").strip()
-    modelo: str = row.get(INVENTORY_COLUMNS.get("model", ""), "").strip()
+    marca: str = row.get(columns.manufacturer, "").strip()
+    modelo: str = row.get(columns.model, "").strip()
     if is_empty(marca) or is_empty(modelo):
         log.warning("SKIP (%s): sin Marca o Modelo.", machine_name)
         return "SKIPPED"
@@ -1376,10 +1438,10 @@ def sync_device(
     payload["device_type"] = get_netbox_object_id(device_type)
 
     # Platform.
-    resolve_platform(endpoints, row, payload, caches, dry_run)
+    resolve_platform(endpoints, row, payload, caches, dry_run, columns)
 
     # Rack.
-    rack_name: str = row.get(INVENTORY_COLUMNS.get("rack", ""), "").strip()
+    rack_name: str = row.get(columns.rack, "").strip()
     if not is_empty(rack_name):
         rack = ensure_rack(
             endpoints,
@@ -1392,7 +1454,7 @@ def sync_device(
 
     # Campos obligatorios.
     payload["site"] = get_netbox_object_id(site)
-    payload["status"] = resolve_netbox_status(row, config, "device")
+    payload["status"] = resolve_netbox_status(row, config, "device", columns)
 
     # Cluster para hipervisores.
     if machine_type == "Hipervisor":
@@ -1454,21 +1516,20 @@ def sync_vm(
     cluster_type: NetBoxObject,
     caches: CacheStore,
     dry_run: bool,
+    columns: InventoryColumns,
 ) -> str:
     """
     Sincroniza una fila de tipo "virtual_machine" con NetBox.
     Retorna: "CREATED" | "UPDATED" | "UNCHANGED" | "SKIPPED" | "ERROR"
     """
-    machine_name: str = row.get(INVENTORY_COLUMNS.get("machine_name", ""), "").strip()
-    uuid: str = row.get(INVENTORY_COLUMNS.get("uuid", ""), "").strip()
-    machine_type: str = row.get(INVENTORY_COLUMNS.get("machine_type", ""), "").strip()
+    machine_name: str = row.get(columns.machine_name, "").strip()
+    uuid: str = row.get(columns.uuid, "").strip()
+    machine_type: str = row.get(columns.machine_type, "").strip()
     if is_empty(machine_name):
-        log.warning(f"SKIP ({INVENTORY_COLUMNS.get('machine_name')} vacío).")
+        log.warning(f"SKIP ({columns.machine_name} vacío).")
         return "SKIPPED"
     if is_empty(machine_type):
-        log.warning(
-            f"SKIP ({machine_name}): campo '{INVENTORY_COLUMNS.get('machine_type')}' vacío."
-        )
+        log.warning(f"SKIP ({machine_name}): campo '{columns.machine_type}' vacío.")
         return "SKIPPED"
 
     vm_fields_cfg: list[dict] = config.get("vm_fields", [])
@@ -1481,7 +1542,7 @@ def sync_vm(
     )
 
     # Role.
-    rol_csv: str = row.get(INVENTORY_COLUMNS.get("role", ""), "").strip()
+    rol_csv: str = row.get(columns.role, "").strip()
     role_obj = resolve_device_role(rol_csv, caches)
     if role_obj is None:
         log.error(
@@ -1493,14 +1554,12 @@ def sync_vm(
     payload["role"] = get_netbox_object_id(role_obj)
 
     # Platform.
-    resolve_platform(endpoints, row, payload, caches, dry_run)
+    resolve_platform(endpoints, row, payload, caches, dry_run, columns)
 
     # Cluster.
-    host_name: str = row.get(INVENTORY_COLUMNS.get("cluster", ""), "").strip()
+    host_name: str = row.get(columns.cluster, "").strip()
     if is_empty(host_name):
-        log.warning(
-            f"SKIP ({machine_name}): VM sin {INVENTORY_COLUMNS.get('cluster')}.",
-        )
+        log.warning(f"SKIP ({machine_name}): VM sin {columns.cluster}.")
         return "SKIPPED"
     cluster = ensure_cluster(
         endpoints,
@@ -1532,10 +1591,11 @@ def sync_vm(
         row,
         config,
         "virtual_machine",
+        columns,
     )
 
     # vcpus.
-    cores: str = row.get(INVENTORY_COLUMNS.get("cores", ""), "").strip()
+    cores: str = row.get(columns.cores, "").strip()
     cores_int = safe_int(cores)
     if cores_int is not None:
         payload["vcpus"] = float(cores_int)
@@ -1681,7 +1741,7 @@ def resolve_device_role(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Exporta merged_inventory.csv a NetBox 4.x."
+        description="Exporta merged_inventory.csv a NetBox 4.6+"
     )
     parser.add_argument(
         "csv",
@@ -1719,31 +1779,10 @@ def main() -> None:
     config: dict[str, Any] = load_config(mapping_path)
     EMPTY_VALUES.update(config.get("empty_values", []))
 
-    INVENTORY_COLUMNS: dict[str, str] = config.get("inventory_columns", {})
-    # TODO: Hallar una forma mas limpia de acceder a los inventory_columns (con un TypedDict o similar).
-    required_columns = (
-        "machine_name",
-        "machine_type",
-        "os",
-        "status",
-        "role",
-        "manufacturer",
-        "model",
-        "rack",
-        "cluster",
-        "cores",
-        "uuid",
-    )
-    missing_columns = [
-        key for key in required_columns if not INVENTORY_COLUMNS.get(key)
-    ]
-    if missing_columns:
-        log.error(
-            "Faltan columnas en 'inventory_columns': %s",
-            ", ".join(missing_columns),
-        )
-        sys.exit(1)
+    # ── Validar columnas ────────────────────────────────────
+    columns: InventoryColumns = InventoryColumns.from_config(config)
 
+    # ── Cargar credenciales ──────────────────────────────────
     url, token, verify_ssl = load_env()
 
     if args.dry_run:
@@ -1772,6 +1811,7 @@ def main() -> None:
         "device_roles": {},
     }
 
+    # ── Garantizar taxonomía local ──────────────────────────
     ensure_all_device_roles(endpoints, config, caches, args.dry_run)
 
     # ── Leer CSV ─────────────────────────────────────────────
@@ -1791,12 +1831,12 @@ def main() -> None:
 
     # ── Procesar filas ───────────────────────────────────────
     for row_num, row in enumerate(rows, start=2):
-        tipo_raw = row.get(INVENTORY_COLUMNS.get("machine_type", ""), "").strip()
+        tipo_raw = row.get(columns.machine_type, "").strip()
         nb_type = machine_type_map.get(tipo_raw)
 
         if nb_type is None:
             log.warning(
-                f"Fila %d SKIP: {INVENTORY_COLUMNS.get('machine_type')} '%s' no está en machine_type_map.",
+                f"Fila %d SKIP: {columns.machine_type} '%s' no está en machine_type_map.",
                 row_num,
                 tipo_raw,
             )
@@ -1806,9 +1846,7 @@ def main() -> None:
         # ── Parsear interfaces ────────────────────────────────
         interfaces = parse_network_interfaces(row, net_cfg)
         if interfaces is None:
-            machine_name = row.get(
-                INVENTORY_COLUMNS.get("machine_name", ""), f"fila {row_num}"
-            )
+            machine_name = row.get(columns.machine_name, f"fila {row_num}")
             log.warning(
                 "Interfaces de '%s' tienen longitudes inconsistentes; "
                 "se omitirán para esta fila.",
@@ -1819,11 +1857,25 @@ def main() -> None:
         # ── Sincronizar Device o VM ───────────────────────────
         if nb_type == "device":
             result = sync_device(
-                endpoints, row, config, site, cluster_type, caches, args.dry_run
+                endpoints,
+                row,
+                config,
+                site,
+                cluster_type,
+                caches,
+                args.dry_run,
+                columns,
             )
         else:
             result = sync_vm(
-                endpoints, row, config, site, cluster_type, caches, args.dry_run
+                endpoints,
+                row,
+                config,
+                site,
+                cluster_type,
+                caches,
+                args.dry_run,
+                columns,
             )
 
         counts[result] = counts.get(result, 0) + 1
@@ -1832,9 +1884,7 @@ def main() -> None:
             continue
 
         if args.dry_run:
-            machine_name = row.get(
-                INVENTORY_COLUMNS.get("machine_name", ""), f"fila {row_num}"
-            )
+            machine_name = row.get(columns.machine_name, f"fila {row_num}")
             for iface in interfaces:
                 log.info(
                     "[DRY-RUN] Sincronizaría interfaz %s en '%s'",
@@ -1849,8 +1899,8 @@ def main() -> None:
         # exclusivamente de cf_inventory_uuid. Se utiliza la misma
         # política de identificación: UUID cuando existe, nombre
         # como fallback.
-        machine_name = row.get(INVENTORY_COLUMNS.get("machine_name", ""), "").strip()
-        uuid = row.get(INVENTORY_COLUMNS.get("uuid", ""), "").strip()
+        machine_name = row.get(columns.machine_name, "").strip()
+        uuid = row.get(columns.uuid, "").strip()
 
         try:
             if nb_type == "device":
