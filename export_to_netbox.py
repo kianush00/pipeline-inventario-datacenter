@@ -4,7 +4,7 @@ export_to_netbox.py
 Exporta el inventario fusionado (merged_inventory.csv) a NetBox 4.x.
 
 Dependencias:
-    pip install pynetbox>=7.3.0 PyYAML>=6.0
+    pip install pydantic>=2.0.0 pynetbox>=7.3.0 PyYAML>=6.0
 
 Variables de entorno requeridas:
     NETBOX_URL        → https://netbox.miempresa.com
@@ -33,17 +33,25 @@ Códigos de salida:
 
 import argparse
 import csv
+import ipaddress
 import logging
 import os
 import re
 import sys
-from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Literal, TypeAlias, TypedDict, cast
 
 import requests
 import urllib3
 import yaml
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pynetbox.core.api import Api
 from pynetbox.core.endpoint import Endpoint
 from pynetbox.core.response import Record
@@ -65,8 +73,7 @@ log = logging.getLogger("export_to_netbox")
 # ============================================================
 
 
-@dataclass(frozen=True)
-class NetBoxEndpoints:
+class NetBoxEndpoints(BaseModel):
     """
     Representa los endpoints de NetBox utilizados por el script.
 
@@ -75,6 +82,8 @@ class NetBoxEndpoints:
     disponibles antes de comenzar cualquier operación de
     sincronización.
     """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     object_types: Endpoint
     custom_fields: Endpoint
@@ -95,41 +104,267 @@ class NetBoxEndpoints:
 
 
 # ============================================================
-# COLUMNAS DEL INVENTARIO
+# MODELOS DE CONFIGURACIÓN YAML
 # ============================================================
 
 
-@dataclass(frozen=True)
-class CentralizedColumns:
+class CentralizedColumns(BaseModel):
     """
     Nombres de columnas centralizadas de merged_inventory.csv,
-    resueltos una única vez al iniciar el script a partir de
-    netbox_mapping.yaml.
+    resueltos y validados desde netbox_mapping.yaml.
     """
 
-    machine_name: str
-    machine_type: str
-    os: str
-    status: str
-    role: str
-    manufacturer: str
-    model: str
-    rack: str
-    cluster: str
-    cores: str
-    uuid: str
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
+    machine_name: str = Field(min_length=1)
+    machine_type: str = Field(min_length=1)
+    os: str = Field(min_length=1)
+    status: str = Field(min_length=1)
+    role: str = Field(min_length=1)
+    manufacturer: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    rack: str = Field(min_length=1)
+    cluster: str = Field(min_length=1)
+    cores: str = Field(min_length=1)
+    uuid: str = Field(min_length=1)
+
+
+class SiteConfig(BaseModel):
+    """Configuración del Site en NetBox."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(min_length=1)
+    slug: str | None = None
+
+
+class ClusterTypeConfig(BaseModel):
+    """Configuración del ClusterType en NetBox."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(min_length=1)
+    slug: str | None = None
+
+
+class DeviceRoleConfig(BaseModel):
+    """Configuración de un DeviceRole."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(min_length=1)
+    slug: str | None = None
+    color: str = Field(default="9e9e9e", pattern=r"^[0-9a-fA-F]{6}$")
+
+
+class ChoiceItemConfig(BaseModel):
+    """Elemento individual de un Choice Set."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    value: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+
+
+class ChoiceSetConfig(BaseModel):
+    """Definición de un Choice Set para Custom Fields de tipo selection."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(min_length=1)
+    choices: list[ChoiceItemConfig] = Field(default_factory=list)
+
+
+OBJECT_TYPE_PATTERN = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
+
+
+class BaseCustomFieldDef(BaseModel):
+    """Definición base para campos personalizados."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    label: str = Field(min_length=1)
+    type: Literal[
+        "text", "integer", "boolean", "selection", "date", "url", "json"
+    ] = "text"
+    required: bool = False
+    object_types: list[str] = Field(default_factory=list)
+    choice_set: ChoiceSetConfig | None = None
+
+    @field_validator("object_types")
     @classmethod
-    def from_config(cls, cfg: dict[str, Any]) -> "CentralizedColumns":
-        raw: dict[str, str] = cfg.get("centralized_columns", {})
-        missing = [f.name for f in fields(cls) if not raw.get(f.name)]
-        if missing:
-            log.error(
-                "Faltan columnas en 'centralized_columns': %s",
-                ", ".join(missing),
+    def validate_object_types(cls, v: list[str]) -> list[str]:
+        for ot in v:
+            if not OBJECT_TYPE_PATTERN.match(ot):
+                raise ValueError(
+                    f"Formato de Object Type inválido: '{ot}'. "
+                    "Se esperaba 'app_label.model' (ej. 'dcim.device')."
+                )
+        return v
+
+    @model_validator(mode="after")
+    def validate_choice_set_if_selection(self) -> "BaseCustomFieldDef":
+        if self.type == "selection" and not self.choice_set:
+            raise ValueError(
+                "Los campos de tipo 'selection' deben definir un 'choice_set'."
             )
-            sys.exit(1)
-        return cls(**{f.name: raw[f.name] for f in fields(cls)})
+        return self
+
+
+class SpecialCustomFieldConfig(BaseCustomFieldDef):
+    """
+    Definición para custom fields especiales definidos en el nivel
+    superior del YAML (ej. machine_type, environment).
+    """
+
+    field_name: str = Field(min_length=1)
+
+
+class CustomFieldConfig(BaseCustomFieldDef):
+    """Definición estándar de Custom Field en la lista 'custom_fields'."""
+
+    name: str = Field(min_length=1)
+    default: Any = None
+
+
+class FieldMappingConfig(BaseModel):
+    """Definición de mapeo entre columna(s) CSV y atributo NetBox."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source: str | list[str]
+    target: str = Field(min_length=1)
+    skip_if_empty: bool = True
+    cast: Literal["int", "int_gb_to_mb", "bool_si_no"] | None = None
+    transform: Literal["concat_dot"] | None = None
+    map: str | None = None
+
+    @model_validator(mode="after")
+    def validate_transform_and_source(self) -> "FieldMappingConfig":
+        # TODO: refactorizar para reducir complejidad cognitiva
+        if self.transform == "concat_dot":
+            if not isinstance(self.source, list) or len(self.source) < 1:
+                raise ValueError(
+                    f"El transform 'concat_dot' para target '{self.target}' "
+                    "requiere que 'source' sea una lista no vacía."
+                )
+            for s in self.source:
+                if not isinstance(s, str) or not s.strip():
+                    raise ValueError(
+                        f"En 'source' para transform 'concat_dot' (target '{self.target}'), "
+                        "ningún elemento puede estar vacío."
+                    )
+        elif isinstance(self.source, str):
+            if not self.source.strip():
+                raise ValueError(
+                    f"El campo 'source' para target '{self.target}' no puede estar vacío."
+                )
+        elif isinstance(self.source, list):
+            if not self.source:
+                raise ValueError(
+                    f"El campo 'source' para target '{self.target}' no puede ser una lista vacía."
+                )
+            for s in self.source:
+                if not isinstance(s, str) or not s.strip():
+                    raise ValueError(
+                        f"En 'source' (target '{self.target}'), ningún elemento puede estar vacío."
+                    )
+        return self
+
+
+class StatusDefaultsConfig(BaseModel):
+    """Valores por defecto para status de Device y VM."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    device: str = "inventory"
+    virtual_machine: str = "staged"
+
+
+class NetworkColumnsConfig(BaseModel):
+    """Nombres de columnas del CSV para interfaces de red."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    names: str = Field(min_length=1)
+    status: str = Field(min_length=1)
+    ip: str = Field(min_length=1)
+    prefix: str = Field(min_length=1)
+    mac: str = Field(min_length=1)
+
+
+class NetworkConfig(BaseModel):
+    """Configuración de red y mapeo de estado de interfaces."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    columns: NetworkColumnsConfig
+    interface_status_map: dict[str, bool] = Field(
+        default_factory=lambda: {"up": True, "down": False}
+    )
+
+
+class NetBoxMappingConfig(BaseModel):
+    """
+    Contrato completo de configuración y mapeo cargado desde netbox_mapping.yaml.
+    Valida tipos, restricciones de valor y consistencia referencial.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    centralized_columns: CentralizedColumns
+    csv_extra_columns: dict[str, str] = Field(default_factory=dict)
+    site: SiteConfig
+    cluster_type: ClusterTypeConfig
+    device_roles: list[DeviceRoleConfig]
+    machine_type: SpecialCustomFieldConfig
+    environment: SpecialCustomFieldConfig | None = None
+    environment_map: dict[str, str] = Field(default_factory=dict)
+    machine_type_map: dict[str, Literal["device", "virtual_machine"]]
+    status_map: dict[str, str]
+    status_defaults: StatusDefaultsConfig = Field(
+        default_factory=StatusDefaultsConfig
+    )
+    custom_fields: list[CustomFieldConfig] = Field(default_factory=list)
+    device_fields: list[FieldMappingConfig] = Field(default_factory=list)
+    device_custom_fields: list[FieldMappingConfig] = Field(default_factory=list)
+    vm_fields: list[FieldMappingConfig] = Field(default_factory=list)
+    vm_custom_fields: list[FieldMappingConfig] = Field(default_factory=list)
+    network: NetworkConfig
+    empty_values: list[str] = Field(
+        default_factory=lambda: ["N/A", "", "None", "n/a", "none"]
+    )
+
+    @model_validator(mode="after")
+    def validate_config_cross_references(self) -> "NetBoxMappingConfig":
+        # 1. Validar que exista el rol "Others" (insensible a mayúsculas) para fallback
+        role_names_lower = {r.name.strip().lower() for r in self.device_roles}
+        if "others" not in role_names_lower:
+            raise ValueError(
+                "La lista 'device_roles' debe incluir un rol 'Others' "
+                "para fallback de roles no reconocidos."
+            )
+
+        # 2. Validar que los 'map' referenciados existan en el modelo
+        available_maps = {"environment_map": self.environment_map}
+        for field_group_name, field_group in [
+            ("device_fields", self.device_fields),
+            ("device_custom_fields", self.device_custom_fields),
+            ("vm_fields", self.vm_fields),
+            ("vm_custom_fields", self.vm_custom_fields),
+        ]:
+            for f in field_group:
+                if f.map and f.map not in available_maps:
+                    raise ValueError(
+                        f"En '{field_group_name}', target '{f.target}' "
+                        f"referencia map '{f.map}', pero no está definido en el YAML."
+                    )
+
+        # 3. Validar machine_type_map no vacío
+        if not self.machine_type_map:
+            raise ValueError("'machine_type_map' no puede estar vacío.")
+
+        return self
 
 
 # ============================================================
@@ -137,33 +372,43 @@ class CentralizedColumns:
 # ============================================================
 
 
-@dataclass(frozen=True)
-class RuntimeConfig:
+class RuntimeConfig(BaseModel):
     """
     Configuración resuelta una única vez al iniciar el script a
-    partir de netbox_mapping.yaml, y pasada explícitamente a cada
+    partir de NetBoxMappingConfig, y pasada explícitamente a cada
     función que la necesita.
     """
+    # TODO: Evaluar la posible idea de fusionar NetBoxMappingConfig y RuntimeConfig 
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
-    columns: CentralizedColumns
-    empty_values: frozenset[str]
+    mapping: NetBoxMappingConfig
+    empty_values_set: frozenset[str]
 
     @classmethod
-    def from_config(cls, cfg: dict[str, Any]) -> "RuntimeConfig":
-        raw_empty = cfg.get("empty_values", [])
+    def from_config(cls, mapping: NetBoxMappingConfig) -> "RuntimeConfig":
+        raw_empty = mapping.empty_values
         # "" siempre cuenta como vacío, esté o no listado en el YAML.
         empty_values = frozenset(raw_empty) | {""}
-        inv_columns = CentralizedColumns.from_config(cfg)
         return cls(
-            columns=inv_columns,
-            empty_values=empty_values,
+            mapping=mapping,
+            empty_values_set=empty_values,
         )
+
+    @property
+    def columns(self) -> CentralizedColumns:
+        """Acceso directo a las columnas centralizadas."""
+        return self.mapping.centralized_columns
+
+    @property
+    def empty_values(self) -> frozenset[str]:
+        """Conjunto inmutable de valores considerados vacíos."""
+        return self.empty_values_set
 
     def is_empty(self, value: Any) -> bool:
         """Determina si un valor es considerado vacío según empty_values."""
         if value is None:
             return True
-        return str(value).strip() in self.empty_values
+        return str(value).strip() in self.empty_values_set
 
 
 # ===========================================================
@@ -186,7 +431,7 @@ class CacheStore(TypedDict):
         clusters: mapea nombre → Cluster
         device_roles: mapea nombre → DeviceRole
     """
-
+    # TODO: evaluar si CacheStore se puede convertir en un modelo Pydantic
     manufacturers: dict[str, NetBoxObject]
     device_types: dict[tuple[str, str], NetBoxObject]
     platforms: dict[str, NetBoxObject]
@@ -200,12 +445,43 @@ class CacheStore(TypedDict):
 # ============================================================
 
 
-def load_config(mapping_path: Path) -> dict[str, Any]:
+def load_config(mapping_path: Path) -> NetBoxMappingConfig:
+    """
+    Carga y valida el archivo de mapping YAML utilizando Pydantic.
+    Si hay errores de validación de sintaxis o de esquema, los reporta
+    con detalle y termina la ejecución de manera controlada.
+    """
     if not mapping_path.is_file():
         log.error("No se encontró el archivo de mapping: %s", mapping_path)
         sys.exit(1)
-    with mapping_path.open("r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+
+    try:
+        with mapping_path.open("r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f)
+    except yaml.YAMLError:
+        log.exception("Error sintáctico de YAML al leer %s", mapping_path)
+        sys.exit(1)
+
+    if not isinstance(raw, dict):
+        log.error(
+            "El archivo de mapping %s no contiene un diccionario YAML válido.",
+            mapping_path,
+        )
+        sys.exit(1)
+
+    try:
+        return NetBoxMappingConfig.model_validate(raw)
+    except ValidationError as exc:
+        log.error(
+            "Error de validación en el archivo de mapping YAML (%s):",
+            mapping_path,
+        )
+        for err in exc.errors():
+            loc = " -> ".join(str(p) for p in err.get("loc", []))
+            msg = err.get("msg", "")
+            inp = err.get("input")
+            log.error("  • [%s]: %s (valor recibido: %r)", loc, msg, inp)
+        sys.exit(1)
 
 
 def load_env() -> tuple[str, str, bool]:
@@ -257,6 +533,7 @@ def build_netbox_endpoints(nb: Api) -> NetBoxEndpoints:
     sincronización si alguno de los endpoints requeridos no está
     expuesto por la instancia de pynetbox.
     """
+    # TODO: Evaluar si los endpoints realmente se validan o no, solo a nivel de existencia
     try:
         return NetBoxEndpoints(
             object_types=nb.core.object_types,
@@ -329,13 +606,13 @@ def safe_bool_si_no(value: Any) -> bool | None:
     return None
 
 
-def apply_cast(value: Any, cast: str) -> Any:
+def apply_cast(value: Any, cast_type: str) -> Any:
     """Aplica un cast específico a un valor según la definición del campo."""
-    if cast == "int":
+    if cast_type == "int":
         return safe_int(value)
-    if cast == "int_gb_to_mb":
+    if cast_type == "int_gb_to_mb":
         return safe_int_gb_to_mb(value)
-    if cast == "bool_si_no":
+    if cast_type == "bool_si_no":
         return safe_bool_si_no(value)
     return value
 
@@ -347,7 +624,7 @@ def concat_dot(parts: list[str], rc: RuntimeConfig) -> str:
 
 
 # ============================================================
-# LEER CSV
+# LEER Y VALIDAR CSV
 # ============================================================
 
 
@@ -371,6 +648,75 @@ def read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     return list(headers), rows
 
 
+def validate_csv_headers(
+    headers: list[str],
+    config: NetBoxMappingConfig,
+) -> bool:
+    """
+    Valida que los encabezados del CSV incluyan todas las columnas requeridas
+    definidas en netbox_mapping.yaml.
+    Retorna True si todas las columnas obligatorias están presentes.
+    """
+    # TODO: Evaluar si sería mejor iterar la config y validar los anclas en base a eso,
+    # en vez de hardcodear los nombres de las columnas. Sería más escalable.
+    # O usar algún otro mecanismo. De momento hardcodeado.
+    header_set = set(headers)
+    required_columns = {
+        config.centralized_columns.machine_name,
+        config.centralized_columns.machine_type,
+        config.centralized_columns.uuid,
+        config.centralized_columns.status,
+    }
+
+    missing_required = [
+        col for col in required_columns if col not in header_set
+    ]
+    if missing_required:
+        log.error(
+            "El CSV no contiene las siguientes columnas obligatorias: %s",
+            ", ".join(repr(c) for c in missing_required),
+        )
+        return False
+
+    # Chequeo informativo de otras columnas esperadas
+    all_expected_columns: set[str] = {
+        config.centralized_columns.os,
+        config.centralized_columns.role,
+        config.centralized_columns.manufacturer,
+        config.centralized_columns.model,
+        config.centralized_columns.rack,
+        config.centralized_columns.cluster,
+        config.centralized_columns.cores,
+        config.network.columns.names,
+        config.network.columns.status,
+        config.network.columns.ip,
+        config.network.columns.prefix,
+        config.network.columns.mac,
+    }
+    for field_list in (
+        config.device_fields,
+        config.device_custom_fields,
+        config.vm_fields,
+        config.vm_custom_fields,
+    ):
+        for f in field_list:
+            if isinstance(f.source, str):
+                all_expected_columns.add(f.source)
+            elif isinstance(f.source, list):
+                all_expected_columns.update(f.source)
+
+    missing_optional = [
+        col for col in sorted(all_expected_columns) if col not in header_set
+    ]
+    if missing_optional:
+        log.warning(
+            "Columnas del mapping no encontradas en el CSV (se tratarán como vacías): %s",
+            ", ".join(repr(c) for c in missing_optional),
+        )
+
+    return True
+
+
 # ============================================================
 # TAXONOMÍA: ensure_* (GET o CREATE)
 # ============================================================
@@ -379,7 +725,7 @@ def read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
 def get_netbox_object_id(obj: NetBoxObject) -> int:
     if isinstance(obj, dict):
         return int(obj.get("id", 0))
-    obj_id = obj.id
+    obj_id = getattr(obj, "id", None)
     if obj_id is None:
         return 0
     return int(obj_id)
@@ -387,12 +733,12 @@ def get_netbox_object_id(obj: NetBoxObject) -> int:
 
 def ensure_site(
     endpoints: NetBoxEndpoints,
-    cfg: dict[str, Any],
+    cfg: NetBoxMappingConfig,
     dry_run: bool,
 ) -> NetBoxObject:
     """Garantiza que el Site definido en el YAML exista en NetBox."""
-    name = cfg["site"]["name"]
-    slug = cfg["site"].get("slug") or slugify(name)
+    name = cfg.site.name
+    slug = cfg.site.slug or slugify(name)
 
     results: list[Record] = list(endpoints.sites.filter(name=name))
     if results:
@@ -408,11 +754,13 @@ def ensure_site(
 
 
 def ensure_cluster_type(
-    endpoints: NetBoxEndpoints, cfg: dict[str, Any], dry_run: bool
+    endpoints: NetBoxEndpoints,
+    cfg: NetBoxMappingConfig,
+    dry_run: bool,
 ) -> NetBoxObject:
     """Garantiza que el ClusterType definido en el YAML exista en NetBox."""
-    name = cfg["cluster_type"]["name"]
-    slug = cfg["cluster_type"].get("slug") or slugify(name)
+    name = cfg.cluster_type.name
+    slug = cfg.cluster_type.slug or slugify(name)
 
     results = list(endpoints.cluster_types.filter(name=name))
     if results:
@@ -428,7 +776,10 @@ def ensure_cluster_type(
 
 
 def ensure_manufacturer(
-    endpoints: NetBoxEndpoints, name: str, cache: dict[str, NetBoxObject], dry_run: bool
+    endpoints: NetBoxEndpoints,
+    name: str,
+    cache: dict[str, NetBoxObject],
+    dry_run: bool,
 ) -> NetBoxObject:
     """Garantiza que el Manufacturer exista en NetBox."""
     if name in cache:
@@ -472,7 +823,9 @@ def ensure_device_type(
         return cache[key]
 
     results: list[Record] = list(
-        endpoints.device_types.filter(model=model, manufacturer_id=manufacturer_id)
+        endpoints.device_types.filter(
+            model=model, manufacturer_id=manufacturer_id
+        )
     )
     if results:
         cache[key] = results[0]
@@ -493,13 +846,18 @@ def ensure_device_type(
             u_height=u_height or 1,
         ),
     )
-    log.info("DeviceType creado: %s / %s", getattr(manufacturer, "name", "?"), model)
+    log.info(
+        "DeviceType creado: %s / %s", getattr(manufacturer, "name", "?"), model
+    )
     cache[key] = obj
     return obj
 
 
 def ensure_platform(
-    endpoints: NetBoxEndpoints, name: str, cache: dict[str, NetBoxObject], dry_run: bool
+    endpoints: NetBoxEndpoints,
+    name: str,
+    cache: dict[str, NetBoxObject],
+    dry_run: bool,
 ) -> NetBoxObject:
     """Garantiza que el Platform exista en NetBox."""
     if name in cache:
@@ -534,7 +892,9 @@ def ensure_rack(
         return cache[name]
 
     site_id = get_netbox_object_id(site)
-    results: list[Record] = list(endpoints.racks.filter(name=name, site_id=site_id))
+    results: list[Record] = list(
+        endpoints.racks.filter(name=name, site_id=site_id)
+    )
     if results:
         cache[name] = results[0]
         return results[0]
@@ -639,39 +999,38 @@ def _get_object_type_id(
     return ot_id
 
 
-def _build_custom_field_definitions(cfg: dict[str, Any]) -> list[dict[str, Any]]:
-    cf_definitions: list[dict[str, Any]] = list(cfg.get("custom_fields", []))
+def _build_custom_field_definitions(
+    cfg: NetBoxMappingConfig,
+) -> list[CustomFieldConfig | SpecialCustomFieldConfig]:
+    """
+    Construye la lista unificada de definiciones de Custom Field
+    a partir de 'custom_fields', 'machine_type' y 'environment'.
+    """
+    cf_definitions: list[CustomFieldConfig | SpecialCustomFieldConfig] = list(
+        cfg.custom_fields
+    )
 
-    for special_key in ("machine_type", "environment"):
-        special_def = cfg.get(special_key)
-        if not special_def:
-            continue
-
-        cf_definitions.append(
-            {
-                "name": special_def["field_name"],
-                "label": special_def.get("label", special_def["field_name"]),
-                "type": special_def.get("type", "text"),
-                "required": special_def.get("required", False),
-                "object_types": special_def.get("object_types", []),
-                "choice_set": special_def.get("choice_set"),
-            }
-        )
+    if cfg.machine_type:
+        cf_definitions.append(cfg.machine_type)
+    if cfg.environment:
+        cf_definitions.append(cfg.environment)
 
     return cf_definitions
 
 
-def _get_choice_set_choices(choice_set_cfg: dict) -> list[list[str]]:
+def _get_choice_set_choices(choice_set_cfg: ChoiceSetConfig) -> list[list[str]]:
+    """Obtiene las opciones de un choice set, ya sea de tipo lista de listas o iterable."""
     return [
         [
-            choice["value"],
-            choice.get("label", choice["value"]),
+            choice.value,
+            choice.label,
         ]
-        for choice in choice_set_cfg.get("choices", [])
+        for choice in choice_set_cfg.choices
     ]
 
 
 def _normalize_choices(choices: Any) -> list[list[str]]:
+    """Convierte las opciones de un choice set a una lista de listas de strings."""
     if not choices:
         return []
 
@@ -684,11 +1043,13 @@ def _normalize_choices(choices: Any) -> list[list[str]]:
 
 def _ensure_choice_set(
     choice_sets_endpoint: Endpoint,
-    existing_choice_sets: dict,
-    choice_set_cfg: dict,
+    existing_choice_sets: dict[str, Any],
+    choice_set_cfg: ChoiceSetConfig,
     dry_run: bool,
 ) -> int | None:
-    choice_set_name = choice_set_cfg["name"]
+    """Crea un choice set si no existe en NetBox."""
+    # TODO: Agregar tipado fuerte a ChoiceSet, o similar.
+    choice_set_name = choice_set_cfg.name
     choices = _get_choice_set_choices(choice_set_cfg)
     choice_set = existing_choice_sets.get(choice_set_name)
 
@@ -754,14 +1115,19 @@ def _ensure_choice_set(
 
 
 def _ensure_custom_field(
-    custom_fields_endpoint: Any,
-    existing_cfs: dict,
-    cf_def: dict,
+    custom_fields_endpoint: Endpoint,
+    existing_cfs: dict[str, Any],
+    cf_def: CustomFieldConfig | SpecialCustomFieldConfig,
     ot_ids: list[int],
     choice_set_id: int | None,
     dry_run: bool,
 ) -> None:
-    name = cf_def["name"]
+    """Crea un custom field si no existe en NetBox."""
+    name = (
+        cf_def.field_name
+        if isinstance(cf_def, SpecialCustomFieldConfig)
+        else cf_def.name
+    )
 
     if name in existing_cfs:
         log.debug(
@@ -774,22 +1140,22 @@ def _ensure_custom_field(
         log.info(
             "[DRY-RUN] Crearía custom field: %s (%s)",
             name,
-            cf_def.get("type"),
+            cf_def.type,
         )
         return
 
-    create_kwargs = {
+    create_kwargs: dict[str, Any] = {
         "name": name,
-        "label": cf_def.get("label", name),
-        "type": cf_def.get("type", "text"),
-        "required": cf_def.get("required", False),
+        "label": cf_def.label or name,
+        "type": cf_def.type,
+        "required": cf_def.required,
         "object_types": ot_ids,
     }
 
     if choice_set_id is not None:
         create_kwargs["choice_set"] = choice_set_id
 
-    default_value = cf_def.get("default")
+    default_value = getattr(cf_def, "default", None)
     if default_value is not None:
         create_kwargs["default"] = default_value
 
@@ -803,7 +1169,7 @@ def _ensure_custom_field(
 
 def ensure_custom_fields(
     endpoints: NetBoxEndpoints,
-    cfg: dict[str, Any],
+    cfg: NetBoxMappingConfig,
     dry_run: bool,
 ) -> None:
     """
@@ -824,6 +1190,7 @@ def ensure_custom_fields(
     - Los Choice Sets se gestionan mediante
     /api/extras/custom-field-choice-sets/.
     """
+    # TODO: Agregar tipado fuerte a variables existing_cfs y existing_choice_sets
     # Obtener Custom Fields y Choice Sets existentes.
     existing_cfs = {cf.name: cf for cf in endpoints.custom_fields.all()}
 
@@ -832,13 +1199,9 @@ def ensure_custom_fields(
     }
 
     # Construir mapa nombre → ID de Object Type.
-    object_type_cache: dict[str, int] = {}
+    ot_cache: dict[str, int] = {}
 
     # Construir lista unificada de definiciones de Custom Field.
-    #
-    # 'custom_fields' contiene los campos normales.
-    # 'machine_type' y 'environment' son definiciones especiales
-    # pero deben terminar igualmente como Custom Fields en NetBox.
     cf_definitions = _build_custom_field_definitions(cfg)
 
     for cf_def in cf_definitions:
@@ -846,16 +1209,16 @@ def ensure_custom_fields(
             _get_object_type_id(
                 endpoints.object_types,
                 ot,
-                object_type_cache,
+                ot_cache,
             )
-            for ot in cf_def.get("object_types", [])
+            for ot in cf_def.object_types
         ]
         ot_ids = [i for i in ot_ids if i is not None]
 
         choice_set_id = None
-        choice_set_cfg = cf_def.get("choice_set")
+        choice_set_cfg = cf_def.choice_set
 
-        if cf_def.get("type") == "selection" and choice_set_cfg:
+        if cf_def.type == "selection" and choice_set_cfg:
             choice_set_id = _ensure_choice_set(
                 endpoints.choice_sets,
                 existing_choice_sets,
@@ -883,16 +1246,17 @@ def ensure_custom_fields(
 
 def parse_network_interfaces(
     row: dict[str, str],
-    net_cfg: dict,
+    net_cfg: NetworkConfig,
     rc: RuntimeConfig,
-) -> list[dict] | None:
+) -> list[dict[str, Any]] | None:
     """
     Parsea las 5 columnas de red del CSV (valores separados por comas)
     y devuelve una lista de dicts con la información de cada interfaz.
 
+    Valida formato de IP y CIDR usando ipaddress.
     Retorna None si los arrays tienen longitudes distintas.
     """
-    status_map: dict[str, bool] = net_cfg.get("interface_status_map", {})
+    status_map: dict[str, bool] = net_cfg.interface_status_map
 
     def split_col(col_name: str) -> list[str]:
         raw = row.get(col_name, "")
@@ -900,12 +1264,12 @@ def parse_network_interfaces(
             return []
         return [v.strip() for v in raw.split(",")]
 
-    cols = net_cfg["columns"]
-    names = split_col(cols["names"])
-    statuses = split_col(cols["status"])
-    ips = split_col(cols["ip"])
-    prefixes = split_col(cols["prefix"])
-    macs = split_col(cols["mac"])
+    cols = net_cfg.columns
+    names = split_col(cols.names)
+    statuses = split_col(cols.status)
+    ips = split_col(cols.ip)
+    prefixes = split_col(cols.prefix)
+    macs = split_col(cols.mac)
 
     if not names:
         return []
@@ -924,7 +1288,7 @@ def parse_network_interfaces(
     prefixes = pad(prefixes)
     macs = pad(macs)
 
-    interfaces = []
+    interfaces: list[dict[str, Any]] = []
     for i, name in enumerate(names):
         if rc.is_empty(name):
             continue
@@ -936,13 +1300,34 @@ def parse_network_interfaces(
         pfx_raw = prefixes[i] if not rc.is_empty(prefixes[i]) else None
         mac_raw = macs[i] if not rc.is_empty(macs[i]) else None
 
-        # Construir dirección CIDR si tenemos IP y prefijo.
+        # Validar IP y construir dirección CIDR si tenemos IP y prefijo.
         cidr = None
+        if ip_raw:
+            try:
+                ipaddress.ip_address(ip_raw)
+            except ValueError:
+                log.warning(
+                    "IP '%s' en interfaz '%s' no es una dirección IP válida; "
+                    "se omitirá la asignación de IP.",
+                    ip_raw,
+                    name,
+                )
+                ip_raw = None
+
         if ip_raw and pfx_raw:
             try:
-                prefix_len = pfx_raw.split("/")[1]
-                cidr = f"{ip_raw}/{prefix_len}"
-            except IndexError:
+                prefix_len = pfx_raw.split("/")[1].strip()
+                candidate_cidr = f"{ip_raw}/{prefix_len}"
+                # Validar con ip_interface
+                ipaddress.ip_interface(candidate_cidr)
+                cidr = candidate_cidr
+            except (IndexError, ValueError):
+                log.warning(
+                    "Prefijo o CIDR inválido '%s' para IP '%s' en interfaz '%s'.",
+                    pfx_raw,
+                    ip_raw,
+                    name,
+                )
                 cidr = None
 
         interfaces.append(
@@ -968,11 +1353,11 @@ def sync_interfaces_for_object(
     endpoints: NetBoxEndpoints,
     obj_id: int,
     obj_type: Literal["device", "virtual_machine"],
-    interfaces: list[dict],
+    interfaces: list[dict[str, Any]],
     dry_run: bool,
 ) -> None:
     """Sincroniza interfaces y sus IPs para un Device o VM."""
-
+    # TODO: Agregar tipado fuerte a variables como existing, entre otras
     if obj_type == "device":
         iface_endpoint = endpoints.device_interfaces
         iface_filter = {"device_id": obj_id}
@@ -980,7 +1365,9 @@ def sync_interfaces_for_object(
         iface_endpoint = endpoints.vm_interfaces
         iface_filter = {"virtual_machine_id": obj_id}
 
-    existing = {iface.name: iface for iface in iface_endpoint.filter(**iface_filter)}
+    existing = {
+        iface.name: iface for iface in iface_endpoint.filter(**iface_filter)
+    }
 
     for iface_data in interfaces:
         name = iface_data["name"]
@@ -999,7 +1386,9 @@ def sync_interfaces_for_object(
 
         if dry_run:
             action = "Actualizaría" if name in existing else "Crearía"
-            log.info("[DRY-RUN] %s interfaz %s en objeto %s", action, name, obj_id)
+            log.info(
+                "[DRY-RUN] %s interfaz %s en objeto %s", action, name, obj_id
+            )
         elif name in existing:
             try:
                 existing[name].update(payload)
@@ -1066,13 +1455,18 @@ def _assign_ip(
 
 def _get_custom_field_definition(
     target: str,
-    config: dict,
-) -> dict | None:
+    config: NetBoxMappingConfig,
+) -> CustomFieldConfig | SpecialCustomFieldConfig | None:
     """Busca la definición global de un Custom Field por su nombre."""
     custom_fields = _build_custom_field_definitions(config)
 
     for cf_def in custom_fields:
-        if cf_def.get("name") == target:
+        name = (
+            cf_def.field_name
+            if isinstance(cf_def, SpecialCustomFieldConfig)
+            else cf_def.name
+        )
+        if name == target:
             return cf_def
 
     return None
@@ -1080,26 +1474,30 @@ def _get_custom_field_definition(
 
 def resolve_field_value(
     row: dict[str, str],
-    field_def: dict[str, Any],
-    config: dict[str, Any],
+    field_def: FieldMappingConfig,
+    config: NetBoxMappingConfig,
     rc: RuntimeConfig,
 ) -> Any:
     """
-    Resuelve el valor de un campo según su definición en el YAML.
+    Resuelve el valor de un campo según su definición tipada en el YAML.
 
     Los valores específicos del origen se obtienen desde field_def.
     Los atributos globales del Custom Field, como 'default', se
     obtienen desde la definición global del Custom Field.
     """
-    source: str = field_def.get("source", "")
-    target: str = field_def.get("target", "")
-    skip_if_empty: bool = field_def.get("skip_if_empty", True)
-    transform: str | None = field_def.get("transform")
-    cast: str | None = field_def.get("cast")
-    map_key: str | None = field_def.get("map")
+    source = field_def.source
+    target = field_def.target
+    skip_if_empty = field_def.skip_if_empty
+    transform = field_def.transform
+    cast_type = field_def.cast
+    map_key = field_def.map
 
     custom_field_def = _get_custom_field_definition(target, config)
-    default = custom_field_def.get("default") if custom_field_def is not None else None
+    default = (
+        getattr(custom_field_def, "default", None)
+        if custom_field_def is not None
+        else None
+    )
 
     # Transformación multi-source (concat_dot).
     if isinstance(source, list) and transform == "concat_dot":
@@ -1114,8 +1512,11 @@ def resolve_field_value(
 
         return value
 
-    # Campo simple.
-    value = row.get(source, "")
+    # Campo simple (source es str o list sin transform).
+    if isinstance(source, str):
+        value = row.get(source, "")
+    else:
+        value = row.get(source[0], "") if source else ""
 
     if rc.is_empty(value):
         if default is not None:
@@ -1124,13 +1525,17 @@ def resolve_field_value(
 
     # Mapeo de valores (ej. environment_map).
     if map_key:
-        mapping = config.get(map_key, {})
-        mapped = mapping.get(value.strip())
+        mapping_dict = (
+            config.environment_map if map_key == "environment_map" else {}
+        )
+        mapped = mapping_dict.get(value.strip())
         if mapped is None:
             log.warning(
                 "Valor '%s' de la columna '%s' no está definido en '%s'; "
                 "el campo se omitirá para esta fila.",
-                value, source, map_key,
+                value,
+                source,
+                map_key,
             )
             if default is not None:
                 return default
@@ -1138,8 +1543,8 @@ def resolve_field_value(
         value = mapped
 
     # Cast de tipo.
-    if cast:
-        value = apply_cast(value, cast)
+    if cast_type:
+        value = apply_cast(value, cast_type)
 
     return value
 
@@ -1151,9 +1556,9 @@ def resolve_field_value(
 
 def build_payload(
     row: dict[str, str],
-    field_defs: list[dict[str, Any]],
-    cf_defs: list[dict[str, Any]],
-    config: dict[str, Any],
+    field_defs: list[FieldMappingConfig],
+    cf_defs: list[FieldMappingConfig],
+    config: NetBoxMappingConfig,
     rc: RuntimeConfig,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """
@@ -1164,7 +1569,7 @@ def build_payload(
     cf_payload: dict[str, Any] = {}
 
     for fd in field_defs:
-        target: str = fd.get("target", "")
+        target = fd.target
         if target.startswith("_"):
             # Campo interno del script (ej. _u_height), no va al API directamente.
             continue
@@ -1173,7 +1578,7 @@ def build_payload(
             payload[target] = value
 
     for fd in cf_defs:
-        target: str = fd.get("target", "")
+        target = fd.target
         value = resolve_field_value(row, fd, config, rc)
         if value is not None:
             cf_payload[target] = value
@@ -1186,14 +1591,14 @@ def build_payload(
 
 def get_internal_field(
     row: dict[str, str],
-    field_defs: list[dict[str, Any]],
+    field_defs: list[FieldMappingConfig],
     internal_key: str,
-    config: dict,
+    config: NetBoxMappingConfig,
     rc: RuntimeConfig,
 ) -> Any:
     """Extrae un campo interno (prefijado con '_') de los field_defs."""
     for fd in field_defs:
-        if fd.get("target") == internal_key:
+        if fd.target == internal_key:
             return resolve_field_value(row, fd, config, rc)
     return None
 
@@ -1205,7 +1610,7 @@ def get_internal_field(
 
 def resolve_netbox_status(
     row: dict[str, str],
-    config: dict,
+    config: NetBoxMappingConfig,
     object_type: str,
     columns: CentralizedColumns,
 ) -> str:
@@ -1217,13 +1622,12 @@ def resolve_netbox_status(
         virtual_machine -> staged
     """
     estado = row.get(columns.status, "").strip()
-    status_mapped = config.get("status_map", {}).get(estado)
+    status_mapped = config.status_map.get(estado)
     if status_mapped:
         return status_mapped
-    defaults: dict[str, str] = config.get("status_defaults", {})
     if object_type == "device":
-        return defaults.get("device", "inventory")
-    return defaults.get("virtual_machine", "staged")
+        return config.status_defaults.device
+    return config.status_defaults.virtual_machine
 
 
 # ============================================================
@@ -1329,8 +1733,8 @@ def validate_identity_conflict(
 
 def apply_sync(
     endpoint: Endpoint,
-    payload: dict,
-    existing: list[Any],
+    payload: dict[str, Any],
+    existing: list[Record],
     machine_name: str,
     uuid: str,
     object_label: str,
@@ -1402,7 +1806,7 @@ def apply_sync(
 def sync_device(
     endpoints: NetBoxEndpoints,
     row: dict[str, str],
-    config: dict[str, Any],
+    config: NetBoxMappingConfig,
     site: NetBoxObject,
     cluster_type: NetBoxObject,
     caches: CacheStore,
@@ -1418,15 +1822,21 @@ def sync_device(
     machine_type: str = row.get(rc.columns.machine_type, "").strip()
 
     if rc.is_empty(machine_name):
-        log.warning(f"SKIP ({rc.columns.machine_name} vacío).")
+        log.warning("SKIP (%s vacío).", rc.columns.machine_name)
         return "SKIPPED"
     if rc.is_empty(machine_type):
-        log.warning(f"SKIP ({machine_name}): campo '{rc.columns.machine_type}' vacío.")
+        log.warning(
+            "SKIP (%s): campo '%s' vacío.",
+            machine_name,
+            rc.columns.machine_type,
+        )
         return "SKIPPED"
 
-    device_fields_cfg: list[dict[str, Any]] = config.get("device_fields", [])
-    device_cf_cfg: list[dict[str, Any]] = config.get("device_custom_fields", [])
-    payload, _ = build_payload(row, device_fields_cfg, device_cf_cfg, config, rc)
+    device_fields_cfg = config.device_fields
+    device_cf_cfg = config.device_custom_fields
+    payload, _ = build_payload(
+        row, device_fields_cfg, device_cf_cfg, config, rc
+    )
 
     # ── Resolución de objetos relacionados ──────────────────
     # Role.
@@ -1552,7 +1962,7 @@ def sync_device(
 def sync_vm(
     endpoints: NetBoxEndpoints,
     row: dict[str, str],
-    config: dict[str, Any],
+    config: NetBoxMappingConfig,
     site: NetBoxObject,
     cluster_type: NetBoxObject,
     caches: CacheStore,
@@ -1567,14 +1977,18 @@ def sync_vm(
     uuid: str = row.get(rc.columns.uuid, "").strip()
     machine_type: str = row.get(rc.columns.machine_type, "").strip()
     if rc.is_empty(machine_name):
-        log.warning(f"SKIP ({rc.columns.machine_name} vacío).")
+        log.warning("SKIP (%s vacío).", rc.columns.machine_name)
         return "SKIPPED"
     if rc.is_empty(machine_type):
-        log.warning(f"SKIP ({machine_name}): campo '{rc.columns.machine_type}' vacío.")
+        log.warning(
+            "SKIP (%s): campo '%s' vacío.",
+            machine_name,
+            rc.columns.machine_type,
+        )
         return "SKIPPED"
 
-    vm_fields_cfg: list[dict] = config.get("vm_fields", [])
-    vm_cf_cfg: list[dict] = config.get("vm_custom_fields", [])
+    vm_fields_cfg = config.vm_fields
+    vm_cf_cfg = config.vm_custom_fields
     payload, _ = build_payload(
         row,
         vm_fields_cfg,
@@ -1601,7 +2015,7 @@ def sync_vm(
     # Cluster.
     host_name: str = row.get(rc.columns.cluster, "").strip()
     if rc.is_empty(host_name):
-        log.warning(f"SKIP ({machine_name}): VM sin {rc.columns.cluster}.")
+        log.warning("SKIP (%s): VM sin %s.", machine_name, rc.columns.cluster)
         return "SKIPPED"
     cluster = ensure_cluster(
         endpoints,
@@ -1651,7 +2065,9 @@ def sync_vm(
             rc,
         )
     except Exception:
-        log.exception("ERROR buscando VM '%s' (UUID=%s)", machine_name, uuid or "N/A")
+        log.exception(
+            "ERROR buscando VM '%s' (UUID=%s)", machine_name, uuid or "N/A"
+        )
         return "ERROR"
 
     if validate_identity_conflict(
@@ -1683,7 +2099,7 @@ def sync_vm(
 
 def ensure_all_device_roles(
     endpoints: NetBoxEndpoints,
-    cfg: dict[str, Any],
+    cfg: NetBoxMappingConfig,
     caches: CacheStore,
     dry_run: bool,
 ) -> None:
@@ -1693,11 +2109,10 @@ def ensure_all_device_roles(
     Todos los roles se habilitan para su uso en Virtual Machines.
     Puebla caches['device_roles'] con {nombre_lower: objeto}.
     """
-    roles_cfg: list[dict] = cfg.get("device_roles", [])
-    for role_def in roles_cfg:
-        name = role_def["name"]
-        slug = role_def.get("slug") or slugify(name)
-        color = role_def.get("color", "9e9e9e")
+    for role_def in cfg.device_roles:
+        name = role_def.name
+        slug = role_def.slug or slugify(name)
+        color = role_def.color
         key = name.lower()
 
         if key in caches["device_roles"]:
@@ -1764,7 +2179,7 @@ def resolve_device_role(
     role_name: str,
     caches: CacheStore,
     rc: RuntimeConfig,
-) -> Any | None:
+) -> NetBoxObject | None:
     """
     Busca un DeviceRole por nombre (insensible a mayúsculas).
     Si el nombre está vacío o no existe, utiliza "Others" como fallback.
@@ -1822,7 +2237,7 @@ def main() -> None:
     )
 
     # ── Cargar configuración ─────────────────────────────────
-    config: dict[str, Any] = load_config(mapping_path)
+    config: NetBoxMappingConfig = load_config(mapping_path)
     rc = RuntimeConfig.from_config(config)
     columns: CentralizedColumns = rc.columns
 
@@ -1859,10 +2274,11 @@ def main() -> None:
     ensure_all_device_roles(endpoints, config, caches, args.dry_run)
 
     # ── Leer CSV ─────────────────────────────────────────────
-    _headers, rows = read_csv(args.csv)
+    headers, rows = read_csv(args.csv)
 
-    machine_type_map: dict[str, str] = config.get("machine_type_map", {})
-    net_cfg: dict[str, Any] = config.get("network", {})
+    # ── Validar encabezados del CSV ──────────────────────────
+    if not validate_csv_headers(headers, config):
+        sys.exit(1)
 
     # ── Contadores ───────────────────────────────────────────
     counts = {
@@ -1872,23 +2288,24 @@ def main() -> None:
         "SKIPPED": 0,
         "ERROR": 0,
     }
-
+    #TODO: Implementar UNCHANGED, ya que actualmente no lo devuelve
     # ── Procesar filas ───────────────────────────────────────
     for row_num, row in enumerate(rows, start=2):
         tipo_raw = row.get(columns.machine_type, "").strip()
-        nb_type = machine_type_map.get(tipo_raw)
+        nb_type = config.machine_type_map.get(tipo_raw)
 
         if nb_type is None:
             log.warning(
-                f"Fila %d SKIP: {columns.machine_type} '%s' no está en machine_type_map.",
+                "Fila %d SKIP: %s '%s' no está en machine_type_map.",
                 row_num,
+                columns.machine_type,
                 tipo_raw,
             )
             counts["SKIPPED"] += 1
             continue
 
         # ── Parsear interfaces ────────────────────────────────
-        interfaces = parse_network_interfaces(row, net_cfg, rc)
+        interfaces = parse_network_interfaces(row, config.network, rc)
         if interfaces is None:
             machine_name = row.get(columns.machine_name, f"fila {row_num}")
             log.warning(
