@@ -100,10 +100,11 @@ class NetBoxEndpoints:
 
 
 @dataclass(frozen=True)
-class InventoryColumns:
+class CentralizedColumns:
     """
-    Nombres de columnas de merged_inventory.csv, resueltos una única
-    vez al iniciar el script a partir de netbox_mapping.yaml.
+    Nombres de columnas centralizadas de merged_inventory.csv,
+    resueltos una única vez al iniciar el script a partir de
+    netbox_mapping.yaml.
     """
 
     machine_name: str
@@ -119,12 +120,12 @@ class InventoryColumns:
     uuid: str
 
     @classmethod
-    def from_config(cls, cfg: dict[str, Any]) -> "InventoryColumns":
-        raw: dict[str, str] = cfg.get("inventory_columns", {})
+    def from_config(cls, cfg: dict[str, Any]) -> "CentralizedColumns":
+        raw: dict[str, str] = cfg.get("centralized_columns", {})
         missing = [f.name for f in fields(cls) if not raw.get(f.name)]
         if missing:
             log.error(
-                "Faltan columnas en 'inventory_columns': %s",
+                "Faltan columnas en 'centralized_columns': %s",
                 ", ".join(missing),
             )
             sys.exit(1)
@@ -144,7 +145,7 @@ class RuntimeConfig:
     función que la necesita.
     """
 
-    columns: InventoryColumns
+    columns: CentralizedColumns
     empty_values: frozenset[str]
 
     @classmethod
@@ -152,7 +153,7 @@ class RuntimeConfig:
         raw_empty = cfg.get("empty_values", [])
         # "" siempre cuenta como vacío, esté o no listado en el YAML.
         empty_values = frozenset(raw_empty) | {""}
-        inv_columns = InventoryColumns.from_config(cfg)
+        inv_columns = CentralizedColumns.from_config(cfg)
         return cls(
             columns=inv_columns,
             empty_values=empty_values,
@@ -1121,10 +1122,20 @@ def resolve_field_value(
             return default
         return None if skip_if_empty else ""
 
-    # Mapeo de valores (ej. status_map, operational_status_map).
+    # Mapeo de valores (ej. environment_map).
     if map_key:
         mapping = config.get(map_key, {})
-        value = mapping.get(value.strip(), value)
+        mapped = mapping.get(value.strip())
+        if mapped is None:
+            log.warning(
+                "Valor '%s' de la columna '%s' no está definido en '%s'; "
+                "el campo se omitirá para esta fila.",
+                value, source, map_key,
+            )
+            if default is not None:
+                return default
+            return None if skip_if_empty else ""
+        value = mapped
 
     # Cast de tipo.
     if cast:
@@ -1196,7 +1207,7 @@ def resolve_netbox_status(
     row: dict[str, str],
     config: dict,
     object_type: str,
-    columns: InventoryColumns,
+    columns: CentralizedColumns,
 ) -> str:
     """
     Resuelve el status NetBox a partir de la columna 'Estado'.
@@ -1209,7 +1220,7 @@ def resolve_netbox_status(
     status_mapped = config.get("status_map", {}).get(estado)
     if status_mapped:
         return status_mapped
-    defaults = config.get("status_defaults", {})
+    defaults: dict[str, str] = config.get("status_defaults", {})
     if object_type == "device":
         return defaults.get("device", "inventory")
     return defaults.get("virtual_machine", "staged")
@@ -1231,10 +1242,11 @@ def resolve_platform(
     """Resuelve el Platform desde la columna OS y lo agrega al payload si existe."""
     platform_name = row.get(rc.columns.os, "").strip()
     if not rc.is_empty(platform_name):
+        platforms_cache = caches.get("platforms", {})
         platform = ensure_platform(
             endpoints,
             platform_name,
-            caches["platforms"],
+            platforms_cache,
             dry_run,
         )
         payload["platform"] = get_netbox_object_id(platform)
@@ -1812,7 +1824,7 @@ def main() -> None:
     # ── Cargar configuración ─────────────────────────────────
     config: dict[str, Any] = load_config(mapping_path)
     rc = RuntimeConfig.from_config(config)
-    columns: InventoryColumns = rc.columns
+    columns: CentralizedColumns = rc.columns
 
     # ── Cargar credenciales ──────────────────────────────────
     url, token, verify_ssl = load_env()

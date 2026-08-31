@@ -11,6 +11,49 @@
 #                       dcim, virtualization, ipam, extras, core
 #   NETBOX_VERIFY_SSL → "true" / "false" (por defecto: true)
 
+# ── Columnas del inventario (Centralizadas) ──────────────────
+# Nombres exactos de las columnas utilizadas por el exportador.
+# Se definen anclas (&) para reutilizar como alias (*) en todo el archivo.
+
+centralized_columns:
+  machine_name: &col_nombre_maquina "Nombre maquina"
+  machine_type: &col_tipo_maquina "Tipo de maquina"
+  os: &col_so_host "SO Host"
+  status: "Estado"
+  role: "Rol"
+  manufacturer: "Marca"
+  model: "Modelo"
+  rack: &col_rack "Rack"
+  cluster: "Host/Cluster/Chassis"
+  cores: &col_cores "Cores"
+  uuid: &col_uuid "UUID"
+
+# Columnas adicionales del CSV referenciadas en mappings
+csv_extra_columns:
+  serial: &col_serial "Serial Number"
+  asset_tag: &col_asset_tag "Nro Inventario"
+  pos_u: &col_pos_u "Posicion (U)"
+  alt_u: &col_alt_u "Altura (U)"
+  desc: &col_desc "Descripcion"
+  notes: &col_notas "Notas"
+  env: &col_entorno "Entorno"
+  service_tag: &col_service_tag "Service Tag"
+  cpu_model: &col_cpu_modelo "CPU Modelo"
+  threads: &col_threads "Threads"
+  sockets: &col_sockets "Sockets"
+  disks: &col_discos "Discos"
+  raid: &col_raid "RAID"
+  bios_ver: &col_bios_ver "Version BIOS"
+  bios_date: &col_bios_date "Fecha BIOS"
+  rundeck_node: &col_nodo_rundeck "Nodo Rundeck"
+  ram_gb: &col_ram_gb "RAM (GB)"
+  disk_cap: &col_disk_cap "Capacidad visible (GB)"
+  iface_names: &col_ifaces "Interfaces"
+  iface_status: &col_ifaces_status "Interfaces estado"
+  iface_ip: &col_ip "IP"
+  iface_pfx: &col_pfx "Red IP"
+  iface_mac: &col_mac "MAC"
+
 # ── Site único ───────────────────────────────────────────────
 # Todos los objetos se asignan a este site.
 # Si no existe en NetBox, el script lo crea automáticamente.
@@ -123,8 +166,6 @@ machine_type:
 
 # ── Entorno ──────────────────────────────────────────────────
 # Representa el entorno lógico en el que opera el nodo.
-# No se utiliza el status de NetBox para representar Producción,
-# Certificación o Desarrollo.
 # Se almacena como Custom Field de tipo Selection.
 environment:
   field_name: "environment"
@@ -148,7 +189,6 @@ environment_map:
   "Producción": "production"
   "Certificación": "certification"
   "Desarrollo": "development"
-
 
 # ── Tipo de máquina → modelo NetBox ──────────────────────────
 # Determina si la fila se exporta como Device o VirtualMachine.
@@ -280,7 +320,7 @@ custom_fields:
     label: "Nodo Rundeck"
     type: "boolean"
     required: false
-    default: false
+    default: false # por defecto es false, o sea que no es un nodo de rundeck
     object_types:
       - "dcim.device"
       - "virtualization.virtualmachine"
@@ -288,161 +328,160 @@ custom_fields:
 # ── Campos nativos de Device (DCIM) ──────────────────────────
 # 'source' → nombre exacto de la columna en merged_inventory.csv.
 # 'target' → campo en el API de NetBox.
-# 'skip_if_empty' → no enviar el campo si el valor es vacío/N/A.
+# 'skip_if_empty' → no enviar el campo si el valor es vacío.
 
 device_fields:
-  - source: "Nombre maquina"
+  - source: *col_nombre_maquina
     target: "name"
     skip_if_empty: false
 
-  - source: "Serial Number"
+  - source: *col_serial
     target: "serial"
     skip_if_empty: true
 
-  - source: "Nro Inventario"
+  - source: *col_asset_tag
     target: "asset_tag"
     skip_if_empty: true
 
-  - source: "Rack"
+  - source: *col_rack
     target: "rack"
     skip_if_empty: true
 
-  - source: "Posicion (U)"
+  - source: *col_pos_u
     target: "position"
     skip_if_empty: true
     cast: "int"
 
-  - source: "Altura (U)"
+  - source: *col_alt_u
     target: "_u_height"
     skip_if_empty: true
     cast: "int"
 
-  - source: "SO Host"
+  - source: *col_so_host
     target: "platform"
     skip_if_empty: true
 
-  - source: ["Descripcion", "Notas"]
+  - source: [*col_desc, *col_notas]
     target: "description"
     transform: "concat_dot"
     skip_if_empty: true
 
 # ── Campos específicos de Device ─────────────────────────────
 device_custom_fields:
-  - source: "UUID"
+  - source: *col_uuid
     target: "inventory_uuid"
     skip_if_empty: true
 
-  - source: "Tipo de maquina"
+  - source: *col_tipo_maquina
     target: "machine_type"
     skip_if_empty: false
 
-  - source: "Entorno"
+  - source: *col_entorno
     target: "environment"
     skip_if_empty: true
     map: "environment_map"
 
-  - source: "Service Tag"
+  - source: *col_service_tag
     target: "service_tag"
     skip_if_empty: true
 
-  - source: "CPU Modelo"
+  - source: *col_cpu_modelo
     target: "cpu_model"
     skip_if_empty: true
 
-  - source: "Cores"
+  - source: *col_cores
     target: "cpu_cores"
     skip_if_empty: true
     cast: "int"
 
-  - source: "Threads"
+  - source: *col_threads
     target: "cpu_threads"
     skip_if_empty: true
     cast: "int"
 
-  - source: "Sockets"
+  - source: *col_sockets
     target: "cpu_sockets"
     skip_if_empty: true
     cast: "int"
 
-  - source: "Discos"
+  - source: *col_discos
     target: "disks"
     skip_if_empty: true
 
-  - source: "RAID"
+  - source: *col_raid
     target: "raid"
     skip_if_empty: true
 
-  - source: "Version BIOS"
+  - source: *col_bios_ver
     target: "bios_version"
     skip_if_empty: true
 
-  - source: "Fecha BIOS"
+  - source: *col_bios_date
     target: "bios_date"
     skip_if_empty: true
 
-  - source: "Nodo Rundeck"
+  - source: *col_nodo_rundeck
     target: "rundeck_node"
     skip_if_empty: true
     cast: "bool_si_no"
 
 # ── Campos nativos de VirtualMachine ─────────────────────────
 vm_fields:
-  - source: "Nombre maquina"
+  - source: *col_nombre_maquina
     target: "name"
     skip_if_empty: false
 
-  - source: "SO Host"
+  - source: *col_so_host
     target: "platform"
     skip_if_empty: true
 
-  - source: "RAM (GB)"
+  - source: *col_ram_gb
     target: "memory"
     skip_if_empty: true
     cast: "int_gb_to_mb"
 
-  - source: "Capacidad visible (GB)"
+  - source: *col_disk_cap
     target: "disk"
     skip_if_empty: true
     cast: "int"
 
-  - source: ["Descripcion", "Notas"]
+  - source: [*col_desc, *col_notas]
     target: "description"
     transform: "concat_dot"
     skip_if_empty: true
 
 # ── Campos específicos de VirtualMachine ─────────────────────
 vm_custom_fields:
-  - source: "UUID"
+  - source: *col_uuid
     target: "inventory_uuid"
     skip_if_empty: true
 
-  - source: "Tipo de maquina"
+  - source: *col_tipo_maquina
     target: "machine_type"
     skip_if_empty: false
 
-  - source: "Entorno"
+  - source: *col_entorno
     target: "environment"
     skip_if_empty: true
     map: "environment_map"
 
-  - source: "CPU Modelo"
+  - source: *col_cpu_modelo
     target: "cpu_model"
     skip_if_empty: true
 
-  - source: "Cores"
+  - source: *col_cores
     target: "cpu_cores"
     skip_if_empty: true
     cast: "int"
 
-  - source: "Discos"
+  - source: *col_discos
     target: "disks"
     skip_if_empty: true
 
-  - source: "Nodo Rundeck"
+  - source: *col_nodo_rundeck
     target: "rundeck_node"
     skip_if_empty: true
     cast: "bool_si_no"
-
 
 # ── Interfaces de red ─────────────────────────────────────────
 # Las cinco columnas de red se parsean en paralelo por posición.
@@ -453,38 +492,18 @@ vm_custom_fields:
 
 network:
   columns:
-    names: "Interfaces"
-    status: "Interfaces estado"
-    ip: "IP"
-    prefix: "Red IP"
-    mac: "MAC"
+    names: *col_ifaces
+    status: *col_ifaces_status
+    ip: *col_ip
+    prefix: *col_pfx
+    mac: *col_mac
 
   interface_status_map:
     "up": true
     "down": false
 
-
-# ── Columnas principales del inventario ──────────────────────
-# Nombres exactos de las columnas utilizadas por el exportador.
-# Estos valores deben coincidir con los encabezados de
-# merged_inventory.csv.
-
-inventory_columns:
-  machine_name: "Nombre maquina"
-  machine_type: "Tipo de maquina"
-  os: "SO Host"
-  status: "Estado"
-  role: "Rol"
-  manufacturer: "Marca"
-  model: "Modelo"
-  rack: "Rack"
-  cluster: "Host/Cluster/Chassis"
-  cores: "Cores"
-  uuid: "UUID"
-
-
 # ── Valores vacíos ─────────────────────────────────────────
-# Valores vacíos que se consideran equivalentes a None/N/A y 
+# Valores vacíos que se consideran equivalentes a None/N/A y
 # se omiten en la exportación.
 
 empty_values:
