@@ -1043,15 +1043,14 @@ def _normalize_choices(choices: Any) -> list[list[str]]:
 
 def _ensure_choice_set(
     choice_sets_endpoint: Endpoint,
-    existing_choice_sets: dict[str, Any],
+    existing_choice_sets: dict[str, Record],
     choice_set_cfg: ChoiceSetConfig,
     dry_run: bool,
 ) -> int | None:
     """Crea un choice set si no existe en NetBox."""
-    # TODO: Agregar tipado fuerte a ChoiceSet, o similar.
-    choice_set_name = choice_set_cfg.name
-    choices = _get_choice_set_choices(choice_set_cfg)
-    choice_set = existing_choice_sets.get(choice_set_name)
+    choice_set_name: str = choice_set_cfg.name
+    choices: list[list[str]] = _get_choice_set_choices(choice_set_cfg)
+    choice_set: Record | None = existing_choice_sets.get(choice_set_name)
 
     if choice_set is None:
         if dry_run:
@@ -1082,9 +1081,11 @@ def _ensure_choice_set(
             "Choice Set creado: %s",
             choice_set_name,
         )
-        return choice_set.id
+        return cast(int, choice_set.id)
 
-    current_choices = _normalize_choices(choice_set.extra_choices)
+    current_choices: list[list[str]] = _normalize_choices(
+        choice_set.extra_choices
+    )
 
     if current_choices != choices:
         if dry_run:
@@ -1111,19 +1112,19 @@ def _ensure_choice_set(
                 )
                 return None
 
-    return choice_set.id
+    return cast(int, choice_set.id)
 
 
 def _ensure_custom_field(
     custom_fields_endpoint: Endpoint,
-    existing_cfs: dict[str, Any],
+    existing_cfs: dict[str, Record],
     cf_def: CustomFieldConfig | SpecialCustomFieldConfig,
     ot_ids: list[int],
     choice_set_id: int | None,
     dry_run: bool,
 ) -> None:
     """Crea un custom field si no existe en NetBox."""
-    name = (
+    name: str = (
         cf_def.field_name
         if isinstance(cf_def, SpecialCustomFieldConfig)
         else cf_def.name
@@ -1155,13 +1156,15 @@ def _ensure_custom_field(
     if choice_set_id is not None:
         create_kwargs["choice_set"] = choice_set_id
 
-    default_value = getattr(cf_def, "default", None)
+    default_value: Any = getattr(cf_def, "default", None)
     if default_value is not None:
         create_kwargs["default"] = default_value
 
     try:
-        custom_fields_endpoint.create(**create_kwargs)
-        existing_cfs[name] = True  # marcar como existente
+        created_cf: Record = cast(
+            Record, custom_fields_endpoint.create(**create_kwargs)
+        )
+        existing_cfs[name] = created_cf
         log.info("Custom field creado: %s", name)
     except Exception:
         log.exception("Error al crear custom field '%s'", name)
@@ -1190,22 +1193,27 @@ def ensure_custom_fields(
     - Los Choice Sets se gestionan mediante
     /api/extras/custom-field-choice-sets/.
     """
-    # TODO: Agregar tipado fuerte a variables existing_cfs y existing_choice_sets
     # Obtener Custom Fields y Choice Sets existentes.
-    existing_cfs = {cf.name: cf for cf in endpoints.custom_fields.all()}
+    existing_cfs: dict[str, Record] = {
+        str(cf.name): cast(Record, cf)
+        for cf in endpoints.custom_fields.all()
+    }
 
-    existing_choice_sets = {
-        choice_set.name: choice_set for choice_set in endpoints.choice_sets.all()
+    existing_choice_sets: dict[str, Record] = {
+        str(choice_set.name): cast(Record, choice_set)
+        for choice_set in endpoints.choice_sets.all()
     }
 
     # Construir mapa nombre → ID de Object Type.
     ot_cache: dict[str, int] = {}
 
     # Construir lista unificada de definiciones de Custom Field.
-    cf_definitions = _build_custom_field_definitions(cfg)
+    cf_definitions: list[CustomFieldConfig | SpecialCustomFieldConfig] = (
+        _build_custom_field_definitions(cfg)
+    )
 
     for cf_def in cf_definitions:
-        ot_ids = [
+        raw_ot_ids: list[int | None] = [
             _get_object_type_id(
                 endpoints.object_types,
                 ot,
@@ -1213,10 +1221,10 @@ def ensure_custom_fields(
             )
             for ot in cf_def.object_types
         ]
-        ot_ids = [i for i in ot_ids if i is not None]
+        ot_ids: list[int] = [i for i in raw_ot_ids if i is not None]
 
-        choice_set_id = None
-        choice_set_cfg = cf_def.choice_set
+        choice_set_id: int | None = None
+        choice_set_cfg: ChoiceSetConfig | None = cf_def.choice_set
 
         if cf_def.type == "selection" and choice_set_cfg:
             choice_set_id = _ensure_choice_set(
