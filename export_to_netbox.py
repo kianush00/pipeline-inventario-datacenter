@@ -356,6 +356,27 @@ class NetBoxMappingConfig(BaseModel):
         """Conjunto inmutable de valores considerados vacíos."""
         return self._empty_values_set
 
+    def get_required_columns(self) -> set[str]:
+        """
+        Retorna el conjunto de columnas críticas sin las cuales
+        el pipeline no puede identificar ni sincronizar objetos.
+        """
+        return {
+            self.centralized_columns.machine_name,
+            self.centralized_columns.machine_type,
+            self.centralized_columns.uuid,
+            self.centralized_columns.status,
+        }
+
+    def get_all_expected_columns(self) -> set[str]:
+        """
+        Retorna el catálogo completo de nombres de columnas esperadas
+        en el CSV, combinando las columnas centralizadas y las extras.
+        """
+        return set(self.centralized_columns.model_dump().values()) | set(
+            self.csv_extra_columns.values()
+        )
+
     def is_empty(self, value: Any) -> bool:
         """Determina si un valor es considerado vacío según empty_values."""
         if value is None:
@@ -541,14 +562,15 @@ def build_nb_client(url: str, token: str, verify_ssl: bool) -> Api:
 
 def build_netbox_endpoints(nb: Api) -> NetBoxEndpoints:
     """
-    Resuelve y valida todos los endpoints de NetBox utilizados
-    por el script.
+    Instancia y empaqueta de forma centralizada las referencias a los
+    endpoints de pynetbox requeridos por el script en un contenedor
+    inmutable (NetBoxEndpoints).
 
-    La función falla antes de comenzar cualquier operación de
-    sincronización si alguno de los endpoints requeridos no está
-    expuesto por la instancia de pynetbox.
+    La resolución de endpoints en pynetbox opera en memoria del lado
+    del cliente (lazy). Falla con AttributeError si la versión de la
+    librería pynetbox no expone alguna de las aplicaciones cliente
+    principales (por ejemplo, 'core' en NetBox 4.x).
     """
-    # TODO: Evaluar si los endpoints realmente se validan o no, solo a nivel de existencia
     try:
         return NetBoxEndpoints(
             object_types=nb.core.object_types,
@@ -672,19 +694,13 @@ def validate_csv_headers(
     definidas en netbox_mapping.yaml.
     Retorna True si todas las columnas obligatorias están presentes.
     """
-    # TODO: Evaluar si sería mejor iterar la config y validar los anclas en base a eso,
-    # en vez de hardcodear los nombres de las columnas. Sería más escalable.
-    # O usar algún otro mecanismo. De momento hardcodeado.
     header_set = set(headers)
-    required_columns = {
-        config.centralized_columns.machine_name,
-        config.centralized_columns.machine_type,
-        config.centralized_columns.uuid,
-        config.centralized_columns.status,
-    }
 
+    # 1. Validación de columnas críticas (ERROR bloqueante)
     missing_required = [
-        col for col in required_columns if col not in header_set
+        col
+        for col in sorted(config.get_required_columns())
+        if col not in header_set
     ]
     if missing_required:
         log.error(
@@ -693,35 +709,12 @@ def validate_csv_headers(
         )
         return False
 
-    # Chequeo informativo de otras columnas esperadas
-    all_expected_columns: set[str] = {
-        config.centralized_columns.os,
-        config.centralized_columns.role,
-        config.centralized_columns.manufacturer,
-        config.centralized_columns.model,
-        config.centralized_columns.rack,
-        config.centralized_columns.cluster,
-        config.centralized_columns.cores,
-        config.network.columns.names,
-        config.network.columns.status,
-        config.network.columns.ip,
-        config.network.columns.prefix,
-        config.network.columns.mac,
-    }
-    for field_list in (
-        config.device_fields,
-        config.device_custom_fields,
-        config.vm_fields,
-        config.vm_custom_fields,
-    ):
-        for f in field_list:
-            if isinstance(f.source, str):
-                all_expected_columns.add(f.source)
-            elif isinstance(f.source, list):
-                all_expected_columns.update(f.source)
-
+    # 2. Chequeo informativo de columnas esperadas (WARNING informativo)
+    all_expected = config.get_all_expected_columns()
     missing_optional = [
-        col for col in sorted(all_expected_columns) if col not in header_set
+        col
+        for col in sorted(all_expected - config.get_required_columns())
+        if col not in header_set
     ]
     if missing_optional:
         log.warning(
