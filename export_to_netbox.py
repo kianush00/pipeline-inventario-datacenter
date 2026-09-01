@@ -315,6 +315,7 @@ class NetBoxMappingConfig(BaseModel):
 
     centralized_columns: CentralizedColumns
     csv_extra_columns: dict[str, str] = Field(default_factory=dict)
+    required_columns: list[str] = Field(min_length=1)
     site: SiteConfig
     cluster_type: ClusterTypeConfig
     device_roles: list[DeviceRoleConfig]
@@ -358,23 +359,23 @@ class NetBoxMappingConfig(BaseModel):
 
     def get_required_columns(self) -> set[str]:
         """
-        Retorna el conjunto de columnas críticas sin las cuales
-        el pipeline no puede identificar ni sincronizar objetos.
+        Retorna el conjunto de columnas obligatorias configuradas en el YAML.
+        Esta lista define las columnas que deben estar *presentes en los encabezados*
+        del CSV (fila 1). No implica que cada fila deba tener obligatoriamente un
+        *valor no vacío* en dicha columna.
         """
-        return {
-            self.centralized_columns.machine_name,
-            self.centralized_columns.machine_type,
-            self.centralized_columns.uuid,
-            self.centralized_columns.status,
-        }
+        return set(self.required_columns)
 
     def get_all_expected_columns(self) -> set[str]:
         """
         Retorna el catálogo completo de nombres de columnas esperadas
-        en el CSV, combinando las columnas centralizadas y las extras.
+        en el CSV, combinando las columnas centralizadas, las extras y
+        las requeridas.
         """
-        return set(self.centralized_columns.model_dump().values()) | set(
-            self.csv_extra_columns.values()
+        return (
+            set(self.centralized_columns.model_dump().values())
+            | set(self.csv_extra_columns.values())
+            | set(self.required_columns)
         )
 
     def is_empty(self, value: Any) -> bool:
@@ -408,7 +409,18 @@ class NetBoxMappingConfig(BaseModel):
                         f"referencia map '{f.map}', pero no está definido en el YAML."
                     )
 
-        # 3. Validar machine_type_map no vacío
+        # 3. Validar que las columnas requeridas existan en el catálogo conocido
+        known_columns = set(self.centralized_columns.model_dump().values()) | set(
+            self.csv_extra_columns.values()
+        )
+        unknown_required = set(self.required_columns) - known_columns
+        if unknown_required:
+            raise ValueError(
+                f"Las siguientes columnas en 'required_columns' no están declaradas "
+                f"en 'centralized_columns' ni en 'csv_extra_columns': {unknown_required}"
+            )
+
+        # 4. Validar machine_type_map no vacío
         if not self.machine_type_map:
             raise ValueError("'machine_type_map' no puede estar vacío.")
 
@@ -690,9 +702,11 @@ def validate_csv_headers(
     config: NetBoxMappingConfig,
 ) -> bool:
     """
-    Valida que los encabezados del CSV incluyan todas las columnas requeridas
-    definidas en netbox_mapping.yaml.
-    Retorna True si todas las columnas obligatorias están presentes.
+    Valida que los encabezados del CSV incluyan todas las columnas obligatorias
+    configuradas en 'required_columns' dentro de netbox_mapping.yaml.
+    Valida la *existencia de la columna en la cabecera*, no que cada fila
+    deba tener un valor no vacío. Retorna True si todas las columnas obligatorias
+    están presentes en headers.
     """
     header_set = set(headers)
 

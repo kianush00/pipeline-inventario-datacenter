@@ -19,7 +19,7 @@ centralized_columns:
   machine_name: &col_nombre_maquina "Nombre maquina"
   machine_type: &col_tipo_maquina "Tipo de maquina"
   os: &col_so_host "SO Host"
-  status: "Estado"
+  status: &col_estado "Estado"
   role: "Rol"
   manufacturer: "Marca"
   model: "Modelo"
@@ -53,6 +53,17 @@ csv_extra_columns:
   iface_ip: &col_ip "IP"
   iface_pfx: &col_pfx "Red IP"
   iface_mac: &col_mac "MAC"
+
+# ── Columnas obligatorias del CSV (Presencia en cabecera) ────
+# Columnas cuya presencia en el encabezado del CSV es indispensable (bloqueante).
+# Esto valida la *existencia del encabezado* en el CSV, no que el *valor de la celda*
+# deba estar obligatoriamente lleno en todas las filas.
+# Si alguna falta en la primera fila, el script aborta inmediatamente.
+required_columns:
+  - *col_nombre_maquina
+  - *col_tipo_maquina
+  - *col_uuid
+  - *col_estado
 
 # ── Site único ───────────────────────────────────────────────
 # Todos los objetos se asignan a este site.
