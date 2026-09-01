@@ -242,7 +242,6 @@ class FieldMappingConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_transform_and_source(self) -> "FieldMappingConfig":
-        # TODO: refactorizar para reducir complejidad cognitiva
         if self.transform == "concat_dot":
             if not isinstance(self.source, list) or len(self.source) < 1:
                 raise ValueError(
@@ -399,30 +398,46 @@ class NetBoxMappingConfig(BaseModel):
 # CACHE DE DATOS
 # ===========================================================
 
-NetBoxObject: TypeAlias = Record | dict[str, Any]
+
+class MockNetBoxRecord(BaseModel):
+    """Representa un objeto simulado de NetBox para ejecuciones en modo dry-run."""
+
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    id: int = 0
+    name: str = ""
+    slug: str = ""
+    model: str = ""
+    vm_role: bool = False
 
 
-class CacheStore(TypedDict):
+NetBoxObject: TypeAlias = Record | MockNetBoxRecord
+
+
+class CacheStore(BaseModel):
     """
     Representa el cache de objetos de NetBox que se mantiene
     durante toda la ejecución del script.
 
     Incluye:
         manufacturers: mapea nombre → Manufacturer
-        device_types: mapea (fabricante, modelo) → DeviceType
+        device_types: mapea (fabricante_id, modelo) → DeviceType
         platforms: mapea nombre → Platform
         racks: mapea "site_name/rack_name" → Rack
         clusters: mapea nombre → Cluster
-        device_roles: mapea nombre → DeviceRole
+        device_roles: mapea nombre_lower → DeviceRole
     """
 
-    # TODO: evaluar si CacheStore se puede convertir en un modelo Pydantic
-    manufacturers: dict[str, NetBoxObject]
-    device_types: dict[tuple[str, str], NetBoxObject]
-    platforms: dict[str, NetBoxObject]
-    racks: dict[str, NetBoxObject]
-    clusters: dict[str, NetBoxObject]
-    device_roles: dict[str, NetBoxObject]
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    manufacturers: dict[str, NetBoxObject] = Field(default_factory=dict)
+    device_types: dict[tuple[str, str], NetBoxObject] = Field(
+        default_factory=dict
+    )
+    platforms: dict[str, NetBoxObject] = Field(default_factory=dict)
+    racks: dict[str, NetBoxObject] = Field(default_factory=dict)
+    clusters: dict[str, NetBoxObject] = Field(default_factory=dict)
+    device_roles: dict[str, NetBoxObject] = Field(default_factory=dict)
 
 
 # ============================================================
@@ -723,8 +738,6 @@ def validate_csv_headers(
 
 
 def get_netbox_object_id(obj: NetBoxObject) -> int:
-    if isinstance(obj, dict):
-        return int(obj.get("id", 0))
     obj_id = getattr(obj, "id", None)
     if obj_id is None:
         return 0
@@ -746,7 +759,7 @@ def ensure_site(
 
     if dry_run:
         log.info("[DRY-RUN] Crearía Site: %s", name)
-        return {"id": 0, "name": name}
+        return MockNetBoxRecord(id=0, name=name, slug=slug)
 
     obj = cast(Record, endpoints.sites.create(name=name, slug=slug))
     log.info("Site creado: %s", name)
@@ -768,7 +781,7 @@ def ensure_cluster_type(
 
     if dry_run:
         log.info("[DRY-RUN] Crearía ClusterType: %s", name)
-        return {"id": 0, "name": name}
+        return MockNetBoxRecord(id=0, name=name, slug=slug)
 
     obj = cast(Record, endpoints.cluster_types.create(name=name, slug=slug))
     log.info("ClusterType creado: %s", name)
@@ -792,7 +805,7 @@ def ensure_manufacturer(
 
     if dry_run:
         log.info("[DRY-RUN] Crearía Manufacturer: %s", name)
-        obj = {"id": 0, "name": name}
+        obj: NetBoxObject = MockNetBoxRecord(id=0, name=name)
         cache[name] = obj
         return obj
 
@@ -833,7 +846,7 @@ def ensure_device_type(
 
     if dry_run:
         log.info("[DRY-RUN] Crearía DeviceType: %s / %s", manufacturer, model)
-        obj = {"id": 0, "model": model}
+        obj: NetBoxObject = MockNetBoxRecord(id=0, model=model)
         cache[key] = obj
         return obj
 
@@ -870,7 +883,7 @@ def ensure_platform(
 
     if dry_run:
         log.info("[DRY-RUN] Crearía Platform: %s", name)
-        obj = {"id": 0, "name": name}
+        obj: NetBoxObject = MockNetBoxRecord(id=0, name=name)
         cache[name] = obj
         return obj
 
@@ -901,7 +914,7 @@ def ensure_rack(
 
     if dry_run:
         log.info("[DRY-RUN] Crearía Rack: %s", name)
-        obj = {"id": 0, "name": name}
+        obj: NetBoxObject = MockNetBoxRecord(id=0, name=name)
         cache[name] = obj
         return obj
 
@@ -933,7 +946,7 @@ def ensure_cluster(
 
     if dry_run:
         log.info("[DRY-RUN] Crearía Cluster: %s", name)
-        obj = {"id": 0, "name": name}
+        obj: NetBoxObject = MockNetBoxRecord(id=0, name=name)
         cache[name] = obj
         return obj
 
@@ -1652,7 +1665,7 @@ def resolve_platform(
     """Resuelve el Platform desde la columna OS y lo agrega al payload si existe."""
     platform_name = row.get(config.columns.os, "").strip()
     if not config.is_empty(platform_name):
-        platforms_cache = caches.get("platforms", {})
+        platforms_cache = caches.platforms
         platform = ensure_platform(
             endpoints,
             platform_name,
@@ -1866,7 +1879,7 @@ def sync_device(
     manufacturer = ensure_manufacturer(
         endpoints,
         marca,
-        caches["manufacturers"],
+        caches.manufacturers,
         dry_run,
     )
     u_height = (
@@ -1885,7 +1898,7 @@ def sync_device(
         manufacturer,
         modelo,
         u_height,
-        caches["device_types"],
+        caches.device_types,
         dry_run,
     )
     payload["device_type"] = get_netbox_object_id(device_type)
@@ -1900,7 +1913,7 @@ def sync_device(
             endpoints,
             rack_name,
             site,
-            caches["racks"],
+            caches.racks,
             dry_run,
         )
         payload["rack"] = get_netbox_object_id(rack)
@@ -1916,7 +1929,7 @@ def sync_device(
             machine_name,
             cluster_type,
             site,
-            caches["clusters"],
+            caches.clusters,
             dry_run,
         )
         payload["cluster"] = get_netbox_object_id(cluster)
@@ -2026,7 +2039,7 @@ def sync_vm(
         host_name,
         cluster_type,
         site,
-        caches["clusters"],
+        caches.clusters,
         dry_run,
     )
     payload["cluster"] = get_netbox_object_id(cluster)
@@ -2111,7 +2124,7 @@ def ensure_all_device_roles(
     Garantiza que todos los device roles definidos en el YAML
     existen en NetBox (/api/dcim/device-roles/).
     Todos los roles se habilitan para su uso en Virtual Machines.
-    Puebla caches['device_roles'] con {nombre_lower: objeto}.
+    Puebla caches.device_roles con {nombre_lower: objeto}.
     """
     for role_def in cfg.device_roles:
         name = role_def.name
@@ -2119,7 +2132,7 @@ def ensure_all_device_roles(
         color = role_def.color
         key = name.lower()
 
-        if key in caches["device_roles"]:
+        if key in caches.device_roles:
             continue
 
         results = list(endpoints.device_roles.filter(name=name))
@@ -2146,16 +2159,16 @@ def ensure_all_device_roles(
                         )
                         continue
 
-            caches["device_roles"][key] = role_obj
+            caches.device_roles[key] = role_obj
             continue
 
         if dry_run:
             log.info("[DRY-RUN] Crearía DeviceRole: %s", name)
-            caches["device_roles"][key] = {
-                "id": 0,
-                "name": name,
-                "vm_role": True,
-            }
+            caches.device_roles[key] = MockNetBoxRecord(
+                id=0,
+                name=name,
+                vm_role=True,
+            )
             continue
 
         try:
@@ -2176,7 +2189,7 @@ def ensure_all_device_roles(
             continue
 
         log.info("DeviceRole creado: %s", name)
-        caches["device_roles"][key] = obj
+        caches.device_roles[key] = obj
 
 
 def resolve_device_role(
@@ -2188,7 +2201,7 @@ def resolve_device_role(
     Busca un DeviceRole por nombre (insensible a mayúsculas).
     Si el nombre está vacío o no existe, utiliza "Others" como fallback.
     """
-    roles = caches["device_roles"]
+    roles = caches.device_roles
     if config.is_empty(role_name):
         return roles.get("others")
 
@@ -2264,14 +2277,7 @@ def main() -> None:
     cluster_type: NetBoxObject = ensure_cluster_type(endpoints, config, args.dry_run)
 
     # ── Inicializar caches ───────────────────────────────────
-    caches: CacheStore = {
-        "manufacturers": {},
-        "device_types": {},
-        "platforms": {},
-        "racks": {},
-        "clusters": {},
-        "device_roles": {},
-    }
+    caches: CacheStore = CacheStore()
 
     # ── Garantizar taxonomía local ──────────────────────────
     ensure_all_device_roles(endpoints, config, caches, args.dry_run)
