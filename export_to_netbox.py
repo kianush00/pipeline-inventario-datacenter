@@ -69,6 +69,43 @@ logging.basicConfig(
 log = logging.getLogger("export_to_netbox")
 
 
+
+# ============================================================
+# TYPE ALIASES Y ESTRUCTURAS DE TIPOS
+# ============================================================
+
+SyncStatus: TypeAlias = Literal[
+    "CREATED", "UPDATED", "UNCHANGED", "SKIPPED", "ERROR"
+]
+ObjectType: TypeAlias = Literal["device", "virtual_machine"]
+CastType: TypeAlias = Literal["int", "int_gb_to_mb", "bool_si_no"]
+CsvRow: TypeAlias = dict[str, str]
+FieldValue: TypeAlias = str | int | float | bool | None
+CustomFieldsPayload: TypeAlias = dict[str, FieldValue]
+CustomFieldDef: TypeAlias = CustomFieldConfig | SpecialCustomFieldConfig
+
+
+class SyncCounts(TypedDict):
+    """Contadores de resultados de la sincronización con NetBox."""
+
+    CREATED: int
+    UPDATED: int
+    UNCHANGED: int
+    SKIPPED: int
+    ERROR: int
+
+
+class NetworkInterfaceData(TypedDict):
+    """Representa la estructura de datos parseada de una interfaz de red."""
+
+    name: str
+    enabled: bool
+    mac: str | None
+    ip: str | None
+    prefix: str | None
+    cidr: str | None
+
+
 # ============================================================
 # ENDPOINTS DE NETBOX
 # ============================================================
@@ -338,14 +375,27 @@ class NetBoxMappingConfig(BaseModel):
     )
 
     _empty_values_set: frozenset[str] = PrivateAttr(default_factory=frozenset)
+    _custom_field_defs_map: dict[str, CustomFieldDef] = PrivateAttr(
+        default_factory=dict
+    )
 
     def model_post_init(self, __context: Any) -> None:
-        """Inicializa el conjunto inmutable de valores considerados vacíos."""
+        """Inicializa los valores vacíos y el mapa indexado de Custom Fields O(1)."""
         object.__setattr__(
             self,
             "_empty_values_set",
             frozenset(self.empty_values) | {""},
         )
+
+        cf_map: dict[str, CustomFieldDef] = {}
+        for cf in self.custom_fields:
+            cf_map[cf.name] = cf
+        if self.machine_type:
+            cf_map[self.machine_type.field_name] = self.machine_type
+        if self.environment:
+            cf_map[self.environment.field_name] = self.environment
+
+        object.__setattr__(self, "_custom_field_defs_map", cf_map)
 
     @property
     def columns(self) -> CentralizedColumns:
@@ -377,6 +427,14 @@ class NetBoxMappingConfig(BaseModel):
             | set(self.csv_extra_columns.values())
             | set(self.required_columns)
         )
+
+    def get_custom_field_def(self, target: str) -> CustomFieldDef | None:
+        """Retorna la definición de un Custom Field en O(1) por nombre de target."""
+        return self._custom_field_defs_map.get(target)
+
+    def get_all_custom_field_defs(self) -> list[CustomFieldDef]:
+        """Retorna la lista completa de definiciones de Custom Field."""
+        return list(self._custom_field_defs_map.values())
 
     def is_empty(self, value: Any) -> bool:
         """Determina si un valor es considerado vacío según empty_values."""
@@ -471,42 +529,6 @@ class CacheStore(BaseModel):
     racks: dict[str, NetBoxObject] = Field(default_factory=dict)
     clusters: dict[str, NetBoxObject] = Field(default_factory=dict)
     device_roles: dict[str, NetBoxObject] = Field(default_factory=dict)
-
-
-# ============================================================
-# TYPE ALIASES Y ESTRUCTURAS DE TIPOS
-# ============================================================
-
-SyncStatus: TypeAlias = Literal[
-    "CREATED", "UPDATED", "UNCHANGED", "SKIPPED", "ERROR"
-]
-ObjectType: TypeAlias = Literal["device", "virtual_machine"]
-CastType: TypeAlias = Literal["int", "int_gb_to_mb", "bool_si_no"]
-CsvRow: TypeAlias = dict[str, str]
-FieldValue: TypeAlias = str | int | float | bool | None
-CustomFieldsPayload: TypeAlias = dict[str, FieldValue]
-CustomFieldDef: TypeAlias = CustomFieldConfig | SpecialCustomFieldConfig
-
-
-class SyncCounts(TypedDict):
-    """Contadores de resultados de la sincronización con NetBox."""
-
-    CREATED: int
-    UPDATED: int
-    UNCHANGED: int
-    SKIPPED: int
-    ERROR: int
-
-
-class NetworkInterfaceData(TypedDict):
-    """Representa la estructura de datos parseada de una interfaz de red."""
-
-    name: str
-    enabled: bool
-    mac: str | None
-    ip: str | None
-    prefix: str | None
-    cidr: str | None
 
 
 # ============================================================
@@ -1042,23 +1064,6 @@ def _get_object_type_id(
     return ot_id
 
 
-def _build_custom_field_definitions(
-    cfg: NetBoxMappingConfig,
-) -> list[CustomFieldDef]:
-    """
-    Construye la lista unificada de definiciones de Custom Field
-    a partir de 'custom_fields', 'machine_type' y 'environment'.
-    """
-    cf_definitions: list[CustomFieldDef] = list(cfg.custom_fields)
-
-    if cfg.machine_type:
-        cf_definitions.append(cfg.machine_type)
-    if cfg.environment:
-        cf_definitions.append(cfg.environment)
-
-    return cf_definitions
-
-
 def _get_choice_set_choices(choice_set_cfg: ChoiceSetConfig) -> list[list[str]]:
     """Obtiene las opciones de un choice set, ya sea de tipo lista de listas o iterable."""
     return [
@@ -1248,8 +1253,8 @@ def ensure_custom_fields(
     # Construir mapa nombre → ID de Object Type.
     ot_cache: dict[str, int] = {}
 
-    # Construir lista unificada de definiciones de Custom Field.
-    cf_definitions: list[CustomFieldDef] = _build_custom_field_definitions(cfg)
+    # Obtener lista unificada de definiciones de Custom Field O(1).
+    cf_definitions: list[CustomFieldDef] = cfg.get_all_custom_field_defs()
 
     for cf_def in cf_definitions:
         raw_ot_ids: list[int | None] = [
@@ -1419,8 +1424,8 @@ def sync_interfaces_for_object(
     }
 
     for iface_data in interfaces:
-        name: str = str(iface_data["name"])
-        enabled: bool = bool(iface_data["enabled"])
+        name: str = iface_data["name"]
+        enabled: bool = iface_data["enabled"]
         mac: str | None = iface_data.get("mac")
         cidr: str | None = iface_data.get("cidr")
 
@@ -1501,25 +1506,6 @@ def _assign_ip(
 # ============================================================
 
 
-def _get_custom_field_definition(
-    target: str,
-    config: NetBoxMappingConfig,
-) -> CustomFieldDef | None:
-    """Busca la definición global de un Custom Field por su nombre."""
-    custom_fields = _build_custom_field_definitions(config)
-
-    for cf_def in custom_fields:
-        name = (
-            cf_def.field_name
-            if isinstance(cf_def, SpecialCustomFieldConfig)
-            else cf_def.name
-        )
-        if name == target:
-            return cf_def
-
-    return None
-
-
 def resolve_field_value(
     row: CsvRow,
     field_def: FieldMappingConfig,
@@ -1539,7 +1525,7 @@ def resolve_field_value(
     cast_type = field_def.cast
     map_key = field_def.map
 
-    custom_field_def = _get_custom_field_definition(target, config)
+    custom_field_def = config.get_custom_field_def(target)
     default = (
         getattr(custom_field_def, "default", None)
         if custom_field_def is not None
