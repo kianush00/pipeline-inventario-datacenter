@@ -1757,6 +1757,21 @@ def validate_identity_conflict(
 # ============================================================
 
 
+def check_record_changes(
+    record: Record,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Determina qué campos cambiarían en el Record al aplicar el payload,
+    sin persistir cambios ni realizar llamadas HTTP.
+    Retorna un diccionario con las modificaciones detectadas.
+    """
+    temp = Record(dict(record._init_cache), record.api, record.endpoint)
+    for k, v in payload.items():
+        setattr(temp, k, v)
+    return temp.updates()
+
+
 def apply_sync(
     endpoint: Endpoint,
     payload: dict[str, Any],
@@ -1768,9 +1783,9 @@ def apply_sync(
     dry_run: bool,
 ) -> str:
     """
-    Ejecuta CREATE, UPDATE o DRY-RUN según el objeto encontrado.
+    Ejecuta CREATE, UPDATE, UNCHANGED o DRY-RUN según el objeto encontrado.
 
-    Si existe un objeto y el UUID está vacío, no se actualiza.
+    Si existe un objeto y el UUID está vacío, no se actualiza (SKIP).
     """
     if dry_run:
         if existing:
@@ -1782,13 +1797,26 @@ def apply_sync(
                     machine_name,
                 )
                 return "SKIPPED"
-            log.info(
-                "[DRY-RUN] Actualizaría %s: %s (UUID=%s)",
-                object_label,
-                machine_name,
-                uuid,
-            )
-            return "UPDATED"
+
+            diff = check_record_changes(existing[0], payload)
+            if diff:
+                log.info(
+                    "[DRY-RUN] Actualizaría %s: %s (UUID=%s) - Cambios: %s",
+                    object_label,
+                    machine_name,
+                    uuid,
+                    list(diff.keys()),
+                )
+                return "UPDATED"
+            else:
+                log.info(
+                    "[DRY-RUN] UNCHANGED %s: %s (UUID=%s)",
+                    object_label,
+                    machine_name,
+                    uuid,
+                )
+                return "UNCHANGED"
+
         log.info(
             "[DRY-RUN] Crearía %s: %s (UUID=%s)",
             object_label,
@@ -1796,6 +1824,7 @@ def apply_sync(
             uuid or "N/A",
         )
         return "CREATED"
+
     if not existing:
         try:
             endpoint.create(**payload)
@@ -1804,6 +1833,7 @@ def apply_sync(
         except Exception:
             log.exception("ERROR creando %s %s", object_label, machine_name)
             return "ERROR"
+
     if config.is_empty(uuid):
         log.warning(
             "SKIP actualización de %s '%s': UUID vacío.",
@@ -1811,10 +1841,15 @@ def apply_sync(
             machine_name,
         )
         return "SKIPPED"
+
     try:
-        existing[0].update(payload)
-        log.info("UPDATED %s: %s", object_label, machine_name)
-        return "UPDATED"
+        updated = existing[0].update(payload)
+        if updated:
+            log.info("UPDATED %s: %s", object_label, machine_name)
+            return "UPDATED"
+        else:
+            log.info("UNCHANGED %s: %s", object_label, machine_name)
+            return "UNCHANGED"
     except Exception:
         log.exception(
             "ERROR actualizando %s %s",
@@ -2304,7 +2339,7 @@ def main() -> None:
         "SKIPPED": 0,
         "ERROR": 0,
     }
-    # TODO: Implementar UNCHANGED, ya que actualmente no lo devuelve
+
     # ── Procesar filas ───────────────────────────────────────
     for row_num, row in enumerate(rows, start=2):
         tipo_raw = row.get(columns.machine_type, "").strip()
@@ -2355,7 +2390,7 @@ def main() -> None:
 
         counts[result] = counts.get(result, 0) + 1
 
-        if result not in ("CREATED", "UPDATED") or not interfaces:
+        if result not in ("CREATED", "UPDATED", "UNCHANGED") or not interfaces:
             continue
 
         if args.dry_run:
