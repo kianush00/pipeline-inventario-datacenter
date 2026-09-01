@@ -426,6 +426,21 @@ class CacheStore(TypedDict):
 
 
 # ============================================================
+# PARSER DE INTERFAZ DE RED
+# ============================================================
+
+class NetworkInterfaceData(TypedDict):
+    """Representa la estructura de datos parseada de una interfaz de red."""
+
+    name: str
+    enabled: bool
+    mac: str | None
+    ip: str | None
+    prefix: str | None
+    cidr: str | None
+
+
+# ============================================================
 # CARGA DE CONFIGURACIÓN
 # ============================================================
 
@@ -1232,7 +1247,7 @@ def ensure_custom_fields(
 def parse_network_interfaces(
     row: dict[str, str],
     config: NetBoxMappingConfig,
-) -> list[dict[str, Any]] | None:
+) -> list[NetworkInterfaceData] | None:
     """
     Parsea las 5 columnas de red del CSV (valores separados por comas)
     y devuelve una lista de dicts con la información de cada interfaz.
@@ -1273,7 +1288,7 @@ def parse_network_interfaces(
     prefixes = pad(prefixes)
     macs = pad(macs)
 
-    interfaces: list[dict[str, Any]] = []
+    interfaces: list[NetworkInterfaceData] = []
     for i, name in enumerate(names):
         if config.is_empty(name):
             continue
@@ -1338,11 +1353,12 @@ def sync_interfaces_for_object(
     endpoints: NetBoxEndpoints,
     obj_id: int,
     obj_type: Literal["device", "virtual_machine"],
-    interfaces: list[dict[str, Any]],
+    interfaces: list[NetworkInterfaceData] | list[dict[str, Any]],
     dry_run: bool,
 ) -> None:
     """Sincroniza interfaces y sus IPs para un Device o VM."""
-    # TODO: Agregar tipado fuerte a variables como existing, entre otras
+    iface_endpoint: Endpoint
+    iface_filter: dict[str, int]
     if obj_type == "device":
         iface_endpoint = endpoints.device_interfaces
         iface_filter = {"device_id": obj_id}
@@ -1350,15 +1366,16 @@ def sync_interfaces_for_object(
         iface_endpoint = endpoints.vm_interfaces
         iface_filter = {"virtual_machine_id": obj_id}
 
-    existing = {
-        iface.name: iface for iface in iface_endpoint.filter(**iface_filter)
+    existing: dict[str, Record] = {
+        str(iface.name): cast(Record, iface)
+        for iface in iface_endpoint.filter(**iface_filter)
     }
 
     for iface_data in interfaces:
-        name = iface_data["name"]
-        enabled = iface_data["enabled"]
-        mac = iface_data["mac"]
-        cidr = iface_data["cidr"]
+        name: str = str(iface_data["name"])
+        enabled: bool = bool(iface_data["enabled"])
+        mac: str | None = iface_data.get("mac")
+        cidr: str | None = iface_data.get("cidr")
 
         payload: dict[str, Any] = {"name": name, "enabled": enabled}
         if mac:
@@ -1370,7 +1387,7 @@ def sync_interfaces_for_object(
             payload["virtual_machine"] = obj_id
 
         if dry_run:
-            action = "Actualizaría" if name in existing else "Crearía"
+            action: str = "Actualizaría" if name in existing else "Crearía"
             log.info(
                 "[DRY-RUN] %s interfaz %s en objeto %s", action, name, obj_id
             )
@@ -1382,14 +1399,14 @@ def sync_interfaces_for_object(
                 continue
         else:
             try:
-                existing[name] = iface_endpoint.create(**payload)
+                existing[name] = cast(Record, iface_endpoint.create(**payload))
             except Exception:
                 log.exception("Error creando interfaz %s", name)
                 continue
 
         # Asignar IP si hay CIDR.
         if cidr and not dry_run:
-            iface_obj = existing.get(name)
+            iface_obj: Record | None = existing.get(name)
             if iface_obj:
                 _assign_ip(endpoints, cidr, iface_obj, obj_type)
 
@@ -1400,18 +1417,17 @@ def sync_interfaces_for_object(
 def _assign_ip(
     endpoints: NetBoxEndpoints,
     cidr: str,
-    iface_obj: Any,
+    iface_obj: Record,
     obj_type: Literal["device", "virtual_machine"],
 ) -> None:
     """Crea o actualiza una IP address en NetBox y la asigna a la interfaz."""
-    if obj_type == "device":
-        assigned_type = "dcim.interface"
-    else:
-        assigned_type = "virtualization.vminterface"
+    assigned_type: str = (
+        "dcim.interface" if obj_type == "device" else "virtualization.vminterface"
+    )
 
-    existing = list(endpoints.ip_addresses.filter(address=cidr))
+    existing: list[Record] = list(endpoints.ip_addresses.filter(address=cidr))
     if existing:
-        ip_obj = existing[0]
+        ip_obj: Record = existing[0]
         try:
             ip_obj.update(
                 {
