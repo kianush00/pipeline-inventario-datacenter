@@ -474,8 +474,29 @@ class CacheStore(BaseModel):
 
 
 # ============================================================
-# PARSER DE INTERFAZ DE RED
+# TYPE ALIASES Y ESTRUCTURAS DE TIPOS
 # ============================================================
+
+SyncStatus: TypeAlias = Literal[
+    "CREATED", "UPDATED", "UNCHANGED", "SKIPPED", "ERROR"
+]
+ObjectType: TypeAlias = Literal["device", "virtual_machine"]
+CastType: TypeAlias = Literal["int", "int_gb_to_mb", "bool_si_no"]
+CsvRow: TypeAlias = dict[str, str]
+FieldValue: TypeAlias = str | int | float | bool | None
+CustomFieldsPayload: TypeAlias = dict[str, FieldValue]
+CustomFieldDef: TypeAlias = CustomFieldConfig | SpecialCustomFieldConfig
+
+
+class SyncCounts(TypedDict):
+    """Contadores de resultados de la sincronización con NetBox."""
+
+    CREATED: int
+    UPDATED: int
+    UNCHANGED: int
+    SKIPPED: int
+    ERROR: int
+
 
 class NetworkInterfaceData(TypedDict):
     """Representa la estructura de datos parseada de una interfaz de red."""
@@ -655,7 +676,7 @@ def safe_bool_si_no(value: Any) -> bool | None:
     return None
 
 
-def apply_cast(value: Any, cast_type: str) -> Any:
+def apply_cast(value: Any, cast_type: str | None) -> FieldValue:
     """Aplica un cast específico a un valor según la definición del campo."""
     if cast_type == "int":
         return safe_int(value)
@@ -663,7 +684,9 @@ def apply_cast(value: Any, cast_type: str) -> Any:
         return safe_int_gb_to_mb(value)
     if cast_type == "bool_si_no":
         return safe_bool_si_no(value)
-    return value
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
 
 
 def concat_dot(parts: list[str], config: NetBoxMappingConfig) -> str:
@@ -677,7 +700,7 @@ def concat_dot(parts: list[str], config: NetBoxMappingConfig) -> str:
 # ============================================================
 
 
-def read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
+def read_csv(path: Path) -> tuple[list[str], list[CsvRow]]:
     """
     Lee merged_inventory.csv.
     Devuelve (headers, rows) donde cada row es {header: value}.
@@ -686,7 +709,7 @@ def read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
         log.error("No se encontró el CSV de entrada: %s", path)
         sys.exit(1)
 
-    rows: list[dict[str, str]] = []
+    rows: list[CsvRow] = []
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         headers = reader.fieldnames or []
@@ -1021,14 +1044,12 @@ def _get_object_type_id(
 
 def _build_custom_field_definitions(
     cfg: NetBoxMappingConfig,
-) -> list[CustomFieldConfig | SpecialCustomFieldConfig]:
+) -> list[CustomFieldDef]:
     """
     Construye la lista unificada de definiciones de Custom Field
     a partir de 'custom_fields', 'machine_type' y 'environment'.
     """
-    cf_definitions: list[CustomFieldConfig | SpecialCustomFieldConfig] = list(
-        cfg.custom_fields
-    )
+    cf_definitions: list[CustomFieldDef] = list(cfg.custom_fields)
 
     if cfg.machine_type:
         cf_definitions.append(cfg.machine_type)
@@ -1138,7 +1159,7 @@ def _ensure_choice_set(
 def _ensure_custom_field(
     custom_fields_endpoint: Endpoint,
     existing_cfs: dict[str, Record],
-    cf_def: CustomFieldConfig | SpecialCustomFieldConfig,
+    cf_def: CustomFieldDef,
     ot_ids: list[int],
     choice_set_id: int | None,
     dry_run: bool,
@@ -1228,9 +1249,7 @@ def ensure_custom_fields(
     ot_cache: dict[str, int] = {}
 
     # Construir lista unificada de definiciones de Custom Field.
-    cf_definitions: list[CustomFieldConfig | SpecialCustomFieldConfig] = (
-        _build_custom_field_definitions(cfg)
-    )
+    cf_definitions: list[CustomFieldDef] = _build_custom_field_definitions(cfg)
 
     for cf_def in cf_definitions:
         raw_ot_ids: list[int | None] = [
@@ -1273,7 +1292,7 @@ def ensure_custom_fields(
 
 
 def parse_network_interfaces(
-    row: dict[str, str],
+    row: CsvRow,
     config: NetBoxMappingConfig,
 ) -> list[NetworkInterfaceData] | None:
     """
@@ -1380,8 +1399,8 @@ def parse_network_interfaces(
 def sync_interfaces_for_object(
     endpoints: NetBoxEndpoints,
     obj_id: int,
-    obj_type: Literal["device", "virtual_machine"],
-    interfaces: list[NetworkInterfaceData] | list[dict[str, Any]],
+    obj_type: ObjectType,
+    interfaces: list[NetworkInterfaceData],
     dry_run: bool,
 ) -> None:
     """Sincroniza interfaces y sus IPs para un Device o VM."""
@@ -1446,7 +1465,7 @@ def _assign_ip(
     endpoints: NetBoxEndpoints,
     cidr: str,
     iface_obj: Record,
-    obj_type: Literal["device", "virtual_machine"],
+    obj_type: ObjectType,
 ) -> None:
     """Crea o actualiza una IP address en NetBox y la asigna a la interfaz."""
     assigned_type: str = (
@@ -1485,7 +1504,7 @@ def _assign_ip(
 def _get_custom_field_definition(
     target: str,
     config: NetBoxMappingConfig,
-) -> CustomFieldConfig | SpecialCustomFieldConfig | None:
+) -> CustomFieldDef | None:
     """Busca la definición global de un Custom Field por su nombre."""
     custom_fields = _build_custom_field_definitions(config)
 
@@ -1502,10 +1521,10 @@ def _get_custom_field_definition(
 
 
 def resolve_field_value(
-    row: dict[str, str],
+    row: CsvRow,
     field_def: FieldMappingConfig,
     config: NetBoxMappingConfig,
-) -> Any:
+) -> FieldValue:
     """
     Resuelve el valor de un campo según su definición tipada en el YAML.
 
@@ -1583,17 +1602,17 @@ def resolve_field_value(
 
 
 def build_payload(
-    row: dict[str, str],
+    row: CsvRow,
     field_defs: list[FieldMappingConfig],
     cf_defs: list[FieldMappingConfig],
     config: NetBoxMappingConfig,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, Any], CustomFieldsPayload]:
     """
     Construye (payload_nativo, payload_cf) para una fila del CSV.
     Los campos con valor None (vacíos + skip_if_empty) se excluyen.
     """
     payload: dict[str, Any] = {}
-    cf_payload: dict[str, Any] = {}
+    cf_payload: CustomFieldsPayload = {}
 
     for fd in field_defs:
         target = fd.target
@@ -1617,11 +1636,11 @@ def build_payload(
 
 
 def get_internal_field(
-    row: dict[str, str],
+    row: CsvRow,
     field_defs: list[FieldMappingConfig],
     internal_key: str,
     config: NetBoxMappingConfig,
-) -> Any:
+) -> FieldValue:
     """Extrae un campo interno (prefijado con '_') de los field_defs."""
     for fd in field_defs:
         if fd.target == internal_key:
@@ -1635,9 +1654,9 @@ def get_internal_field(
 
 
 def resolve_netbox_status(
-    row: dict[str, str],
+    row: CsvRow,
     config: NetBoxMappingConfig,
-    object_type: str,
+    object_type: ObjectType,
     columns: CentralizedColumns,
 ) -> str:
     """
@@ -1663,7 +1682,7 @@ def resolve_netbox_status(
 
 def resolve_platform(
     endpoints: NetBoxEndpoints,
-    row: dict[str, str],
+    row: CsvRow,
     payload: dict[str, Any],
     caches: CacheStore,
     dry_run: bool,
@@ -1724,7 +1743,7 @@ def find_existing_object(
 
 
 def validate_identity_conflict(
-    object_type: Literal["device", "virtual_machine"],
+    object_type: ObjectType,
     machine_name: str,
     uuid: str,
     found_by_uuid: bool,
@@ -1781,7 +1800,7 @@ def apply_sync(
     object_label: str,
     config: NetBoxMappingConfig,
     dry_run: bool,
-) -> str:
+) -> SyncStatus:
     """
     Ejecuta CREATE, UPDATE, UNCHANGED o DRY-RUN según el objeto encontrado.
 
@@ -1866,13 +1885,13 @@ def apply_sync(
 
 def sync_device(
     endpoints: NetBoxEndpoints,
-    row: dict[str, str],
+    row: CsvRow,
     config: NetBoxMappingConfig,
     site: NetBoxObject,
     cluster_type: NetBoxObject,
     caches: CacheStore,
     dry_run: bool,
-) -> str:
+) -> SyncStatus:
     """
     Sincroniza una fila de tipo "device" o "hipervisor" con NetBox.
     Retorna: "CREATED" | "UPDATED" | "UNCHANGED" | "SKIPPED" | "ERROR"
@@ -1924,15 +1943,13 @@ def sync_device(
         caches.manufacturers,
         dry_run,
     )
-    u_height = (
-        get_internal_field(
-            row,
-            device_fields_cfg,
-            "_u_height",
-            config,
-        )
-        or 1
+    raw_u_height = get_internal_field(
+        row,
+        device_fields_cfg,
+        "_u_height",
+        config,
     )
+    u_height = safe_int(raw_u_height) or 1
 
     # Resolver DeviceType.
     device_type = ensure_device_type(
@@ -2021,13 +2038,13 @@ def sync_device(
 
 def sync_vm(
     endpoints: NetBoxEndpoints,
-    row: dict[str, str],
+    row: CsvRow,
     config: NetBoxMappingConfig,
     site: NetBoxObject,
     cluster_type: NetBoxObject,
     caches: CacheStore,
     dry_run: bool,
-) -> str:
+) -> SyncStatus:
     """
     Sincroniza una fila de tipo "virtual_machine" con NetBox.
     Retorna: "CREATED" | "UPDATED" | "UNCHANGED" | "SKIPPED" | "ERROR"
@@ -2332,7 +2349,7 @@ def main() -> None:
         sys.exit(1)
 
     # ── Contadores ───────────────────────────────────────────
-    counts = {
+    counts: SyncCounts = {
         "CREATED": 0,
         "UPDATED": 0,
         "UNCHANGED": 0,
@@ -2388,7 +2405,7 @@ def main() -> None:
                 args.dry_run,
             )
 
-        counts[result] = counts.get(result, 0) + 1
+        counts[result] += 1
 
         if result not in ("CREATED", "UPDATED", "UNCHANGED") or not interfaces:
             continue
@@ -2413,6 +2430,7 @@ def main() -> None:
         uuid = row.get(columns.uuid, "").strip()
 
         try:
+            object_type: ObjectType
             if nb_type == "device":
                 endpoint = endpoints.devices
                 object_type = "device"
