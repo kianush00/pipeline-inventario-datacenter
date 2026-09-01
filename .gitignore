@@ -39,6 +39,9 @@ env/
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.token
 
 # =========================
 # IDE / Editor
