@@ -82,7 +82,6 @@ CastType: TypeAlias = Literal["int", "int_gb_to_mb", "bool_si_no"]
 CsvRow: TypeAlias = dict[str, str]
 FieldValue: TypeAlias = str | int | float | bool | None
 CustomFieldsPayload: TypeAlias = dict[str, FieldValue]
-CustomFieldDef: TypeAlias = CustomFieldConfig | SpecialCustomFieldConfig
 
 
 class SyncCounts(TypedDict):
@@ -263,6 +262,9 @@ class CustomFieldConfig(BaseCustomFieldDef):
 
     name: str = Field(min_length=1)
     default: Any = None
+
+
+CustomFieldDef: TypeAlias = CustomFieldConfig | SpecialCustomFieldConfig
 
 
 class FieldMappingConfig(BaseModel):
@@ -529,6 +531,9 @@ class CacheStore(BaseModel):
     racks: dict[str, NetBoxObject] = Field(default_factory=dict)
     clusters: dict[str, NetBoxObject] = Field(default_factory=dict)
     device_roles: dict[str, NetBoxObject] = Field(default_factory=dict)
+    host_devices: dict[tuple[int, str], int | None] = Field(
+        default_factory=dict
+    )
 
 
 # ============================================================
@@ -1013,6 +1018,48 @@ def ensure_cluster(
     log.info("Cluster creado: %s", name)
     cache[name] = obj
     return obj
+
+
+def resolve_host_device(
+    endpoints: NetBoxEndpoints,
+    host_name: str,
+    site_id: int | None,
+    cache: dict[tuple[int, str], int | None],
+) -> int | None:
+    """
+    Resuelve y cachea el ID del Device correspondiente al hipervisor host,
+    acotado estrictamente al site_id configurado.
+    """
+    if site_id is None:
+        return None
+
+    cache_key = (site_id, host_name)
+    if cache_key in cache:
+        return cache[cache_key]
+
+    try:
+        host_devices: list[Record] = list(
+            endpoints.devices.filter(name=host_name, site_id=site_id)
+        )
+        if host_devices:
+            dev_id: int = get_netbox_object_id(host_devices[0])
+            cache[cache_key] = dev_id
+            return dev_id
+        else:
+            log.warning(
+                "No se encontró el Device host '%s' en el Site (ID: %s).",
+                host_name,
+                site_id,
+            )
+            cache[cache_key] = None
+            return None
+    except Exception:
+        log.exception(
+            "Error consultando Device host '%s' en Site (ID: %s)",
+            host_name,
+            site_id,
+        )
+        return None
 
 
 # ============================================================
@@ -2090,19 +2137,18 @@ def sync_vm(
     payload["cluster"] = get_netbox_object_id(cluster)
 
     # Campos obligatorios.
-    payload["site"] = get_netbox_object_id(site)
+    site_id = get_netbox_object_id(site)
+    payload["site"] = site_id
 
-    # Device del hipervisor host.
-    try:
-        host_devices = list(endpoints.devices.filter(name=host_name))
-        if host_devices:
-            payload["device"] = host_devices[0].id
-    except Exception:
-        log.exception(
-            "No se pudo resolver el Device host '%s' para VM '%s'",
-            host_name,
-            machine_name,
-        )
+    # Device del hipervisor host (acotado a site y cacheado).
+    host_dev_id = resolve_host_device(
+        endpoints,
+        host_name,
+        site_id,
+        caches.host_devices,
+    )
+    if host_dev_id is not None:
+        payload["device"] = host_dev_id
 
     # Estado.
     payload["status"] = resolve_netbox_status(
