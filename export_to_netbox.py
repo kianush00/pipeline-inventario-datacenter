@@ -539,6 +539,70 @@ class CacheStore(BaseModel):
 
 
 # ============================================================
+# UTILIDADES
+# ============================================================
+
+
+def slugify(name: str) -> str:
+    """Genera un slug válido para NetBox desde un nombre."""
+    slug = name.lower().strip()
+    slug = re.sub(r"[^\w\s-]", "", slug)
+    slug = re.sub(r"[\s_-]+", "-", slug)
+    slug = slug.strip("-")
+    # NetBox limita los slugs a 100 caracteres.
+    return slug[:100]
+
+
+def safe_int(value: Any) -> int | None:
+    """Convierte un valor a int, retornando None si no es convertible."""
+    try:
+        return int(str(value).strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def safe_int_gb_to_mb(value: Any) -> int | None:
+    """Convierte GB (string/float) a MB (entero). NetBox espera MB para memory."""
+    try:
+        gb = float(str(value).strip())
+        return int(gb * 1024)
+    except (ValueError, TypeError):
+        return None
+
+
+def safe_bool_si_no(value: Any) -> bool | None:
+    """
+    Convierte un valor a booleano según reglas específicas de 'si/no'.
+    'si'/'sí' → True, 'no' → False, otro → None.
+    """
+    v = str(value).strip().lower()
+    if v in ("si", "sí", "yes", "true", "1"):
+        return True
+    if v in ("no", "false", "0"):
+        return False
+    return None
+
+
+def apply_cast(value: Any, cast_type: str | None) -> FieldValue:
+    """Aplica un cast específico a un valor según la definición del campo."""
+    if cast_type == "int":
+        return safe_int(value)
+    if cast_type == "int_gb_to_mb":
+        return safe_int_gb_to_mb(value)
+    if cast_type == "bool_si_no":
+        return safe_bool_si_no(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def concat_dot(parts: list[str], config: NetBoxMappingConfig) -> str:
+    """Concatena partes no vacías con '. ' como separador."""
+    clean = [p.strip() for p in parts if not config.is_empty(p)]
+    return ". ".join(clean)
+
+
+# ============================================================
 # CARGA DE CONFIGURACIÓN
 # ============================================================
 
@@ -555,7 +619,11 @@ def load_config(mapping_path: Path) -> NetBoxMappingConfig:
 
     try:
         with mapping_path.open("r", encoding="utf-8") as f:
-            raw = yaml.safe_load(f)
+            raw_yaml = f.read()
+        
+        # Expande sintaxis $VAR o ${VAR} usando variables de entorno
+        expanded_yaml = os.path.expandvars(raw_yaml)
+        raw = yaml.safe_load(expanded_yaml)
     except yaml.YAMLError:
         log.exception("Error sintáctico de YAML al leer %s", mapping_path)
         sys.exit(1)
@@ -566,6 +634,13 @@ def load_config(mapping_path: Path) -> NetBoxMappingConfig:
             mapping_path,
         )
         sys.exit(1)
+
+    # El slug del site debe ser único, por lo que se genera a partir del nombre
+    site_data = raw.get("site")
+    if isinstance(site_data, dict):
+        raw_slug = site_data.get("slug") or site_data.get("name")
+        if raw_slug:
+            site_data["slug"] = slugify(str(raw_slug))
 
     try:
         return NetBoxMappingConfig.model_validate(raw)
@@ -658,70 +733,6 @@ def build_netbox_endpoints(nb: Api) -> NetBoxEndpoints:
             "requeridos por el script"
         )
         sys.exit(1)
-
-
-# ============================================================
-# UTILIDADES
-# ============================================================
-
-
-def slugify(name: str) -> str:
-    """Genera un slug válido para NetBox desde un nombre."""
-    slug = name.lower().strip()
-    slug = re.sub(r"[^\w\s-]", "", slug)
-    slug = re.sub(r"[\s_-]+", "-", slug)
-    slug = slug.strip("-")
-    # NetBox limita los slugs a 100 caracteres.
-    return slug[:100]
-
-
-def safe_int(value: Any) -> int | None:
-    """Convierte un valor a int, retornando None si no es convertible."""
-    try:
-        return int(str(value).strip())
-    except (ValueError, TypeError):
-        return None
-
-
-def safe_int_gb_to_mb(value: Any) -> int | None:
-    """Convierte GB (string/float) a MB (entero). NetBox espera MB para memory."""
-    try:
-        gb = float(str(value).strip())
-        return int(gb * 1024)
-    except (ValueError, TypeError):
-        return None
-
-
-def safe_bool_si_no(value: Any) -> bool | None:
-    """
-    Convierte un valor a booleano según reglas específicas de 'si/no'.
-    'si'/'sí' → True, 'no' → False, otro → None.
-    """
-    v = str(value).strip().lower()
-    if v in ("si", "sí", "yes", "true", "1"):
-        return True
-    if v in ("no", "false", "0"):
-        return False
-    return None
-
-
-def apply_cast(value: Any, cast_type: str | None) -> FieldValue:
-    """Aplica un cast específico a un valor según la definición del campo."""
-    if cast_type == "int":
-        return safe_int(value)
-    if cast_type == "int_gb_to_mb":
-        return safe_int_gb_to_mb(value)
-    if cast_type == "bool_si_no":
-        return safe_bool_si_no(value)
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    return str(value)
-
-
-def concat_dot(parts: list[str], config: NetBoxMappingConfig) -> str:
-    """Concatena partes no vacías con '. ' como separador."""
-    clean = [p.strip() for p in parts if not config.is_empty(p)]
-    return ". ".join(clean)
 
 
 # ============================================================

@@ -8,13 +8,13 @@
 
 ---
 
-### About The Project
+## About The Project
 
-Managing datacenter infrastructure across physical servers, hypervisors, and virtual machines often leads to fragmented data between runtime environments and static spreadsheets. 
+Managing datacenter infrastructure across physical servers, hypervisors, and virtual machines often leads to fragmented data between runtime environments and static spreadsheets.
 
 This repository provides an end-to-end **Data Center Inventory ETL Pipeline** designed to bridge that gap. It automatically gathers hardware and system metadata from target nodes using **Rundeck**, cleanses and normalizes raw outputs, merges them deterministically against a master spreadsheet (source of truth), and idempotently synchronizes the consolidated inventory into **NetBox**.
 
-### Key Features
+## Key Features
 
 * **Automated Data Collection:** Leverages Rundeck and shell collection agents (`asset_information.sh`) to query live OS, CPU, RAM, BIOS, network interfaces, and storage data.
 * **Master Spreadsheet Integration:** Processes `.ods` or `.xlsx` files seamlessly using LibreOffice, preserving manual metadata and extra columns.
@@ -34,10 +34,10 @@ Generated `.log`, `.csv`, `.ods`, and `.xlsx` files are runtime artifacts and ar
 
 ## Requirements
 
-- Python 3.10 or newer
-- `pip`
-- LibreOffice available as `libreoffice` or `soffice` in `PATH` for ODS/XLSX conversion and ODS updates
-- NetBox 4.6 or newer for the NetBox export stage
+* Python 3.10 or newer
+* `pip`
+* LibreOffice available as `libreoffice` or `soffice` in `PATH` for ODS/XLSX conversion and ODS updates
+* NetBox 4.6 or newer for the NetBox export stage
 
 Python dependencies are pinned in [`requirements.txt`](requirements.txt). The NetBox exporter uses `pynetbox`, `PyYAML`, `requests`, and `urllib3`; spreadsheet processing uses `openpyxl`.
 
@@ -78,9 +78,9 @@ deactivate
 COLUMN_NAME|FLAG
 ```
 
-- `0`: preserve the master value and do not update it during the merge
-- `1`: allow a non-empty parsed value to update the master value
-- `2`: use the column as the unique merge key; exactly one such column must exist
+* `0`: preserve the master value and do not update it during the merge
+* `1`: allow a non-empty parsed value to update the master value
+* `2`: use the column as the unique merge key; exactly one such column must exist
 
 The merge key is currently the machine UUID. The parsers resolve columns by name, so column order does not have to match.
 
@@ -110,15 +110,15 @@ The exporter is idempotent: it primarily identifies existing Devices and Virtual
 
 [`netbox_mapping.yaml`](netbox_mapping.yaml) is the single source of truth for the mapping between `merged_inventory.csv` and NetBox. It defines:
 
-- the target site and cluster type
-- canonical device roles
-- machine type and environment choice sets and mappings
-- inventory status mappings and defaults
-- NetBox custom fields and their object types
-- native Device and Virtual Machine field mappings
-- network column mappings and interface status values
-- the exact inventory column names consumed by the exporter
-- values treated as empty and therefore omitted
+* the target site and cluster type
+* canonical device roles
+* machine type and environment choice sets and mappings
+* inventory status mappings and defaults
+* NetBox custom fields and their object types
+* native Device and Virtual Machine field mappings
+* network column mappings and interface status values
+* the exact inventory column names consumed by the exporter
+* values treated as empty and therefore omitted
 
 Keep this file aligned with the merged CSV header. It is independent of `rundeck_header_list.txt`, which controls collection and merge behavior.
 
@@ -166,6 +166,7 @@ The exporter requires these environment variables:
 export NETBOX_URL="https://netbox.example.com"
 export NETBOX_TOKEN="<write-enabled-token>"
 export NETBOX_VERIFY_SSL="true"
+export NETBOX_SITE_NAME="Datacenter Principal"
 ```
 
 `NETBOX_VERIFY_SSL` defaults to `true`; set it to `false` only when the deployment explicitly requires disabling certificate verification. The token must have write permissions for the NetBox areas used by the exporter, including `dcim`, `virtualization`, `ipam`, `extras`, and `core`.
@@ -187,6 +188,8 @@ Never store `NETBOX_TOKEN` in `netbox_mapping.yaml`, source control, command his
 ├── update_master_inventory.py
 ├── requirements.txt
 ├── LICENSE
+├── CLAUDE.md
+├── GEMINI.md
 ├── README.md
 └── assets/
   └── flujo_inventario_datacenter.drawio

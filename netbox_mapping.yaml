@@ -74,9 +74,11 @@ required_columns:
 # ── Site único ───────────────────────────────────────────────
 # Todos los objetos se asignan a este site.
 # Si no existe en NetBox, el script lo crea automáticamente.
+# Para evitar errores con espacios y caracteres especiales, el slug
+# se procesa a partir del nombre.
 site:
-  name: "Datacenter Principal"
-  slug: "datacenter-principal"
+  name: "${NETBOX_SITE_NAME}"
+  slug: "${NETBOX_SITE_NAME}"
 
 # ── ClusterType ──────────────────────────────────────────────
 # Las VMs se agrupan en un Cluster cuyo nombre coincide con el
