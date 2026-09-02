@@ -340,6 +340,9 @@ custom_fields:
 # 'source' → nombre exacto de la columna en merged_inventory.csv.
 # 'target' → campo en el API de NetBox.
 # 'skip_if_empty' → no enviar el campo si el valor es vacío.
+# NOTA: Claves foráneas como 'site', 'role', 'platform', 'rack' y
+# 'device_type' son resueltas a objetos/IDs NetBox por sus respectivas
+# funciones especializadas en el script, por lo que no forman parte de esta lista.
 
 device_fields:
   - source: *col_nombre_maquina
@@ -354,10 +357,6 @@ device_fields:
     target: "asset_tag"
     skip_if_empty: true
 
-  - source: *col_rack
-    target: "rack"
-    skip_if_empty: true
-
   - source: *col_pos_u
     target: "position"
     skip_if_empty: true
@@ -367,10 +366,6 @@ device_fields:
     target: "_u_height"
     skip_if_empty: true
     cast: "int"
-
-  - source: *col_so_host
-    target: "platform"
-    skip_if_empty: true
 
   - source: [*col_desc, *col_notas]
     target: "description"
@@ -437,14 +432,13 @@ device_custom_fields:
     cast: "bool_si_no"
 
 # ── Campos nativos de VirtualMachine ─────────────────────────
+# NOTA: Claves foráneas como 'site', 'role', 'platform', 'cluster' y 'device'
+# son resueltas a objetos/IDs NetBox por funciones especializadas en el script.
+
 vm_fields:
   - source: *col_nombre_maquina
     target: "name"
     skip_if_empty: false
-
-  - source: *col_so_host
-    target: "platform"
-    skip_if_empty: true
 
   - source: *col_ram_gb
     target: "memory"

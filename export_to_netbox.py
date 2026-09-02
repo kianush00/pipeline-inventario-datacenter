@@ -82,6 +82,7 @@ CastType: TypeAlias = Literal["int", "int_gb_to_mb", "bool_si_no"]
 CsvRow: TypeAlias = dict[str, str]
 FieldValue: TypeAlias = str | int | float | bool | None
 CustomFieldsPayload: TypeAlias = dict[str, FieldValue]
+NetBoxPayload: TypeAlias = dict[str, Any]
 
 
 class SyncCounts(TypedDict):
@@ -1476,7 +1477,7 @@ def sync_interfaces_for_object(
         mac: str | None = iface_data.get("mac")
         cidr: str | None = iface_data.get("cidr")
 
-        payload: dict[str, Any] = {"name": name, "enabled": enabled}
+        payload: NetBoxPayload = {"name": name, "enabled": enabled}
         if mac:
             payload["mac_address"] = mac.upper()
         if obj_type == "device":
@@ -1639,12 +1640,12 @@ def build_payload(
     field_defs: list[FieldMappingConfig],
     cf_defs: list[FieldMappingConfig],
     config: NetBoxMappingConfig,
-) -> tuple[dict[str, Any], CustomFieldsPayload]:
+) -> tuple[NetBoxPayload, CustomFieldsPayload]:
     """
     Construye (payload_nativo, payload_cf) para una fila del CSV.
     Los campos con valor None (vacíos + skip_if_empty) se excluyen.
     """
-    payload: dict[str, Any] = {}
+    payload: NetBoxPayload = {}
     cf_payload: CustomFieldsPayload = {}
 
     for fd in field_defs:
@@ -1716,7 +1717,7 @@ def resolve_netbox_status(
 def resolve_platform(
     endpoints: NetBoxEndpoints,
     row: CsvRow,
-    payload: dict[str, Any],
+    payload: NetBoxPayload,
     caches: CacheStore,
     dry_run: bool,
     config: NetBoxMappingConfig,
@@ -1811,8 +1812,8 @@ def validate_identity_conflict(
 
 def check_record_changes(
     record: Record,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
+    payload: NetBoxPayload,
+) -> NetBoxPayload:
     """
     Determina qué campos cambiarían en el Record al aplicar el payload,
     sin persistir cambios ni realizar llamadas HTTP.
@@ -1826,7 +1827,7 @@ def check_record_changes(
 
 def apply_sync(
     endpoint: Endpoint,
-    payload: dict[str, Any],
+    payload: NetBoxPayload,
     existing: list[Record],
     machine_name: str,
     uuid: str,
