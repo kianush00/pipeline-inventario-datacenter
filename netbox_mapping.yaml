@@ -30,6 +30,9 @@ centralized_columns:
 
 # Columnas adicionales del CSV referenciadas en mappings
 csv_extra_columns:
+  os_ver: &col_so_ver "Version SO Host"
+  hypervisor_os: &col_hip_os "SO Hipervisor"
+  hypervisor_ver: &col_hip_ver "Version SO Hipervisor"
   serial: &col_serial "Serial Number"
   asset_tag: &col_asset_tag "Nro Inventario"
   pos_u: &col_pos_u "Posicion (U)"
@@ -339,6 +342,28 @@ custom_fields:
       - "dcim.device"
       - "virtualization.virtualmachine"
 
+  - name: "os_version"
+    label: "Version SO Host"
+    type: "text"
+    required: false
+    object_types:
+      - "dcim.device"
+      - "virtualization.virtualmachine"
+
+  - name: "hypervisor_os"
+    label: "SO Hipervisor"
+    type: "text"
+    required: false
+    object_types:
+      - "dcim.device"
+
+  - name: "hypervisor_version"
+    label: "Version SO Hipervisor"
+    type: "text"
+    required: false
+    object_types:
+      - "dcim.device"
+
 # ── Campos nativos de Device (DCIM) ──────────────────────────
 # 'source' → nombre exacto de la columna en merged_inventory.csv.
 # 'target' → campo en el API de NetBox.
@@ -434,6 +459,18 @@ device_custom_fields:
     skip_if_empty: true
     cast: "bool_si_no"
 
+  - source: *col_so_ver
+    target: "os_version"
+    skip_if_empty: true
+
+  - source: *col_hip_os
+    target: "hypervisor_os"
+    skip_if_empty: true
+
+  - source: *col_hip_ver
+    target: "hypervisor_version"
+    skip_if_empty: true
+
 # ── Campos nativos de VirtualMachine ─────────────────────────
 # NOTA: Claves foráneas como 'site', 'role', 'platform', 'cluster' y 'device'
 # son resueltas a objetos/IDs NetBox por funciones especializadas en el script.
@@ -490,6 +527,10 @@ vm_custom_fields:
     target: "rundeck_node"
     skip_if_empty: true
     cast: "bool_si_no"
+
+  - source: *col_so_ver
+    target: "os_version"
+    skip_if_empty: true
 
 # ── Interfaces de red ─────────────────────────────────────────
 # Las cinco columnas de red se parsean en paralelo por posición.
