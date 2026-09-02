@@ -1622,7 +1622,27 @@ def resolve_field_value(
             if default is not None:
                 return default
             return None if skip_if_empty else ""
-        value = mapped
+        value: FieldValue = mapped
+
+    # Validación Temprana (Fail-Fast) para Custom Fields de tipo 'selection'
+    if custom_field_def and custom_field_def.type == "selection":
+        if custom_field_def.choice_set:
+            valid_choices = [
+                c.value for c in custom_field_def.choice_set.choices
+            ]
+            if value not in valid_choices:
+                log.warning(
+                    "Valor '%s' no es válido para el Custom Field '%s'. "
+                    "Opciones válidas: %s.",
+                    value,
+                    target,
+                    valid_choices,
+                )
+                if skip_if_empty:
+                    return None
+                raise ValueError(
+                    f"Valor inválido '{value}' para el campo requerido '{target}'."
+                )
 
     # Cast de tipo.
     if cast_type:
@@ -2418,26 +2438,41 @@ def main() -> None:
             interfaces = []
 
         # ── Sincronizar Device o VM ───────────────────────────
-        if nb_type == "device":
-            result = sync_device(
-                endpoints,
-                row,
-                config,
-                site,
-                cluster_type,
-                caches,
-                args.dry_run,
+        try:
+            if nb_type == "device":
+                result = sync_device(
+                    endpoints,
+                    row,
+                    config,
+                    site,
+                    cluster_type,
+                    caches,
+                    args.dry_run,
+                )
+            else:
+                result = sync_vm(
+                    endpoints,
+                    row,
+                    config,
+                    site,
+                    cluster_type,
+                    caches,
+                    args.dry_run,
+                )
+        except ValueError as e:
+            log.warning("SKIP fila %d: %s", row_num, e)
+            counts["SKIPPED"] += 1
+            continue
+        except Exception as e:
+            machine_name = row.get(columns.machine_name, "N/A")
+            log.exception(
+                "ERROR inesperado al procesar fila %d ('%s'): %s",
+                row_num,
+                machine_name,
+                e,
             )
-        else:
-            result = sync_vm(
-                endpoints,
-                row,
-                config,
-                site,
-                cluster_type,
-                caches,
-                args.dry_run,
-            )
+            counts["ERROR"] += 1
+            continue
 
         counts[result] += 1
 
@@ -2523,13 +2558,20 @@ def main() -> None:
             )
             continue
 
-        sync_interfaces_for_object(
-            endpoints,
-            obj_id,
-            object_type,
-            interfaces,
-            args.dry_run,
-        )
+        try:
+            sync_interfaces_for_object(
+                endpoints,
+                obj_id,
+                object_type,
+                interfaces,
+                args.dry_run,
+            )
+        except Exception as e:
+            log.exception(
+                "ERROR inesperado al sincronizar interfaces de '%s': %s",
+                machine_name,
+                e,
+            )
 
     # ── Resumen ──────────────────────────────────────────────
     print()
