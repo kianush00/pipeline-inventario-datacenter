@@ -18,13 +18,13 @@
 centralized_columns:
   machine_name: &col_nombre_maquina "Nombre maquina"
   machine_type: &col_tipo_maquina "Tipo de maquina"
-  os: &col_so_host "SO Host"
+  os: "SO Host"
   status: &col_estado "Estado"
   role: "Rol"
-  manufacturer: "Marca"
-  model: "Modelo"
-  rack: &col_rack "Rack"
-  cluster: "Host/Cluster/Chassis"
+  manufacturer: &col_marca "Marca"
+  model: &col_modelo "Modelo"
+  rack: "Rack"
+  cluster: &col_cluster "Host/Cluster/Chassis"
   cores: &col_cores "Cores"
   uuid: &col_uuid "UUID"
 
@@ -64,6 +64,9 @@ required_columns:
   - *col_tipo_maquina
   - *col_uuid
   - *col_estado
+  - *col_marca
+  - *col_modelo
+  - *col_cluster
 
 # ── Site único ───────────────────────────────────────────────
 # Todos los objetos se asignan a este site.
@@ -517,3 +520,6 @@ empty_values:
   - "None"
   - "n/a"
   - "none"
+  - "-----"
+  - "------"
+  - "-------"

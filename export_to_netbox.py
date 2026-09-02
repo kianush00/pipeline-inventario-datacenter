@@ -38,6 +38,7 @@ import logging
 import os
 import re
 import sys
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Literal, TypeAlias, TypedDict, cast
 
@@ -1123,7 +1124,7 @@ def _get_choice_set_choices(choice_set_cfg: ChoiceSetConfig) -> list[list[str]]:
     ]
 
 
-def _normalize_choices(choices: Any) -> list[list[str]]:
+def _normalize_choices(choices: Iterable[Sequence[Any]] | None) -> list[list[str]]:
     """Convierte las opciones de un choice set a una lista de listas de strings."""
     if not choices:
         return []
@@ -1178,7 +1179,7 @@ def _ensure_choice_set(
         return cast(int, choice_set.id)
 
     current_choices: list[list[str]] = _normalize_choices(
-        choice_set.extra_choices
+        choice_set.extra_choices 
     )
 
     if current_choices != choices:
@@ -1239,7 +1240,7 @@ def _ensure_custom_field(
         )
         return
 
-    create_kwargs: dict[str, Any] = {
+    create_kwargs: NetBoxPayload = {
         "name": name,
         "label": cf_def.label or name,
         "type": cf_def.type,
