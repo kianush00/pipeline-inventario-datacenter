@@ -159,6 +159,11 @@ device_roles:
     slug: "others"
     color: "9e9e9e"
 
+# ── Special Custom Fields (Lógica Core) ──────────────────────
+# NOTA: 'machine_type' y 'environment' se declaran aquí en la raíz,
+# fuera del bloque 'custom_fields' estándar, porque dictan el flujo
+# lógico de enrutamiento principal del pipeline.
+
 # ── Tipo de máquina ──────────────────────────────────────────
 # Clasificación interna del inventario.
 # Se conserva exactamente como aparece en el CSV.
@@ -257,6 +262,10 @@ status_defaults:
 #   - El campo se llama "object_types".
 #   - Los tipos se referencian mediante app_label.model.
 #   - Los Custom Fields de selección utilizan Choice Sets.
+#
+# IMPORTANTE sobre la clave 'required':
+#   Define si el campo será obligatorio en el esquema interno (DDL) de NetBox.
+#   NO afecta el parseo ni la validación del CSV.
 
 custom_fields:
   - name: "inventory_uuid"
@@ -367,7 +376,11 @@ custom_fields:
 # ── Campos nativos de Device (DCIM) ──────────────────────────
 # 'source' → nombre exacto de la columna en merged_inventory.csv.
 # 'target' → campo en el API de NetBox.
-# 'skip_if_empty' → no enviar el campo si el valor es vacío.
+# 'is_optional' → Si es true, omite el campo si el valor está vacío.
+#                 Si es false, el valor es obligatorio (Fail-Fast si falta).
+# 'cast' (Opc) → Funciones de conversión permitidas: int, int_gb_to_mb, bool_si_no.
+# 'transform' (Opc) → Operaciones de estructura: concat_dot (concatena lista con '.').
+# 'map' (Opc) → Diccionario declarado en este yaml para traducir valores.
 # NOTA: Claves foráneas como 'site', 'role', 'platform', 'rack' y
 # 'device_type' son resueltas a objetos/IDs NetBox por sus respectivas
 # funciones especializadas en el script, por lo que no forman parte de esta lista.
@@ -375,101 +388,101 @@ custom_fields:
 device_fields:
   - source: *col_nombre_maquina
     target: "name"
-    skip_if_empty: false
+    is_optional: false
 
   - source: *col_serial
     target: "serial"
-    skip_if_empty: true
+    is_optional: true
 
   - source: *col_asset_tag
     target: "asset_tag"
-    skip_if_empty: true
+    is_optional: true
 
   - source: *col_pos_u
     target: "position"
-    skip_if_empty: true
+    is_optional: true
     cast: "int"
 
   - source: *col_alt_u
     target: "_u_height"
-    skip_if_empty: true
+    is_optional: true
     cast: "int"
 
   - source: [*col_desc, *col_notas]
     target: "description"
     transform: "concat_dot"
-    skip_if_empty: true
+    is_optional: true
 
 # ── Campos específicos de Device ─────────────────────────────
 device_custom_fields:
   - source: *col_uuid
     target: "inventory_uuid"
-    skip_if_empty: true
+    is_optional: true
 
   - source: *col_tipo_maquina
     target: "machine_type"
-    skip_if_empty: false
+    is_optional: false
 
   - source: *col_entorno
     target: "environment"
-    skip_if_empty: true
+    is_optional: true
     map: "environment_map"
 
   - source: *col_service_tag
     target: "service_tag"
-    skip_if_empty: true
+    is_optional: true
 
   - source: *col_cpu_modelo
     target: "cpu_model"
-    skip_if_empty: true
+    is_optional: true
 
   - source: *col_cores
     target: "cpu_cores"
-    skip_if_empty: true
+    is_optional: true
     cast: "int"
 
   - source: *col_threads
     target: "cpu_threads"
-    skip_if_empty: true
+    is_optional: true
     cast: "int"
 
   - source: *col_sockets
     target: "cpu_sockets"
-    skip_if_empty: true
+    is_optional: true
     cast: "int"
 
   - source: *col_discos
     target: "disks"
-    skip_if_empty: true
+    is_optional: true
 
   - source: *col_raid
     target: "raid"
-    skip_if_empty: true
+    is_optional: true
 
   - source: *col_bios_ver
     target: "bios_version"
-    skip_if_empty: true
+    is_optional: true
 
   - source: *col_bios_date
     target: "bios_date"
-    skip_if_empty: true
+    is_optional: true
 
   - source: *col_nodo_rundeck
     target: "rundeck_node"
-    skip_if_empty: true
+    is_optional: true
     cast: "bool_si_no"
 
   - source: *col_so_ver
     target: "os_version"
-    skip_if_empty: true
+    is_optional: true
 
   - source: *col_hip_os
     target: "hypervisor_os"
-    skip_if_empty: true
+    is_optional: true
 
   - source: *col_hip_ver
     target: "hypervisor_version"
-    skip_if_empty: true
+    is_optional: true
 
 # ── Campos nativos de VirtualMachine ─────────────────────────
 # NOTA: Claves foráneas como 'site', 'role', 'platform', 'cluster' y 'device'
@@ -478,59 +491,59 @@ device_custom_fields:
 vm_fields:
   - source: *col_nombre_maquina
     target: "name"
-    skip_if_empty: false
+    is_optional: false
 
   - source: *col_ram_gb
     target: "memory"
-    skip_if_empty: true
+    is_optional: true
     cast: "int_gb_to_mb"
 
   - source: *col_disk_cap
     target: "disk"
-    skip_if_empty: true
+    is_optional: true
     cast: "int"
 
   - source: [*col_desc, *col_notas]
     target: "description"
     transform: "concat_dot"
-    skip_if_empty: true
+    is_optional: true
 
 # ── Campos específicos de VirtualMachine ─────────────────────
 vm_custom_fields:
   - source: *col_uuid
     target: "inventory_uuid"
-    skip_if_empty: true
+    is_optional: true
 
   - source: *col_tipo_maquina
     target: "machine_type"
-    skip_if_empty: false
+    is_optional: false
 
   - source: *col_entorno
     target: "environment"
-    skip_if_empty: true
+    is_optional: true
     map: "environment_map"
 
   - source: *col_cpu_modelo
     target: "cpu_model"
-    skip_if_empty: true
+    is_optional: true
 
   - source: *col_cores
     target: "cpu_cores"
-    skip_if_empty: true
+    is_optional: true
     cast: "int"
 
   - source: *col_discos
     target: "disks"
-    skip_if_empty: true
+    is_optional: true
 
   - source: *col_nodo_rundeck
     target: "rundeck_node"
-    skip_if_empty: true
+    is_optional: true
     cast: "bool_si_no"
 
   - source: *col_so_ver
     target: "os_version"
-    skip_if_empty: true
+    is_optional: true
 
 # ── Interfaces de red ─────────────────────────────────────────
 # Las cinco columnas de red se parsean en paralelo por posición.

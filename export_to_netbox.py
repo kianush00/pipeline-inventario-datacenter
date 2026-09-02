@@ -276,7 +276,7 @@ class FieldMappingConfig(BaseModel):
 
     source: str | list[str]
     target: str = Field(min_length=1)
-    skip_if_empty: bool = True
+    is_optional: bool = True
     cast: Literal["int", "int_gb_to_mb", "bool_si_no"] | None = None
     transform: Literal["concat_dot"] | None = None
     map: str | None = None
@@ -1569,7 +1569,7 @@ def resolve_field_value(
     """
     source = field_def.source
     target = field_def.target
-    skip_if_empty = field_def.skip_if_empty
+    is_optional = field_def.is_optional
     transform = field_def.transform
     cast_type = field_def.cast
     map_key = field_def.map
@@ -1589,7 +1589,7 @@ def resolve_field_value(
         if not value:
             if default is not None:
                 return default
-            if skip_if_empty:
+            if is_optional:
                 return None
 
         return value
@@ -1603,7 +1603,7 @@ def resolve_field_value(
     if config.is_empty(value):
         if default is not None:
             return default
-        return None if skip_if_empty else ""
+        return None if is_optional else ""
 
     # Mapeo de valores (ej. environment_map).
     if map_key:
@@ -1621,7 +1621,7 @@ def resolve_field_value(
             )
             if default is not None:
                 return default
-            return None if skip_if_empty else ""
+            return None if is_optional else ""
         value: FieldValue = mapped
 
     # Validación Temprana (Fail-Fast) para Custom Fields de tipo 'selection'
@@ -1638,7 +1638,7 @@ def resolve_field_value(
                     target,
                     valid_choices,
                 )
-                if skip_if_empty:
+                if is_optional:
                     return None
                 raise ValueError(
                     f"Valor inválido '{value}' para el campo requerido '{target}'."
@@ -1664,7 +1664,7 @@ def build_payload(
 ) -> tuple[NetBoxPayload, CustomFieldsPayload]:
     """
     Construye (payload_nativo, payload_cf) para una fila del CSV.
-    Los campos con valor None (vacíos + skip_if_empty) se excluyen.
+    Los campos con valor None (vacíos + is_optional) se excluyen.
     """
     payload: NetBoxPayload = {}
     cf_payload: CustomFieldsPayload = {}
