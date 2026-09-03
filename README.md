@@ -102,9 +102,9 @@ The merge key is currently the machine UUID. The parsers resolve columns by name
 
 ### NetBox export
 
-[`export_to_netbox.py`](export_to_netbox.py) is the downstream ETL stage. It reads the merged CSV and creates or updates NetBox Devices and Virtual Machines, along with the configured sites, cluster types, manufacturers, device types, platforms, racks, clusters, roles, custom fields, interfaces, and IP addresses.
+[`export_to_netbox.py`](export_to_netbox.py) is the downstream ETL stage. It reads the merged CSV and creates or updates NetBox Devices and Virtual Machines, along with the configured sites, cluster types, manufacturers, device types, platforms, racks, clusters, roles, custom fields, interfaces, and IP addresses. The script operates against a **single NetBox Site** defined by the `NETBOX_SITE_NAME` environment variable; multi-site deployments are not supported.
 
-The exporter is idempotent: it primarily identifies existing Devices and Virtual Machines by the `inventory_uuid` custom field, using the object name as a fallback according to the script's identity rules. Rows whose machine type is not defined in the mapping are skipped. A row with inconsistent network column lengths still synchronizes its Device or VM, but its interfaces are skipped.
+The exporter is idempotent: it primarily identifies existing Devices and Virtual Machines by the `inventory_uuid` custom field, using the object name as a fallback. When the match is by name only, the update is allowed if the name is unique in both the CSV and NetBox; otherwise the row is skipped. Rows whose machine type is not defined in the mapping are skipped. A row with inconsistent network column lengths still synchronizes its Device or VM, but its interfaces are skipped.
 
 ### NetBox mapping contract
 

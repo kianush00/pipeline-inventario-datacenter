@@ -21,10 +21,12 @@ Opciones:
                 primer sync real.
 
 Estrategia de idempotencia:
-    El lookup de Device y VirtualMachine se hace siempre por el
-    custom field 'inventory_uuid'. Esto garantiza que un cambio
-    de nombre en el CSV actualiza el objeto existente en NetBox
-    en lugar de crear un duplicado.
+    El lookup de Device y VirtualMachine se hace primero por el
+    custom field 'inventory_uuid', usando el nombre como fallback.
+    Si la coincidencia es por nombre y este es único tanto en el
+    CSV como en NetBox, se permite la actualización segura.
+    Esto garantiza que un cambio de nombre en el CSV actualiza
+    el objeto existente en NetBox en lugar de crear un duplicado.
 
 Códigos de salida:
     0 → sin errores en filas individuales
@@ -38,6 +40,7 @@ import logging
 import os
 import re
 import sys
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Literal, TypeAlias, TypedDict, cast
@@ -382,7 +385,7 @@ class NetBoxMappingConfig(BaseModel):
     _custom_field_defs_map: dict[str, CustomFieldDef] = PrivateAttr(
         default_factory=dict
     )
-    _available_maps: dict[str, dict[str, Any]] = PrivateAttr(
+    _available_maps: dict[str, dict[str, FieldValue]] = PrivateAttr(
         default_factory=dict
     )
 
@@ -405,7 +408,7 @@ class NetBoxMappingConfig(BaseModel):
 
         object.__setattr__(self, "_custom_field_defs_map", cf_map)
 
-        maps = {
+        maps: dict[str, dict[str, FieldValue]] = {
             k: v for k, v in self.model_dump().items()
             if isinstance(v, dict) and k.endswith("_map")
         }
@@ -450,7 +453,7 @@ class NetBoxMappingConfig(BaseModel):
         """Retorna la lista completa de definiciones de Custom Field."""
         return list(self._custom_field_defs_map.values())
 
-    def get_map(self, map_name: str) -> dict[str, Any]:
+    def get_map(self, map_name: str) -> dict[str, FieldValue]:
         """Devuelve un mapa de configuración por nombre."""
         return self._available_maps.get(map_name, {})
 
@@ -1815,36 +1818,35 @@ def find_existing_object(
 
 
 # ============================================================
-# VALIDAR CONFLICTO DE IDENTIDAD
+# VALIDAR UNICIDAD DE NOMBRE
 # ============================================================
 
 
-def validate_identity_conflict(
-    object_type: ObjectType,
+def is_name_safely_unique(
+    existing: list[Record],
     machine_name: str,
-    uuid: str,
-    found_by_uuid: bool,
-    found_by_name: bool,
-    config: NetBoxMappingConfig,
+    csv_name_counts: Counter[str],
+    object_label: str,
 ) -> bool:
     """
-    Determina si existe un conflicto de identidad.
+    Valida que un nombre de máquina sea único tanto en NetBox
+    como en el CSV, condición necesaria para permitir una
+    actualización segura cuando la coincidencia es solo por nombre.
 
-    Retorna True si la fila debe omitirse.
-
-    Política:
-    - UUID presente + UUID no encontrado + nombre encontrado -> SKIP.
+    Retorna True si el nombre es único en ambos sistemas.
     """
-    if not config.is_empty(uuid) and not found_by_uuid and found_by_name:
-        log.warning(
-            "SKIP %s '%s': UUID=%s no encontrado en NetBox, "
-            "pero ya existe un %s con el mismo nombre.",
-            object_type,
-            machine_name,
-            uuid,
-            "device" if object_type == "device" else "VM",
-        )
+    nb_count = len(existing)
+    csv_count = csv_name_counts.get(machine_name, 0)
+    if nb_count == 1 and csv_count == 1:
         return True
+    log.warning(
+        "SKIP %s '%s': coincidencia por nombre, pero no es único "
+        "(NetBox=%d, CSV=%d). Se requiere UUID para sincronizar.",
+        object_label,
+        machine_name,
+        nb_count,
+        csv_count,
+    )
     return False
 
 
@@ -1873,27 +1875,20 @@ def apply_sync(
     payload: NetBoxPayload,
     existing: list[Record],
     machine_name: str,
-    uuid: str,
+    raw_uuid: str,
     object_label: str,
-    config: NetBoxMappingConfig,
     dry_run: bool,
 ) -> SyncStatus:
     """
     Ejecuta CREATE, UPDATE, UNCHANGED o DRY-RUN según el objeto encontrado.
 
-    Si existe un objeto y el UUID está vacío, no se actualiza (SKIP).
+    Si una fila llega a esta función con `existing`, es porque superó
+    la validación de unicidad previa, por lo que se actualiza con confianza.
     """
+    uuid = raw_uuid or "N/A"
+    
     if dry_run:
         if existing:
-            if config.is_empty(uuid):
-                log.info(
-                    "[DRY-RUN] SKIP actualización de %s: %s "
-                    "(encontrado por nombre; UUID vacío)",
-                    object_label,
-                    machine_name,
-                )
-                return "SKIPPED"
-
             diff = check_record_changes(existing[0], payload)
             if diff:
                 log.info(
@@ -1917,7 +1912,7 @@ def apply_sync(
             "[DRY-RUN] Crearía %s: %s (UUID=%s)",
             object_label,
             machine_name,
-            uuid or "N/A",
+            uuid,
         )
         return "CREATED"
 
@@ -1929,14 +1924,6 @@ def apply_sync(
         except Exception:
             log.exception("ERROR creando %s %s", object_label, machine_name)
             return "ERROR"
-
-    if config.is_empty(uuid):
-        log.warning(
-            "SKIP actualización de %s '%s': UUID vacío.",
-            object_label,
-            machine_name,
-        )
-        return "SKIPPED"
 
     try:
         updated = existing[0].update(payload)
@@ -1967,6 +1954,7 @@ def sync_device(
     site: NetBoxObject,
     cluster_type: NetBoxObject,
     caches: CacheStore,
+    csv_name_counts: Counter[str],
     dry_run: bool,
 ) -> SyncStatus:
     """
@@ -2086,15 +2074,11 @@ def sync_device(
         )
         return "ERROR"
 
-    if validate_identity_conflict(
-        "device",
-        machine_name,
-        uuid,
-        found_by_uuid,
-        found_by_name,
-        config,
-    ):
-        return "SKIPPED"
+    matched_by_name_only = found_by_name and not found_by_uuid
+    if matched_by_name_only and not is_name_safely_unique(
+            existing, machine_name, csv_name_counts, "device"
+        ):
+            return "SKIPPED"
 
     return apply_sync(
         endpoints.devices,
@@ -2103,7 +2087,6 @@ def sync_device(
         machine_name,
         uuid,
         "device",
-        config,
         dry_run,
     )
 
@@ -2120,6 +2103,7 @@ def sync_vm(
     site: NetBoxObject,
     cluster_type: NetBoxObject,
     caches: CacheStore,
+    csv_name_counts: Counter[str],
     dry_run: bool,
 ) -> SyncStatus:
     """
@@ -2222,15 +2206,11 @@ def sync_vm(
         )
         return "ERROR"
 
-    if validate_identity_conflict(
-        "virtual_machine",
-        machine_name,
-        uuid,
-        found_by_uuid,
-        found_by_name,
-        config,
-    ):
-        return "SKIPPED"
+    matched_by_name_only = found_by_name and not found_by_uuid
+    if matched_by_name_only and not is_name_safely_unique(
+            existing, machine_name, csv_name_counts, "VM"
+        ):
+            return "SKIPPED"
 
     return apply_sync(
         endpoints.virtual_machines,
@@ -2239,7 +2219,6 @@ def sync_vm(
         machine_name,
         uuid,
         "VM",
-        config,
         dry_run,
     )
 
@@ -2433,6 +2412,13 @@ def main() -> None:
         "ERROR": 0,
     }
 
+    # ── Conteo global de nombres de máquina ───────────────
+    # Usado para validar unicidad antes de permitir
+    # actualizaciones por nombre (sin UUID).
+    csv_name_counts: Counter[str] = Counter(
+        row.get(columns.machine_name, "").strip() for row in rows
+    )
+
     # ── Procesar filas ───────────────────────────────────────
     for row_num, row in enumerate(rows, start=2):
         tipo_raw = row.get(columns.machine_type, "").strip()
@@ -2469,6 +2455,7 @@ def main() -> None:
                     site,
                     cluster_type,
                     caches,
+                    csv_name_counts,
                     args.dry_run,
                 )
             else:
@@ -2479,6 +2466,7 @@ def main() -> None:
                     site,
                     cluster_type,
                     caches,
+                    csv_name_counts,
                     args.dry_run,
                 )
         except ValueError as e:
@@ -2546,20 +2534,15 @@ def main() -> None:
             continue
 
         # ----------------------------------------------------
-        # Si el UUID está informado y no coincide con un objeto
-        # existente, pero el nombre sí existe, se considera un
-        # conflicto de identidad y las interfaces no se fusionan.
+        # Si la coincidencia fue solo por nombre, validar que
+        # sea único antes de sincronizar interfaces.
         # ----------------------------------------------------
-        if validate_identity_conflict(
-            object_type,
-            machine_name,
-            uuid,
-            found_by_uuid,
-            found_by_name,
-            config,
+        matched_by_name_only = found_by_name and not found_by_uuid
+        if matched_by_name_only and not is_name_safely_unique(
+            existing, machine_name, csv_name_counts, object_type
         ):
             log.warning(
-                "SKIP interfaces de '%s': conflicto de identidad.",
+                "SKIP interfaces de '%s': nombre no único.",
                 machine_name,
             )
             continue
