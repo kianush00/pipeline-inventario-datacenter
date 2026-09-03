@@ -1345,19 +1345,22 @@ def parse_network_interfaces(
     if not names:
         return []
 
-    # Rellenar con vacíos si alguna columna tiene menos elementos.
     max_len = len(names)
     for lst in (statuses, ips, prefixes, macs):
         if lst and len(lst) != max_len:
-            return None  # longitudes incompatibles
+            return None  # Longitudes incompatibles (ej. faltó una coma en el CSV)
 
-    def pad(lst: list[str]) -> list[str]:
-        return lst + [""] * (max_len - len(lst))
+    # Si una columna viene completamente en blanco, se asume que ninguna interfaz
+    # tiene ese dato y se genera una lista vacía del tamaño de max_len.
+    def fill_if_empty(lst: list[str], max_len: int) -> list[str]:
+        if not lst:
+            return [""] * max_len
+        return lst
 
-    statuses = pad(statuses)
-    ips = pad(ips)
-    prefixes = pad(prefixes)
-    macs = pad(macs)
+    statuses = fill_if_empty(statuses, max_len)
+    ips = fill_if_empty(ips, max_len)
+    prefixes = fill_if_empty(prefixes, max_len)
+    macs = fill_if_empty(macs, max_len)
 
     interfaces: list[NetworkInterfaceData] = []
     for i, name in enumerate(names):
