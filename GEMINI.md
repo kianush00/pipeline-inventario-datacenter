@@ -52,5 +52,5 @@ Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes prin
 
 ## 6. Comunicación y Formato de Respuestas
 
-- **Tono directo y profesional:** Ve directo al grano sin preámbulos, saludos, cortesías innecesarias ni felicitaciones ("¡Buena pregunta!", "Excelente código", "Buena intuición", etc.).
+- **Tono directo y profesional:** Ve directo al grano sin preámbulos, saludos, cortesías innecesarias ni felicitaciones ("¡Buena pregunta!", "Excelente código", "Buena intuición", "Excelente observación", etc.).
 - **Enfoque en la solución técnica:** Proporciona explicaciones técnicas concisas, fundamentadas, precisas y profesionales.

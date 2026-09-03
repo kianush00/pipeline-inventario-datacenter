@@ -547,7 +547,7 @@ class CacheStore(BaseModel):
         default_factory=dict
     )
     platforms: dict[str, NetBoxObject] = Field(default_factory=dict)
-    racks: dict[str, NetBoxObject] = Field(default_factory=dict)
+    racks: dict[tuple[int, str], NetBoxObject] = Field(default_factory=dict)
     clusters: dict[str, NetBoxObject] = Field(default_factory=dict)
     device_roles: dict[str, NetBoxObject] = Field(default_factory=dict)
     host_devices: dict[tuple[int, str], int | None] = Field(
@@ -617,6 +617,14 @@ def concat_dot(parts: list[str], config: NetBoxMappingConfig) -> str:
     """Concatena partes no vacías con '. ' como separador."""
     clean = [p.strip() for p in parts if not config.is_empty(p)]
     return ". ".join(clean)
+
+
+def get_netbox_object_id(obj: NetBoxObject) -> int:
+    """Retorna el ID de un objeto NetBox. Si el objeto es None, retorna 0."""
+    obj_id = getattr(obj, "id", None)
+    if obj_id is None:
+        return 0
+    return int(obj_id)
 
 
 # ============================================================
@@ -824,13 +832,6 @@ def validate_csv_headers(
 # ============================================================
 
 
-def get_netbox_object_id(obj: NetBoxObject) -> int:
-    obj_id = getattr(obj, "id", None)
-    if obj_id is None:
-        return 0
-    return int(obj_id)
-
-
 def ensure_site(
     endpoints: NetBoxEndpoints,
     cfg: NetBoxMappingConfig,
@@ -984,30 +985,32 @@ def ensure_rack(
     endpoints: NetBoxEndpoints,
     name: str,
     site: NetBoxObject,
-    cache: dict[str, NetBoxObject],
+    cache: dict[tuple[int, str], NetBoxObject],
     dry_run: bool,
 ) -> NetBoxObject:
     """Garantiza que el Rack exista en NetBox."""
-    if name in cache:
-        return cache[name]
-
     site_id = get_netbox_object_id(site)
+    cache_key = (site_id, name)
+
+    if cache_key in cache:
+        return cache[cache_key]
+
     results: list[Record] = list(
         endpoints.racks.filter(name=name, site_id=site_id)
     )
     if results:
-        cache[name] = results[0]
+        cache[cache_key] = results[0]
         return results[0]
 
     if dry_run:
         log.info("[DRY-RUN] Crearía Rack: %s", name)
         obj: NetBoxObject = MockNetBoxRecord(id=0, name=name)
-        cache[name] = obj
+        cache[cache_key] = obj
         return obj
 
     obj = cast(Record, endpoints.racks.create(name=name, site=site_id))
     log.info("Rack creado: %s", name)
-    cache[name] = obj
+    cache[cache_key] = obj
     return obj
 
 
@@ -1992,14 +1995,16 @@ def sync_device(
     uuid: str = row.get(columns.uuid, "").strip()
     machine_type: str = row.get(columns.machine_type, "").strip()
 
-    if config.is_empty(machine_name):
-        log.warning("SKIP (%s vacío).", columns.machine_name)
-        return "SKIPPED", None
-    if config.is_empty(machine_type):
+    # Si falta el nombre de la máquina o el tipo de máquina, saltar.
+    if config.is_empty(machine_name) or config.is_empty(machine_type):
+        if config.is_empty(machine_name):
+            empty_field = columns.machine_name
+        else:
+            empty_field = columns.machine_type
         log.warning(
-            "SKIP (%s): campo '%s' vacío.",
-            machine_name,
-            columns.machine_type,
+            "SKIP (%s): campo requerido '%s' vacío.",
+            machine_name or "N/A",
+            empty_field,
         )
         return "SKIPPED", None
 
@@ -2140,14 +2145,17 @@ def sync_vm(
     machine_name: str = row.get(columns.machine_name, "").strip()
     uuid: str = row.get(columns.uuid, "").strip()
     machine_type: str = row.get(columns.machine_type, "").strip()
-    if config.is_empty(machine_name):
-        log.warning("SKIP (%s vacío).", columns.machine_name)
-        return "SKIPPED", None
-    if config.is_empty(machine_type):
+
+    # Si falta el nombre de la máquina o el tipo de máquina, saltar.
+    if config.is_empty(machine_name) or config.is_empty(machine_type):
+        if config.is_empty(machine_name):
+            empty_field = columns.machine_name
+        else:
+            empty_field = columns.machine_type
         log.warning(
-            "SKIP (%s): campo '%s' vacío.",
-            machine_name,
-            columns.machine_type,
+            "SKIP (%s): campo requerido '%s' vacío.",
+            machine_name or "N/A",
+            empty_field,
         )
         return "SKIPPED", None
 
