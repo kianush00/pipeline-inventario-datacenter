@@ -14,6 +14,14 @@
 # ── Columnas del inventario (Centralizadas) ──────────────────
 # Nombres exactos de las columnas utilizadas por el exportador.
 # Se definen anclas (&) para reutilizar como alias (*) en todo el archivo.
+#
+# Formato de celdas esperado (Input Format):
+# - Campos simples (Strings, Números): El valor directo. Se le aplicará .strip()
+# - Campos múltiples (ej. Interfaces, IP, MAC): Lista de valores separados por coma (,).
+#   El script hace split(",") y asocia los elementos según su índice.
+# - Valores nulos/vacíos: Si el valor de la celda coincide con algún elemento de
+#   la lista `empty_values` (al final de este archivo), se tratará como "vacío" (N/A)
+#   y no se enviará a NetBox, salvo que sea obligatorio.
 
 centralized_columns:
   machine_name: &col_nombre_maquina "Nombre maquina"

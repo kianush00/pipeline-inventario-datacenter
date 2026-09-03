@@ -28,6 +28,15 @@ Estrategia de idempotencia:
     Esto garantiza que un cambio de nombre en el CSV actualiza
     el objeto existente en NetBox en lugar de crear un duplicado.
 
+Formato de entrada del CSV:
+    - Campos simples: se procesan como strings directos (con .strip()).
+    - Valores vacíos: se ignoran aquellos que coincidan exactamente con
+      los valores definidos en `empty_values` del YAML (ej. "N/A", "None").
+    - Interfaces de red: Las 5 columnas de red (Interfaces, estado, IP,
+      Red IP, MAC) admiten múltiples valores separados por comas (`,`).
+      Todos deben tener la misma cantidad de elementos por celda para
+      sincronizarse correctamente.
+
 Códigos de salida:
     0 → sin errores en filas individuales
     1 → al menos una fila produjo ERROR
@@ -1323,8 +1332,12 @@ def parse_network_interfaces(
     Parsea las 5 columnas de red del CSV (valores separados por comas)
     y devuelve una lista de dicts con la información de cada interfaz.
 
+    Formato de celda esperado: "eth0, eth1" (elementos separados por coma).
+    Se asume que el orden de los elementos coincide (índice por índice)
+    entre las 5 columnas asociadas.
+
     Valida formato de IP y CIDR usando ipaddress.
-    Retorna None si los arrays tienen longitudes distintas.
+    Retorna None si los arrays (listas tras el split) tienen longitudes distintas.
     """
     net_cfg = config.network
     status_map: dict[str, bool] = net_cfg.interface_status_map

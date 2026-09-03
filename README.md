@@ -122,6 +122,14 @@ The exporter is idempotent: it primarily identifies existing Devices and Virtual
 
 Keep this file aligned with the merged CSV header. It is independent of `rundeck_header_list.txt`, which controls collection and merge behavior.
 
+### CSV Input Format
+
+The `export_to_netbox.py` script expects specific formats in the CSV cells:
+
+* **Simple fields**: Processed as raw strings (leading/trailing whitespace is stripped).
+* **Empty values**: Any cell that exactly matches one of the strings defined in the `empty_values` array in `netbox_mapping.yaml` (e.g., "N/A", "None", "-") is treated as empty/null. These fields are skipped and not exported.
+* **Multiple values (Networking)**: The 5 network interface columns (Interfaces, Status, IP, Prefix, MAC) support multiple values per cell. They must be formatted as **comma-separated lists** (e.g., `eth0, eth1`). The order of the items in these 5 columns must perfectly align index-by-index. If any of the network columns have a mismatch in the number of elements, the interfaces for that machine will be skipped entirely.
+
 ## Usage
 
 Run the stages from the repository root with the virtual environment active.
