@@ -1050,48 +1050,6 @@ def ensure_cluster(
     return obj
 
 
-def resolve_host_device(
-    endpoints: NetBoxEndpoints,
-    host_name: str,
-    site_id: int | None,
-    cache: dict[tuple[int, str], int | None],
-) -> int | None:
-    """
-    Resuelve y cachea el ID del Device correspondiente al hipervisor host,
-    acotado estrictamente al site_id configurado.
-    """
-    if site_id is None:
-        return None
-
-    cache_key = (site_id, host_name)
-    if cache_key in cache:
-        return cache[cache_key]
-
-    try:
-        host_devices: list[Record] = list(
-            endpoints.devices.filter(name=host_name, site_id=site_id)
-        )
-        if host_devices:
-            dev_id: int = get_netbox_object_id(host_devices[0])
-            cache[cache_key] = dev_id
-            return dev_id
-        else:
-            log.warning(
-                "No se encontró el Device host '%s' en el Site (ID: %s).",
-                host_name,
-                site_id,
-            )
-            cache[cache_key] = None
-            return None
-    except Exception:
-        log.exception(
-            "Error consultando Device host '%s' en Site (ID: %s)",
-            host_name,
-            site_id,
-        )
-        return None
-
-
 # ============================================================
 # CUSTOM FIELDS: ensure_custom_fields
 # ============================================================
@@ -1369,7 +1327,7 @@ def ensure_custom_fields(
 
 
 # ============================================================
-# PARSEO DE RED
+# PARSEO DE INTERFACES y IPs
 # ============================================================
 
 
@@ -1478,14 +1436,56 @@ def parse_network_interfaces(
 # ============================================================
 
 
+def _assign_ip(
+    endpoints: NetBoxEndpoints,
+    cidr: str,
+    iface_obj: Record,
+    obj_type: ObjectType,
+) -> bool:
+    """Crea o actualiza una IP address en NetBox y la asigna a la interfaz.
+    Retorna True si fue exitoso, False en caso de error."""
+    assigned_type: str = (
+        "dcim.interface" if obj_type == "device" else "virtualization.vminterface"
+    )
+
+    existing: list[Record] = list(endpoints.ip_addresses.filter(address=cidr))
+    if existing:
+        ip_obj: Record = existing[0]
+        try:
+            ip_obj.update(
+                {
+                    "assigned_object_type": assigned_type,
+                    "assigned_object_id": iface_obj.id,
+                }
+            )
+            return True
+        except Exception:
+            log.exception("Error actualizando IP %s", cidr)
+            return False
+    else:
+        try:
+            endpoints.ip_addresses.create(
+                address=cidr,
+                status="active",
+                assigned_object_type=assigned_type,
+                assigned_object_id=iface_obj.id,
+            )
+            return True
+        except Exception:
+            log.exception("Error creando IP %s", cidr)
+            return False
+
+
 def sync_interfaces_for_object(
     endpoints: NetBoxEndpoints,
     obj_id: int,
     obj_type: ObjectType,
     interfaces: list[NetworkInterfaceData],
     dry_run: bool,
-) -> None:
-    """Sincroniza interfaces y sus IPs para un Device o VM."""
+) -> int:
+    """Sincroniza interfaces y sus IPs para un Device o VM.
+    Retorna la cantidad de errores encontrados (0 si todo fue exitoso)."""
+    errors = 0
     iface_endpoint: Endpoint
     iface_filter: dict[str, int]
     if obj_type == "device":
@@ -1525,57 +1525,27 @@ def sync_interfaces_for_object(
                 existing[name].update(payload)
             except Exception:
                 log.exception("Error actualizando interfaz %s", name)
+                errors += 1
                 continue
         else:
             try:
                 existing[name] = cast(Record, iface_endpoint.create(**payload))
             except Exception:
                 log.exception("Error creando interfaz %s", name)
+                errors += 1
                 continue
 
         # Asignar IP si hay CIDR.
         if cidr and not dry_run:
             iface_obj: Record | None = existing.get(name)
             if iface_obj:
-                _assign_ip(endpoints, cidr, iface_obj, obj_type)
+                if not _assign_ip(endpoints, cidr, iface_obj, obj_type):
+                    errors += 1
 
         if cidr and dry_run:
             log.info("[DRY-RUN] Asignaría IP %s a interfaz %s", cidr, name)
 
-
-def _assign_ip(
-    endpoints: NetBoxEndpoints,
-    cidr: str,
-    iface_obj: Record,
-    obj_type: ObjectType,
-) -> None:
-    """Crea o actualiza una IP address en NetBox y la asigna a la interfaz."""
-    assigned_type: str = (
-        "dcim.interface" if obj_type == "device" else "virtualization.vminterface"
-    )
-
-    existing: list[Record] = list(endpoints.ip_addresses.filter(address=cidr))
-    if existing:
-        ip_obj: Record = existing[0]
-        try:
-            ip_obj.update(
-                {
-                    "assigned_object_type": assigned_type,
-                    "assigned_object_id": iface_obj.id,
-                }
-            )
-        except Exception:
-            log.exception("Error actualizando IP %s", cidr)
-    else:
-        try:
-            endpoints.ip_addresses.create(
-                address=cidr,
-                status="active",
-                assigned_object_type=assigned_type,
-                assigned_object_id=iface_obj.id,
-            )
-        except Exception:
-            log.exception("Error creando IP %s", cidr)
+    return errors
 
 
 # ============================================================
@@ -1780,6 +1750,53 @@ def resolve_platform(
             dry_run,
         )
         payload["platform"] = get_netbox_object_id(platform)
+
+
+# ============================================================
+# RESOLVER DEVICE
+# ============================================================
+
+
+def resolve_host_device(
+    endpoints: NetBoxEndpoints,
+    host_name: str,
+    site_id: int | None,
+    cache: dict[tuple[int, str], int | None],
+) -> int | None:
+    """
+    Resuelve y cachea el ID del Device correspondiente al hipervisor host,
+    acotado estrictamente al site_id configurado.
+    """
+    if site_id is None:
+        return None
+
+    cache_key = (site_id, host_name)
+    if cache_key in cache:
+        return cache[cache_key]
+
+    try:
+        host_devices: list[Record] = list(
+            endpoints.devices.filter(name=host_name, site_id=site_id)
+        )
+        if host_devices:
+            dev_id: int = get_netbox_object_id(host_devices[0])
+            cache[cache_key] = dev_id
+            return dev_id
+        else:
+            log.warning(
+                "No se encontró el Device host '%s' en el Site (ID: %s).",
+                host_name,
+                site_id,
+            )
+            cache[cache_key] = None
+            return None
+    except Exception:
+        log.exception(
+            "Error consultando Device host '%s' en Site (ID: %s)",
+            host_name,
+            site_id,
+        )
+        return None
 
 
 # ============================================================
@@ -2511,13 +2528,15 @@ def main() -> None:
             continue
 
         try:
-            sync_interfaces_for_object(
+            iface_errors = sync_interfaces_for_object(
                 endpoints,
                 obj_id,
                 object_type,
                 interfaces,
                 args.dry_run,
             )
+            if iface_errors > 0:
+                counts["ERROR"] += iface_errors
         except Exception as e:
             machine_name = row.get(columns.machine_name, "N/A")
             log.exception(
@@ -2525,6 +2544,7 @@ def main() -> None:
                 machine_name,
                 e,
             )
+            counts["ERROR"] += 1
 
 
     # ── Resumen ──────────────────────────────────────────────
