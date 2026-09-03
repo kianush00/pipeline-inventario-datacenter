@@ -211,7 +211,7 @@ environment:
 
 # NOTA: Cualquier diccionario en la raíz del YAML cuya clave termine
 # en `_map` (ej. environment_map) será detectado y registrado automáticamente
-# por el script como un mapa de resolución. Puedes utilizar estos mapas 
+# por el script como un mapa de resolución. Puedes utilizar estos mapas
 # referenciándolos con la propiedad `map: "nombre_del_mapa"` en la definición
 # de los campos del dispositivo o VM.
 environment_map:
@@ -553,11 +553,45 @@ vm_custom_fields:
     is_optional: true
 
 # ── Interfaces de red ─────────────────────────────────────────
-# Las cinco columnas de red se parsean en paralelo por posición.
+# Las cinco columnas de red se parsean en paralelo por posición,
+# separando cada celda por comas.
 #
-# Si los arrays resultantes no tienen la misma longitud, la
-# sincronización de interfaces de esa fila se omite.
-# El Device/VM se sincroniza de todas formas.
+# Ejemplo de una fila del CSV:
+#   Interfaces:         "eth0, eth1, eth2"
+#   Interfaces estado:  "up, down, down"
+#   IP:                 "136.12.34.147, N/A, N/A"
+#   Red IP:             "136.12.34.128/26, N/A, N/A"
+#   MAC:                "ab:cd:ef:01:23:45, de:ad:be:ef:12:34, 12:ab:cd:ef:56:78"
+#
+# Reglas de validación:
+#   - La columna "Interfaces" (names) define la cantidad de interfaces.
+#   - Las demás columnas deben tener exactamente la misma cantidad de
+#     elementos separados por comas, o estar completamente vacías.
+#   - Una columna completamente vacía indica que ninguna interfaz
+#     tiene ese dato (ej. todas las IPs son N/A o están en blanco).
+#   - Si una columna tiene datos pero su cantidad de elementos difiere
+#     de la cantidad de interfaces, la fila se descarta para interfaces
+#     (el Device/VM se sincroniza de todas formas).
+#
+# Columna "Red IP" (prefix):
+#   Contiene la red o máscara asociada a cada IP. Se combina con la
+#   columna "IP" para construir el CIDR que NetBox requiere en su API
+#   (campo `address` de IP Address: POST /api/ipam/ip-addresses/).
+#
+#   Formatos soportados:
+#     - Red/Prefijo:  "136.12.34.128/26"     → se extrae "26"
+#     - Red/Máscara:  "192.168.1.0/255.255.255.0" → se extrae "255.255.255.0"
+#     - Prefijo solo: "26"                     → se usa directamente
+#     - Máscara sola: "255.255.255.0"          → se usa directamente
+#
+#   En todos los casos, el script normaliza al formato CIDR canónico
+#   (ej. "136.12.34.147/26") antes de enviarlo a NetBox.
+#
+# Columna "IP":
+#   Dirección IPv4 sin máscara.
+#
+# Columna "MAC":
+#   Dirección MAC en formato estándar (ej. "ab:cd:ef:01:23:45").
 
 network:
   columns:

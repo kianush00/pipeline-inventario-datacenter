@@ -1390,12 +1390,21 @@ def parse_network_interfaces(
 
         if ip_raw and pfx_raw:
             try:
-                prefix_len = pfx_raw.split("/")[1].strip()
-                candidate_cidr = f"{ip_raw}/{prefix_len}"
-                # Validar con ip_interface
-                ipaddress.ip_interface(candidate_cidr)
-                cidr = candidate_cidr
-            except (IndexError, ValueError):
+                # Extraer la máscara o longitud del prefijo.
+                # Formatos soportados en la columna "Red IP":
+                #   - Red/Prefijo:  "136.23.104.128/26"
+                #   - Red/Máscara:  "192.168.1.0/255.255.255.0"
+                #   - Prefijo solo: "26"
+                #   - Máscara sola: "255.255.255.0"
+                mask_or_prefix = (
+                    pfx_raw.split("/")[1].strip()
+                    if "/" in pfx_raw
+                    else pfx_raw.strip()
+                )
+                # ip_interface acepta nativamente tanto "/24" como "/255.255.255.0"
+                # y str() normaliza siempre al formato CIDR canónico que NetBox exige.
+                cidr = str(ipaddress.ip_interface(f"{ip_raw}/{mask_or_prefix}"))
+            except ValueError:
                 log.warning(
                     "Prefijo o CIDR inválido '%s' para IP '%s' en interfaz '%s'.",
                     pfx_raw,
@@ -1868,8 +1877,21 @@ def check_record_changes(
     Determina qué campos cambiarían en el Record al aplicar el payload,
     sin persistir cambios ni realizar llamadas HTTP.
     Retorna un diccionario con las modificaciones detectadas.
+
+    Nota: Utiliza Record._init_cache (API interna de pynetbox, verificado
+    en v7.8.0) para clonar el estado original. Si la API interna cambia
+    en una versión futura, el fallback asume conservadoramente que todos
+    los campos del payload han cambiado.
     """
-    temp = Record(dict(record._init_cache), record.api, record.endpoint)
+    try:
+        temp = Record(dict(record._init_cache), record.api, record.endpoint)
+    except (AttributeError, TypeError):
+        log.debug(
+            "Fallback en check_record_changes: _init_cache no disponible; "
+            "se asume que todos los campos del payload han cambiado."
+        )
+        return dict(payload)
+
     for k, v in payload.items():
         setattr(temp, k, v)
     return temp.updates()
