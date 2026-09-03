@@ -73,14 +73,11 @@ logging.basicConfig(
 log = logging.getLogger("export_to_netbox")
 
 
-
 # ============================================================
 # TYPE ALIASES Y ESTRUCTURAS DE TIPOS
 # ============================================================
 
-SyncStatus: TypeAlias = Literal[
-    "CREATED", "UPDATED", "UNCHANGED", "SKIPPED", "ERROR"
-]
+SyncStatus: TypeAlias = Literal["CREATED", "UPDATED", "UNCHANGED", "SKIPPED", "ERROR"]
 SyncResult: TypeAlias = tuple[SyncStatus, int | None]
 ObjectType: TypeAlias = Literal["device", "virtual_machine"]
 CastType: TypeAlias = Literal["int", "int_gb_to_mb", "bool_si_no"]
@@ -227,9 +224,9 @@ class BaseCustomFieldDef(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     label: str = Field(min_length=1)
-    type: Literal[
-        "text", "integer", "boolean", "selection", "date", "url", "json"
-    ] = "text"
+    type: Literal["text", "integer", "boolean", "selection", "date", "url", "json"] = (
+        "text"
+    )
     required: bool = False
     object_types: list[str] = Field(default_factory=list)
     choice_set: ChoiceSetConfig | None = None
@@ -369,9 +366,7 @@ class NetBoxMappingConfig(BaseModel):
     environment_map: dict[str, str] = Field(default_factory=dict)
     machine_type_map: dict[str, Literal["device", "virtual_machine"]]
     status_map: dict[str, str]
-    status_defaults: StatusDefaultsConfig = Field(
-        default_factory=StatusDefaultsConfig
-    )
+    status_defaults: StatusDefaultsConfig = Field(default_factory=StatusDefaultsConfig)
     custom_fields: list[CustomFieldConfig] = Field(default_factory=list)
     device_fields: list[FieldMappingConfig] = Field(default_factory=list)
     device_custom_fields: list[FieldMappingConfig] = Field(default_factory=list)
@@ -390,7 +385,7 @@ class NetBoxMappingConfig(BaseModel):
         default_factory=dict
     )
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, __context: Any, /) -> None:
         """Inicializa los valores vacíos y el mapa indexado de Custom Fields O(1)."""
         object.__setattr__(
             self,
@@ -410,7 +405,8 @@ class NetBoxMappingConfig(BaseModel):
         object.__setattr__(self, "_custom_field_defs_map", cf_map)
 
         maps: dict[str, dict[str, FieldValue]] = {
-            k: v for k, v in self.model_dump().items()
+            k: v
+            for k, v in self.model_dump().items()
             if isinstance(v, dict) and k.endswith("_map")
         }
         object.__setattr__(self, "_available_maps", maps)
@@ -543,16 +539,12 @@ class CacheStore(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     manufacturers: dict[str, NetBoxObject] = Field(default_factory=dict)
-    device_types: dict[tuple[str, str], NetBoxObject] = Field(
-        default_factory=dict
-    )
+    device_types: dict[tuple[str, str], NetBoxObject] = Field(default_factory=dict)
     platforms: dict[str, NetBoxObject] = Field(default_factory=dict)
     racks: dict[tuple[int, str], NetBoxObject] = Field(default_factory=dict)
     clusters: dict[str, NetBoxObject] = Field(default_factory=dict)
     device_roles: dict[str, NetBoxObject] = Field(default_factory=dict)
-    host_devices: dict[tuple[int, str], int | None] = Field(
-        default_factory=dict
-    )
+    host_devices: dict[tuple[int, str], int | None] = Field(default_factory=dict)
 
 
 # ============================================================
@@ -645,7 +637,7 @@ def load_config(mapping_path: Path) -> NetBoxMappingConfig:
     try:
         with mapping_path.open("r", encoding="utf-8") as f:
             raw_yaml = f.read()
-        
+
         # Expande sintaxis $VAR o ${VAR} usando variables de entorno
         expanded_yaml = os.path.expandvars(raw_yaml)
         raw = yaml.safe_load(expanded_yaml)
@@ -800,9 +792,7 @@ def validate_csv_headers(
 
     # 1. Validación de columnas críticas (ERROR bloqueante)
     missing_required = [
-        col
-        for col in sorted(config.get_required_columns())
-        if col not in header_set
+        col for col in sorted(config.get_required_columns()) if col not in header_set
     ]
     if missing_required:
         log.error(
@@ -924,9 +914,7 @@ def ensure_device_type(
         return cache[key]
 
     results: list[Record] = list(
-        endpoints.device_types.filter(
-            model=model, manufacturer_id=manufacturer_id
-        )
+        endpoints.device_types.filter(model=model, manufacturer_id=manufacturer_id)
     )
     if results:
         cache[key] = results[0]
@@ -947,9 +935,7 @@ def ensure_device_type(
             u_height=u_height or 1,
         ),
     )
-    log.info(
-        "DeviceType creado: %s / %s", getattr(manufacturer, "name", "?"), model
-    )
+    log.info("DeviceType creado: %s / %s", getattr(manufacturer, "name", "?"), model)
     cache[key] = obj
     return obj
 
@@ -995,9 +981,7 @@ def ensure_rack(
     if cache_key in cache:
         return cache[cache_key]
 
-    results: list[Record] = list(
-        endpoints.racks.filter(name=name, site_id=site_id)
-    )
+    results: list[Record] = list(endpoints.racks.filter(name=name, site_id=site_id))
     if results:
         cache[cache_key] = results[0]
         return results[0]
@@ -1167,9 +1151,7 @@ def _ensure_choice_set(
         )
         return cast(int, choice_set.id)
 
-    current_choices: list[list[str]] = _normalize_choices(
-        choice_set.extra_choices 
-    )
+    current_choices: list[list[str]] = _normalize_choices(choice_set.extra_choices)
 
     if current_choices != choices:
         if dry_run:
@@ -1279,8 +1261,7 @@ def ensure_custom_fields(
     """
     # Obtener Custom Fields y Choice Sets existentes.
     existing_cfs: dict[str, Record] = {
-        str(cf.name): cast(Record, cf)
-        for cf in endpoints.custom_fields.all()
+        str(cf.name): cast(Record, cf) for cf in endpoints.custom_fields.all()
     }
 
     existing_choice_sets: dict[str, Record] = {
@@ -1520,9 +1501,7 @@ def sync_interfaces_for_object(
 
         if dry_run:
             action: str = "Actualizaría" if name in existing else "Crearía"
-            log.info(
-                "[DRY-RUN] %s interfaz %s en objeto %s", action, name, obj_id
-            )
+            log.info("[DRY-RUN] %s interfaz %s en objeto %s", action, name, obj_id)
         elif name in existing:
             try:
                 existing[name].update(payload)
@@ -1541,9 +1520,10 @@ def sync_interfaces_for_object(
         # Asignar IP si hay CIDR.
         if cidr and not dry_run:
             iface_obj: Record | None = existing.get(name)
-            if iface_obj:
-                if not _assign_ip(endpoints, cidr, iface_obj, obj_type):
-                    errors += 1
+            if iface_obj is not None and not _assign_ip(
+                endpoints, cidr, iface_obj, obj_type
+            ):
+                errors += 1
 
         if cidr and dry_run:
             log.info("[DRY-RUN] Asignaría IP %s a interfaz %s", cidr, name)
@@ -1624,24 +1604,25 @@ def resolve_field_value(
         value = mapped
 
     # Validación Temprana (Fail-Fast) para Custom Fields de tipo 'selection'
-    if custom_field_def and custom_field_def.type == "selection":
-        if custom_field_def.choice_set:
-            valid_choices = [
-                c.value for c in custom_field_def.choice_set.choices
-            ]
-            if value not in valid_choices:
-                log.warning(
-                    "Valor '%s' no es válido para el Custom Field '%s'. "
-                    "Opciones válidas: %s.",
-                    value,
-                    target,
-                    valid_choices,
-                )
-                if is_optional:
-                    return None
-                raise ValueError(
-                    f"Valor inválido '{value}' para el campo requerido '{target}'."
-                )
+    if (
+        custom_field_def
+        and custom_field_def.type == "selection"
+        and custom_field_def.choice_set
+    ):
+        valid_choices = [c.value for c in custom_field_def.choice_set.choices]
+        if value not in valid_choices:
+            log.warning(
+                "Valor '%s' no es válido para el Custom Field '%s'. "
+                "Opciones válidas: %s.",
+                value,
+                target,
+                valid_choices,
+            )
+            if is_optional:
+                return None
+            raise ValueError(
+                f"Valor inválido '{value}' para el campo requerido '{target}'."
+            )
 
     # Cast de tipo.
     if cast_type:
@@ -2010,9 +1991,7 @@ def sync_device(
 
     device_fields_cfg = config.device_fields
     device_cf_cfg = config.device_custom_fields
-    payload, _ = build_payload(
-        row, device_fields_cfg, device_cf_cfg, config
-    )
+    payload, _ = build_payload(row, device_fields_cfg, device_cf_cfg, config)
 
     # ── Resolución de objetos relacionados ──────────────────
     # Role.
@@ -2107,9 +2086,9 @@ def sync_device(
 
     matched_by_name_only = found_by_name and not found_by_uuid
     if matched_by_name_only and not is_name_safely_unique(
-            existing, machine_name, csv_name_counts, "device"
-        ):
-            return "SKIPPED", None
+        existing, machine_name, csv_name_counts, "device"
+    ):
+        return "SKIPPED", None
 
     return apply_sync(
         endpoints.devices,
@@ -2235,16 +2214,14 @@ def sync_vm(
             config,
         )
     except Exception:
-        log.exception(
-            "ERROR buscando VM '%s' (UUID=%s)", machine_name, uuid or "N/A"
-        )
+        log.exception("ERROR buscando VM '%s' (UUID=%s)", machine_name, uuid or "N/A")
         return "ERROR", None
 
     matched_by_name_only = found_by_name and not found_by_uuid
     if matched_by_name_only and not is_name_safely_unique(
-            existing, machine_name, csv_name_counts, "VM"
-        ):
-            return "SKIPPED", None
+        existing, machine_name, csv_name_counts, "VM"
+    ):
+        return "SKIPPED", None
 
     return apply_sync(
         endpoints.virtual_machines,
@@ -2510,13 +2487,12 @@ def main() -> None:
             log.warning("SKIP fila %d: %s", row_num, e)
             counts["SKIPPED"] += 1
             continue
-        except Exception as e:
+        except Exception:
             machine_name = row.get(columns.machine_name, "N/A")
             log.exception(
-                "ERROR inesperado al procesar fila %d ('%s'): %s",
+                "ERROR inesperado al procesar fila %d ('%s')",
                 row_num,
                 machine_name,
-                e,
             )
             counts["ERROR"] += 1
             continue
@@ -2545,15 +2521,12 @@ def main() -> None:
             )
             if iface_errors > 0:
                 counts["ERROR"] += iface_errors
-        except Exception as e:
+        except Exception:
             machine_name = row.get(columns.machine_name, "N/A")
             log.exception(
-                "ERROR inesperado al sincronizar interfaces de '%s': %s",
-                machine_name,
-                e,
+                "ERROR inesperado al sincronizar interfaces de '%s'", machine_name
             )
             counts["ERROR"] += 1
-
 
     # ── Resumen ──────────────────────────────────────────────
     print()
