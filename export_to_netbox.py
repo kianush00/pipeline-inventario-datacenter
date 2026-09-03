@@ -382,6 +382,9 @@ class NetBoxMappingConfig(BaseModel):
     _custom_field_defs_map: dict[str, CustomFieldDef] = PrivateAttr(
         default_factory=dict
     )
+    _available_maps: dict[str, dict[str, Any]] = PrivateAttr(
+        default_factory=dict
+    )
 
     def model_post_init(self, __context: Any) -> None:
         """Inicializa los valores vacíos y el mapa indexado de Custom Fields O(1)."""
@@ -394,12 +397,19 @@ class NetBoxMappingConfig(BaseModel):
         cf_map: dict[str, CustomFieldDef] = {}
         for cf in self.custom_fields:
             cf_map[cf.name] = cf
-        if self.machine_type:
-            cf_map[self.machine_type.field_name] = self.machine_type
+
+        cf_map[self.machine_type.field_name] = self.machine_type
+
         if self.environment:
             cf_map[self.environment.field_name] = self.environment
 
         object.__setattr__(self, "_custom_field_defs_map", cf_map)
+
+        maps = {
+            k: v for k, v in self.model_dump().items()
+            if isinstance(v, dict) and k.endswith("_map")
+        }
+        object.__setattr__(self, "_available_maps", maps)
 
     @property
     def columns(self) -> CentralizedColumns:
@@ -440,6 +450,10 @@ class NetBoxMappingConfig(BaseModel):
         """Retorna la lista completa de definiciones de Custom Field."""
         return list(self._custom_field_defs_map.values())
 
+    def get_map(self, map_name: str) -> dict[str, Any]:
+        """Devuelve un mapa de configuración por nombre."""
+        return self._available_maps.get(map_name, {})
+
     def is_empty(self, value: Any) -> bool:
         """Determina si un valor es considerado vacío según empty_values."""
         if value is None:
@@ -457,7 +471,6 @@ class NetBoxMappingConfig(BaseModel):
             )
 
         # 2. Validar que los 'map' referenciados existan en el modelo
-        available_maps = {"environment_map": self.environment_map}
         for field_group_name, field_group in [
             ("device_fields", self.device_fields),
             ("device_custom_fields", self.device_custom_fields),
@@ -465,7 +478,7 @@ class NetBoxMappingConfig(BaseModel):
             ("vm_custom_fields", self.vm_custom_fields),
         ]:
             for f in field_group:
-                if f.map and f.map not in available_maps:
+                if f.map and f.map not in self._available_maps:
                     raise ValueError(
                         f"En '{field_group_name}', target '{f.target}' "
                         f"referencia map '{f.map}', pero no está definido en el YAML."
@@ -1618,9 +1631,7 @@ def resolve_field_value(
 
     # Mapeo de valores (ej. environment_map).
     if map_key:
-        mapping_dict = (
-            config.environment_map if map_key == "environment_map" else {}
-        )
+        mapping_dict = config.get_map(map_key)
         mapped = mapping_dict.get(value.strip())
         if mapped is None:
             log.warning(
@@ -1633,7 +1644,7 @@ def resolve_field_value(
             if default is not None:
                 return default
             return None if is_optional else ""
-        value: FieldValue = mapped
+        value = mapped
 
     # Validación Temprana (Fail-Fast) para Custom Fields de tipo 'selection'
     if custom_field_def and custom_field_def.type == "selection":

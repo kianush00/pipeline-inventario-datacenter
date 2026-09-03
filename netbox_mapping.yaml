@@ -209,6 +209,11 @@ environment:
       - value: "development"
         label: "Desarrollo"
 
+# NOTA: Cualquier diccionario en la raíz del YAML cuya clave termine
+# en `_map` (ej. environment_map) será detectado y registrado automáticamente
+# por el script como un mapa de resolución. Puedes utilizar estos mapas 
+# referenciándolos con la propiedad `map: "nombre_del_mapa"` en la definición
+# de los campos del dispositivo o VM.
 environment_map:
   "Producción": "production"
   "Certificación": "certification"
