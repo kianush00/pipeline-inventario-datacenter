@@ -527,6 +527,7 @@ class MockNetBoxRecord(BaseModel):
     slug: str = ""
     model: str = ""
     vm_role: bool = False
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
 
 
 NetBoxObject: TypeAlias = Record | MockNetBoxRecord
@@ -977,7 +978,9 @@ def ensure_manufacturer(
         log.warning(
             "Manufacturer '%s' no existe, pero su slug '%s' coincide con '%s'. "
             "Se reutiliza el objeto existente.",
-            name, slug, getattr(slug_results[0], "name", "?"),
+            name,
+            slug,
+            getattr(slug_results[0], "name", "?"),
         )
         cache[name] = slug_results[0]
         return slug_results[0]
@@ -998,7 +1001,9 @@ def ensure_manufacturer(
         slug_fallback = f"{slug}-{hash(name) % 10000:04d}"
         log.warning(
             "Slug '%s' colisionó al crear Manufacturer '%s'; reintentando con '%s'.",
-            slug, name, slug_fallback,
+            slug,
+            name,
+            slug_fallback,
         )
         obj = cast(
             Record,
@@ -1019,7 +1024,11 @@ def ensure_device_type(
 ) -> NetBoxObject:
     """Garantiza que el DeviceType exista en NetBox."""
     manufacturer_id = get_netbox_object_id(manufacturer)
-    key = (str(manufacturer_id), model)
+    
+    # M-4: Extraemos el nombre para evitar colisiones del id=0 en dry-run.
+    # El ID numérico se retiene solo como fallback.
+    manufacturer_name = str(getattr(manufacturer, "name", manufacturer_id))
+    key = (manufacturer_name, model)
     if key in cache:
         return cache[key]
 
@@ -1029,26 +1038,31 @@ def ensure_device_type(
     if results:
         existing_dt = results[0]
         target_height = u_height or 1
-        
+
         # NetBox puede devolver u_height como float por el soporte a "half-units" (ej. 1.5U).
         # Usamos float() para comparar de forma segura el valor local e int/float de NetBox.
         current_height = float(getattr(existing_dt, "u_height", 1) or 1)
-        
+
         if current_height != float(target_height):
             if dry_run:
                 log.info(
                     "[DRY-RUN] Actualizaría u_height de DeviceType '%s' (de %g a %g)",
-                    model, current_height, target_height
+                    model,
+                    current_height,
+                    target_height,
                 )
             else:
                 try:
                     existing_dt.update({"u_height": target_height})
                     log.info(
-                        "DeviceType '%s' u_height actualizado a %g", 
-                        model, target_height
+                        "DeviceType '%s' u_height actualizado a %g",
+                        model,
+                        target_height,
                     )
                 except Exception:
-                    log.exception("Error actualizando u_height de DeviceType '%s'", model)
+                    log.exception(
+                        "Error actualizando u_height de DeviceType '%s'", model
+                    )
 
         cache[key] = existing_dt
         return existing_dt
@@ -1061,7 +1075,6 @@ def ensure_device_type(
 
     # Prefijamos el slug con el nombre del fabricante para evitar colisiones
     # entre modelos homónimos de distintas marcas (ej. "PowerEdge" de Dell vs HP).
-    manufacturer_name = str(getattr(manufacturer, "name", ""))
     slug = slugify(f"{manufacturer_name} {model}")
 
     # Búsqueda preventiva por slug.
@@ -1070,7 +1083,9 @@ def ensure_device_type(
         log.warning(
             "DeviceType '%s/%s' no existe por nombre, pero su slug '%s' coincide "
             "con un DeviceType existente. Se reutiliza.",
-            manufacturer_name, model, slug,
+            manufacturer_name,
+            model,
+            slug,
         )
         cache[key] = slug_results[0]
         return slug_results[0]
@@ -1089,7 +1104,10 @@ def ensure_device_type(
         slug_fallback = f"{slug}-{hash(model) % 10000:04d}"
         log.warning(
             "Slug '%s' colisionó al crear DeviceType '%s/%s'; reintentando con '%s'.",
-            slug, manufacturer_name, model, slug_fallback,
+            slug,
+            manufacturer_name,
+            model,
+            slug_fallback,
         )
         obj = cast(
             Record,
@@ -1133,7 +1151,9 @@ def ensure_platform(
         log.warning(
             "Platform '%s' no existe, pero su slug '%s' coincide con '%s'. "
             "Se reutiliza el objeto existente.",
-            name, slug, getattr(slug_results[0], "name", "?"),
+            name,
+            slug,
+            getattr(slug_results[0], "name", "?"),
         )
         cache[name] = slug_results[0]
         return slug_results[0]
@@ -1144,7 +1164,9 @@ def ensure_platform(
         slug_fallback = f"{slug}-{hash(name) % 10000:04d}"
         log.warning(
             "Slug '%s' colisionó al crear Platform '%s'; reintentando con '%s'.",
-            slug, name, slug_fallback,
+            slug,
+            name,
+            slug_fallback,
         )
         obj = cast(
             Record,
@@ -1197,13 +1219,11 @@ def ensure_cluster(
     """Garantiza que el Cluster exista en NetBox."""
     site_id = get_netbox_object_id(site)
     cache_key = (site_id, name)
-    
+
     if cache_key in cache:
         return cache[cache_key]
 
-    results: list[Record] = list(
-        endpoints.clusters.filter(name=name, site_id=site_id)
-    )
+    results: list[Record] = list(endpoints.clusters.filter(name=name, site_id=site_id))
     if results:
         cache[cache_key] = results[0]
         return results[0]
