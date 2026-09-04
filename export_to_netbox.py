@@ -94,6 +94,7 @@ CsvRow: TypeAlias = dict[str, str]
 FieldValue: TypeAlias = str | int | float | bool | None
 CustomFieldsPayload: TypeAlias = dict[str, FieldValue]
 NetBoxPayload: TypeAlias = dict[str, Any]
+CsvColumnAliases: TypeAlias = dict[str, str]
 
 
 class SyncCounts(TypedDict):
@@ -155,27 +156,6 @@ class NetBoxEndpoints(BaseModel):
 # ============================================================
 # MODELOS DE CONFIGURACIÓN YAML
 # ============================================================
-
-
-class CentralizedColumns(BaseModel):
-    """
-    Nombres de columnas centralizadas de merged_inventory.csv,
-    resueltos y validados desde netbox_mapping.yaml.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    machine_name: str = Field(min_length=1)
-    machine_type: str = Field(min_length=1)
-    os: str = Field(min_length=1)
-    status: str = Field(min_length=1)
-    role: str = Field(min_length=1)
-    manufacturer: str = Field(min_length=1)
-    model: str = Field(min_length=1)
-    rack: str = Field(min_length=1)
-    cluster: str = Field(min_length=1)
-    cores: str = Field(min_length=1)
-    uuid: str = Field(min_length=1)
 
 
 class SiteConfig(BaseModel):
@@ -260,23 +240,11 @@ class BaseCustomFieldDef(BaseModel):
         return self
 
 
-class SpecialCustomFieldConfig(BaseCustomFieldDef):
-    """
-    Definición para custom fields especiales definidos en el nivel
-    superior del YAML (ej. machine_type, environment).
-    """
-
-    field_name: str = Field(min_length=1)
-
-
 class CustomFieldConfig(BaseCustomFieldDef):
-    """Definición estándar de Custom Field en la lista 'custom_fields'."""
+    """Definición unificada de Custom Field."""
 
     name: str = Field(min_length=1)
     default: Any = None
-
-
-CustomFieldDef: TypeAlias = CustomFieldConfig | SpecialCustomFieldConfig
 
 
 class FieldMappingConfig(BaseModel):
@@ -365,30 +333,29 @@ class NetBoxMappingConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    centralized_columns: CentralizedColumns
-    csv_extra_columns: dict[str, str] = Field(default_factory=dict)
+    csv_column_aliases: CsvColumnAliases
     required_columns: list[str] = Field(min_length=1)
     site: SiteConfig
     cluster_type: ClusterTypeConfig
     device_roles: list[DeviceRoleConfig]
-    machine_type: SpecialCustomFieldConfig
-    environment: SpecialCustomFieldConfig | None = None
+    machine_type: CustomFieldConfig
+    environment: CustomFieldConfig | None = None
     environment_map: dict[str, str] = Field(default_factory=dict)
     machine_type_map: dict[str, Literal["device", "virtual_machine"]]
     status_map: dict[str, str]
     status_defaults: StatusDefaultsConfig = Field(default_factory=StatusDefaultsConfig)
-    custom_fields: list[CustomFieldConfig] = Field(default_factory=list)
-    device_fields: list[FieldMappingConfig] = Field(default_factory=list)
-    device_custom_fields: list[FieldMappingConfig] = Field(default_factory=list)
-    vm_fields: list[FieldMappingConfig] = Field(default_factory=list)
-    vm_custom_fields: list[FieldMappingConfig] = Field(default_factory=list)
+    custom_field_definitions: list[CustomFieldConfig] = Field(default_factory=list)
+    device_native_mappings: list[FieldMappingConfig] = Field(default_factory=list)
+    device_custom_mappings: list[FieldMappingConfig] = Field(default_factory=list)
+    vm_native_mappings: list[FieldMappingConfig] = Field(default_factory=list)
+    vm_custom_mappings: list[FieldMappingConfig] = Field(default_factory=list)
     network: NetworkConfig
     empty_values: list[str] = Field(
         default_factory=lambda: ["N/A", "", "None", "n/a", "none"]
     )
 
     _empty_values_set: frozenset[str] = PrivateAttr(default_factory=frozenset)
-    _custom_field_defs_map: dict[str, CustomFieldDef] = PrivateAttr(
+    _custom_field_defs_map: dict[str, CustomFieldConfig] = PrivateAttr(
         default_factory=dict
     )
     _available_maps: dict[str, dict[str, FieldValue]] = PrivateAttr(
@@ -403,14 +370,14 @@ class NetBoxMappingConfig(BaseModel):
             frozenset(self.empty_values) | {""},
         )
 
-        cf_map: dict[str, CustomFieldDef] = {}
-        for cf in self.custom_fields:
+        cf_map: dict[str, CustomFieldConfig] = {}
+        for cf in self.custom_field_definitions:
             cf_map[cf.name] = cf
 
-        cf_map[self.machine_type.field_name] = self.machine_type
+        cf_map[self.machine_type.name] = self.machine_type
 
         if self.environment:
-            cf_map[self.environment.field_name] = self.environment
+            cf_map[self.environment.name] = self.environment
 
         object.__setattr__(self, "_custom_field_defs_map", cf_map)
 
@@ -422,9 +389,9 @@ class NetBoxMappingConfig(BaseModel):
         object.__setattr__(self, "_available_maps", maps)
 
     @property
-    def columns(self) -> CentralizedColumns:
-        """Alias ergonómico de acceso a las columnas centralizadas."""
-        return self.centralized_columns
+    def columns(self) -> CsvColumnAliases:
+        """Alias ergonómico de acceso al glosario de columnas del CSV."""
+        return self.csv_column_aliases
 
     @property
     def empty_values_set(self) -> frozenset[str]:
@@ -443,20 +410,15 @@ class NetBoxMappingConfig(BaseModel):
     def get_all_expected_columns(self) -> set[str]:
         """
         Retorna el catálogo completo de nombres de columnas esperadas
-        en el CSV, combinando las columnas centralizadas, las extras y
-        las requeridas.
+        en el CSV, combinando los alias de columnas y las requeridas.
         """
-        return (
-            set(self.centralized_columns.model_dump().values())
-            | set(self.csv_extra_columns.values())
-            | set(self.required_columns)
-        )
+        return set(self.csv_column_aliases.values()) | set(self.required_columns)
 
-    def get_custom_field_def(self, target: str) -> CustomFieldDef | None:
+    def get_custom_field_def(self, target: str) -> CustomFieldConfig | None:
         """Retorna la definición de un Custom Field en O(1) por nombre de target."""
         return self._custom_field_defs_map.get(target)
 
-    def get_all_custom_field_defs(self) -> list[CustomFieldDef]:
+    def get_all_custom_field_defs(self) -> list[CustomFieldConfig]:
         """Retorna la lista completa de definiciones de Custom Field."""
         return list(self._custom_field_defs_map.values())
 
@@ -482,10 +444,10 @@ class NetBoxMappingConfig(BaseModel):
 
         # 2. Validar que los 'map' referenciados existan en el modelo
         for field_group_name, field_group in [
-            ("device_fields", self.device_fields),
-            ("device_custom_fields", self.device_custom_fields),
-            ("vm_fields", self.vm_fields),
-            ("vm_custom_fields", self.vm_custom_fields),
+            ("device_native_mappings", self.device_native_mappings),
+            ("device_custom_mappings", self.device_custom_mappings),
+            ("vm_native_mappings", self.vm_native_mappings),
+            ("vm_custom_mappings", self.vm_custom_mappings),
         ]:
             for f in field_group:
                 if f.map and f.map not in self._available_maps:
@@ -495,14 +457,12 @@ class NetBoxMappingConfig(BaseModel):
                     )
 
         # 3. Validar que las columnas requeridas existan en el catálogo conocido
-        known_columns = set(self.centralized_columns.model_dump().values()) | set(
-            self.csv_extra_columns.values()
-        )
+        known_columns = set(self.csv_column_aliases.values())
         unknown_required = set(self.required_columns) - known_columns
         if unknown_required:
             raise ValueError(
                 f"Las siguientes columnas en 'required_columns' no están declaradas "
-                f"en 'centralized_columns' ni en 'csv_extra_columns': {unknown_required}"
+                f"en 'csv_column_aliases': {unknown_required}"
             )
 
         # 4. Validar machine_type_map no vacío
@@ -1415,17 +1375,13 @@ def _ensure_choice_set(
 def _ensure_custom_field(
     custom_fields_endpoint: Endpoint,
     existing_cfs: dict[str, Record],
-    cf_def: CustomFieldDef,
+    cf_def: CustomFieldConfig,
     ot_ids: list[int],
     choice_set_id: int | None,
     dry_run: bool,
 ) -> None:
     """Crea un custom field si no existe en NetBox."""
-    name: str = (
-        cf_def.field_name
-        if isinstance(cf_def, SpecialCustomFieldConfig)
-        else cf_def.name
-    )
+    name: str = cf_def.name
 
     if name in existing_cfs:
         log.debug(
@@ -1504,7 +1460,7 @@ def ensure_custom_fields(
     ot_cache: dict[str, int] = {}
 
     # Obtener lista unificada de definiciones de Custom Field O(1).
-    cf_definitions: list[CustomFieldDef] = cfg.get_all_custom_field_defs()
+    cf_definitions: list[CustomFieldConfig] = cfg.get_all_custom_field_defs()
 
     for cf_def in cf_definitions:
         raw_ot_ids: list[int | None] = [
@@ -1831,7 +1787,7 @@ def _resolve_netbox_status(
     row: CsvRow,
     config: NetBoxMappingConfig,
     object_type: ObjectType,
-    columns: CentralizedColumns,
+    columns: CsvColumnAliases,
 ) -> str:
     """
     Resuelve el status NetBox a partir de la columna 'Estado'.
@@ -1840,7 +1796,7 @@ def _resolve_netbox_status(
         device         -> inventory
         virtual_machine -> staged
     """
-    estado = row.get(columns.status, "").strip()
+    estado = row.get(columns["status"], "").strip()
     status_mapped = config.status_map.get(estado)
     if status_mapped:
         return status_mapped
@@ -1858,7 +1814,7 @@ def _resolve_platform(
     config: NetBoxMappingConfig,
 ) -> None:
     """Resuelve el Platform desde la columna OS y lo agrega al payload si existe."""
-    platform_name = row.get(config.columns.os, "").strip()
+    platform_name = row.get(config.columns["os"], "").strip()
     if not config.is_empty(platform_name):
         platforms_cache = caches.platforms
         platform = ensure_platform(
@@ -2118,16 +2074,16 @@ def sync_device(
     Retorna: (SyncStatus, obj_id | None)
     """
     columns = config.columns
-    machine_name: str = row.get(columns.machine_name, "").strip()
-    uuid: str = row.get(columns.uuid, "").strip()
-    machine_type: str = row.get(columns.machine_type, "").strip()
+    machine_name: str = row.get(columns["machine_name"], "").strip()
+    uuid: str = row.get(columns["uuid"], "").strip()
+    machine_type: str = row.get(columns["machine_type"], "").strip()
 
     # Si falta el nombre de la máquina o el tipo de máquina, saltar.
     if config.is_empty(machine_name) or config.is_empty(machine_type):
         if config.is_empty(machine_name):
-            empty_field = columns.machine_name
+            empty_field = columns["machine_name"]
         else:
-            empty_field = columns.machine_type
+            empty_field = columns["machine_type"]
         log.warning(
             "SKIP (%s): campo requerido '%s' vacío.",
             machine_name or "N/A",
@@ -2135,13 +2091,13 @@ def sync_device(
         )
         return "SKIPPED", None
 
-    device_fields_cfg = config.device_fields
-    device_cf_cfg = config.device_custom_fields
+    device_fields_cfg = config.device_native_mappings
+    device_cf_cfg = config.device_custom_mappings
     payload, _ = build_payload(row, device_fields_cfg, device_cf_cfg, config)
 
     # ── Resolución de objetos relacionados ──────────────────
     # Role.
-    rol_csv: str = row.get(columns.role, "").strip()
+    rol_csv: str = row.get(columns["role"], "").strip()
     role_obj = _resolve_device_role(rol_csv, caches.device_roles, config)
     if role_obj is None:
         log.error(
@@ -2153,8 +2109,8 @@ def sync_device(
     payload["role"] = get_netbox_object_id(role_obj)
 
     # Manufacturer y DeviceType.
-    marca: str = row.get(columns.manufacturer, "").strip()
-    modelo: str = row.get(columns.model, "").strip()
+    marca: str = row.get(columns["manufacturer"], "").strip()
+    modelo: str = row.get(columns["model"], "").strip()
     if config.is_empty(marca) or config.is_empty(modelo):
         log.warning("SKIP (%s): sin Marca o Modelo.", machine_name)
         return "SKIPPED", None
@@ -2187,7 +2143,7 @@ def sync_device(
     _resolve_platform(endpoints, row, payload, caches, dry_run, config)
 
     # Rack.
-    rack_name: str = row.get(columns.rack, "").strip()
+    rack_name: str = row.get(columns["rack"], "").strip()
     if not config.is_empty(rack_name):
         rack = ensure_rack(
             endpoints.racks,
@@ -2262,16 +2218,16 @@ def sync_vm(
     Retorna: (SyncStatus, obj_id | None)
     """
     columns = config.columns
-    machine_name: str = row.get(columns.machine_name, "").strip()
-    uuid: str = row.get(columns.uuid, "").strip()
-    machine_type: str = row.get(columns.machine_type, "").strip()
+    machine_name: str = row.get(columns["machine_name"], "").strip()
+    uuid: str = row.get(columns["uuid"], "").strip()
+    machine_type: str = row.get(columns["machine_type"], "").strip()
 
     # Si falta el nombre de la máquina o el tipo de máquina, saltar.
     if config.is_empty(machine_name) or config.is_empty(machine_type):
         if config.is_empty(machine_name):
-            empty_field = columns.machine_name
+            empty_field = columns["machine_name"]
         else:
-            empty_field = columns.machine_type
+            empty_field = columns["machine_type"]
         log.warning(
             "SKIP (%s): campo requerido '%s' vacío.",
             machine_name or "N/A",
@@ -2279,8 +2235,8 @@ def sync_vm(
         )
         return "SKIPPED", None
 
-    vm_fields_cfg = config.vm_fields
-    vm_cf_cfg = config.vm_custom_fields
+    vm_fields_cfg = config.vm_native_mappings
+    vm_cf_cfg = config.vm_custom_mappings
     payload, _ = build_payload(
         row,
         vm_fields_cfg,
@@ -2289,7 +2245,7 @@ def sync_vm(
     )
 
     # Role.
-    rol_csv: str = row.get(columns.role, "").strip()
+    rol_csv: str = row.get(columns["role"], "").strip()
     role_obj = _resolve_device_role(rol_csv, caches.device_roles, config)
     if role_obj is None:
         log.error(
@@ -2304,9 +2260,9 @@ def sync_vm(
     _resolve_platform(endpoints, row, payload, caches, dry_run, config)
 
     # Cluster.
-    host_name: str = row.get(columns.cluster, "").strip()
+    host_name: str = row.get(columns["cluster"], "").strip()
     if config.is_empty(host_name):
-        log.warning("SKIP (%s): VM sin %s.", machine_name, columns.cluster)
+        log.warning("SKIP (%s): VM sin %s.", machine_name, columns["cluster"])
         return "SKIPPED", None
     cluster = ensure_cluster(
         endpoints.clusters,
@@ -2341,7 +2297,7 @@ def sync_vm(
     )
 
     # vcpus.
-    cores: str = row.get(columns.cores, "").strip()
+    cores: str = row.get(columns["cores"], "").strip()
     cores_int = safe_int(cores)
     if cores_int is not None:
         payload["vcpus"] = float(cores_int)
@@ -2534,7 +2490,7 @@ def main() -> None:
 
     # ── Cargar configuración ─────────────────────────────────
     config: NetBoxMappingConfig = load_config(mapping_path)
-    columns: CentralizedColumns = config.columns
+    columns: CsvColumnAliases = config.columns
 
     # ── Leer y Validar CSV (Fail-Fast) ───────────────────────
     headers, rows = read_csv(args.csv)
@@ -2584,19 +2540,19 @@ def main() -> None:
     # Usado para validar unicidad antes de permitir
     # actualizaciones por nombre (sin UUID).
     csv_name_counts: Counter[str] = Counter(
-        row.get(columns.machine_name, "").strip() for row in rows
+        row.get(columns["machine_name"], "").strip() for row in rows
     )
 
     # ── Procesar filas ───────────────────────────────────────
     for row_num, row in enumerate(rows, start=2):
-        tipo_raw = row.get(columns.machine_type, "").strip()
+        tipo_raw = row.get(columns["machine_type"], "").strip()
         nb_type = config.machine_type_map.get(tipo_raw)
 
         if nb_type is None:
             log.warning(
                 "Fila %d SKIP: %s '%s' no está en machine_type_map.",
                 row_num,
-                columns.machine_type,
+                columns["machine_type"],
                 tipo_raw,
             )
             counts["SKIPPED"] += 1
@@ -2605,7 +2561,7 @@ def main() -> None:
         # ── Parsear interfaces ────────────────────────────────
         interfaces = parse_network_interfaces(row, config)
         if interfaces is None:
-            machine_name = row.get(columns.machine_name, f"fila {row_num}")
+            machine_name = row.get(columns["machine_name"], f"fila {row_num}")
             log.warning(
                 "Interfaces de '%s' tienen longitudes inconsistentes; "
                 "se omitirán para esta fila.",
@@ -2645,7 +2601,7 @@ def main() -> None:
             counts["SKIPPED"] += 1
             continue
         except Exception:
-            machine_name = row.get(columns.machine_name, "N/A")
+            machine_name = row.get(columns["machine_name"], "N/A")
             log.exception(
                 "ERROR inesperado al procesar fila %d ('%s')",
                 row_num,
@@ -2661,7 +2617,7 @@ def main() -> None:
 
         # ── Sincronizar interfaces del objeto ─────────────────
         if not obj_id:
-            machine_name = row.get(columns.machine_name, f"fila {row_num}")
+            machine_name = row.get(columns["machine_name"], f"fila {row_num}")
             log.warning(
                 "SKIP interfaces de '%s': el objeto no tiene ID.",
                 machine_name,
@@ -2679,7 +2635,7 @@ def main() -> None:
             if iface_errors > 0:
                 counts["ERROR"] += iface_errors
         except Exception:
-            machine_name = row.get(columns.machine_name, "N/A")
+            machine_name = row.get(columns["machine_name"], "N/A")
             log.exception(
                 "ERROR inesperado al sincronizar interfaces de '%s'", machine_name
             )

@@ -6,14 +6,21 @@
 #
 # ── Credenciales ─────────────────────────────────────────────
 # Se leen desde variables de entorno (nunca en este archivo):
-#   NETBOX_URL        → URL de NetBox
-#   NETBOX_TOKEN      → token con permisos write sobre
-#                       dcim, virtualization, ipam, extras, core
-#   NETBOX_VERIFY_SSL → "true" / "false" (por defecto: true)
+#   NETBOX_URL            → URL de NetBox
+#   NETBOX_TOKEN          → token con permisos write sobre
+#                           dcim, virtualization, ipam, extras, core
+#   NETBOX_VERIFY_SSL     → "true" / "false" (por defecto: true)
+#   NETBOX_SITE_NAME      → nombre del Site de NetBox
 
-# ── Columnas del inventario (Centralizadas) ──────────────────
-# Nombres exactos de las columnas utilizadas por el exportador.
-# Se definen anclas (&) para reutilizar como alias (*) en todo el archivo.
+# ── Alias de columnas del CSV ────────────────────────────────
+# Glosario centralizado de todos los nombres de columnas del
+# archivo merged_inventory.csv que utiliza el exportador.
+#
+# Cada entrada define:
+#   - Una clave semántica (ej. machine_name) usada en el script Python.
+#   - Un ancla YAML (&col_xxx) para reutilizar como alias (*col_xxx)
+#     en las secciones de mapeo más abajo.
+#   - El nombre textual exacto de la columna en el CSV.
 #
 # Formato de celdas esperado (Input Format):
 # - Campos simples (Strings, Números): El valor directo. Se le aplicará .strip()
@@ -23,7 +30,7 @@
 #   la lista `empty_values` (al final de este archivo), se tratará como "vacío" (N/A)
 #   y no se enviará a NetBox, salvo que sea obligatorio.
 
-centralized_columns:
+csv_column_aliases:
   machine_name: &col_nombre_maquina "Nombre maquina"
   machine_type: &col_tipo_maquina "Tipo de maquina"
   os: "SO Host"
@@ -35,9 +42,6 @@ centralized_columns:
   cluster: &col_cluster "Host/Cluster/Chassis"
   cores: &col_cores "Cores"
   uuid: &col_uuid "UUID"
-
-# Columnas adicionales del CSV referenciadas en mappings
-csv_extra_columns:
   os_ver: &col_so_ver "Version SO Host"
   hypervisor_os: &col_hip_os "SO Hipervisor"
   hypervisor_ver: &col_hip_ver "Version SO Hipervisor"
@@ -171,7 +175,7 @@ device_roles:
 
 # ── Special Custom Fields (Lógica Core) ──────────────────────
 # NOTA: 'machine_type' y 'environment' se declaran aquí en la raíz,
-# fuera del bloque 'custom_fields' estándar, porque dictan el flujo
+# fuera del bloque 'custom_field_definitions' estándar, porque dictan el flujo
 # lógico de enrutamiento principal del pipeline.
 
 # ── Tipo de máquina ──────────────────────────────────────────
@@ -179,7 +183,7 @@ device_roles:
 # Se conserva exactamente como aparece en el CSV.
 # Se almacena en NetBox como Custom Field de tipo Selection.
 machine_type:
-  field_name: "machine_type"
+  name: "machine_type"
   label: "Tipo de maquina"
   type: "selection"
   required: true
@@ -200,7 +204,7 @@ machine_type:
 # Representa el entorno lógico en el que opera el nodo.
 # Se almacena como Custom Field de tipo Selection.
 environment:
-  field_name: "environment"
+  name: "environment"
   label: "Entorno"
   type: "selection"
   required: false
@@ -267,8 +271,10 @@ status_defaults:
   device: "inventory"
   virtual_machine: "staged"
 
-# ── Custom Fields ────────────────────────────────────────────
+# ── Definiciones de Custom Fields (Esquema DDL) ──────────────
 # El script garantiza que estos custom fields existen en NetBox.
+# Esta sección DEFINE la estructura de los campos en la base de datos
+# de NetBox (creación si no existen). NO extrae datos del CSV.
 #
 # Los campos de tipo "selection" utilizan choice_set para definir
 # sus valores válidos.
@@ -281,8 +287,23 @@ status_defaults:
 # IMPORTANTE sobre la clave 'required':
 #   Define si el campo será obligatorio en el esquema interno (DDL) de NetBox.
 #   NO afecta el parseo ni la validación del CSV.
+#
+# Tipos de Custom Field soportados por NetBox:
+#   text            → Texto libre
+#   longtext        → Texto largo (textarea)
+#   integer         → Número entero
+#   decimal         → Número decimal
+#   boolean         → Verdadero/Falso
+#   date            → Fecha (YYYY-MM-DD)
+#   datetime        → Fecha y hora
+#   url             → URL válida
+#   json            → JSON arbitrario
+#   selection       → Selección única (requiere choice_set)
+#   multiselect     → Selección múltiple (requiere choice_set)
+#   object          → Referencia a otro objeto NetBox
+#   multiobject     → Referencia múltiple a objetos NetBox
 
-custom_fields:
+custom_field_definitions:
   - name: "inventory_uuid"
     label: "UUID de inventario"
     type: "text"
@@ -388,12 +409,16 @@ custom_fields:
     object_types:
       - "dcim.device"
 
-# ── Campos nativos de Device (DCIM) ──────────────────────────
+# ── Mapeo de Campos Nativos de Device (DCIM) ─────────────────
+# Sección DML: define cómo EXTRAER datos del CSV y MAPEARLOS a
+# campos nativos de la API de NetBox para objetos Device.
+#
 # 'source' → nombre exacto de la columna en merged_inventory.csv.
 # 'target' → campo en el API de NetBox.
 # 'is_optional' → Si es true, omite el campo si el valor está vacío.
 #                 Si es false, el valor es obligatorio (Fail-Fast si falta).
-# 'is_unique' (Opc) → Si es true, el valor debe ser único en el tenant y objeto.
+# 'is_unique' (Opc) → Si es true, un string vacío se sanitiza a null para
+#                      evitar violaciones de constraint UNIQUE en NetBox.
 # 'cast' (Opc) → Funciones de conversión permitidas: int, int_gb_to_mb, bool_si_no.
 # 'transform' (Opc) → Operaciones de estructura: concat_dot (concatena lista con '.').
 # 'map' (Opc) → Diccionario declarado en este yaml para traducir valores.
@@ -401,7 +426,7 @@ custom_fields:
 # 'device_type' son resueltas a objetos/IDs NetBox por sus respectivas
 # funciones especializadas en el script, por lo que no forman parte de esta lista.
 
-device_fields:
+device_native_mappings:
   - source: *col_nombre_maquina
     target: "name"
     is_optional: false
@@ -431,8 +456,12 @@ device_fields:
     transform: "concat_dot"
     is_optional: true
 
-# ── Campos específicos de Device ─────────────────────────────
-device_custom_fields:
+# ── Mapeo de Custom Fields de Device ─────────────────────────
+# Sección DML: define cómo EXTRAER datos del CSV y MAPEARLOS a
+# Custom Fields de la API de NetBox para objetos Device.
+# Los valores resultantes se empaquetan dentro del sub-diccionario
+# "custom_fields" del payload JSON.
+device_custom_mappings:
   - source: *col_uuid
     target: "inventory_uuid"
     is_optional: true
@@ -502,11 +531,13 @@ device_custom_fields:
     target: "hypervisor_version"
     is_optional: true
 
-# ── Campos nativos de VirtualMachine ─────────────────────────
+# ── Mapeo de Campos Nativos de VirtualMachine ────────────────
+# Sección DML: define cómo EXTRAER datos del CSV y MAPEARLOS a
+# campos nativos de la API de NetBox para objetos VirtualMachine.
 # NOTA: Claves foráneas como 'site', 'role', 'platform', 'cluster' y 'device'
 # son resueltas a objetos/IDs NetBox por funciones especializadas en el script.
 
-vm_fields:
+vm_native_mappings:
   - source: *col_nombre_maquina
     target: "name"
     is_optional: false
@@ -526,8 +557,10 @@ vm_fields:
     transform: "concat_dot"
     is_optional: true
 
-# ── Campos específicos de VirtualMachine ─────────────────────
-vm_custom_fields:
+# ── Mapeo de Custom Fields de VirtualMachine ─────────────────
+# Sección DML: define cómo EXTRAER datos del CSV y MAPEARLOS a
+# Custom Fields de la API de NetBox para objetos VirtualMachine.
+vm_custom_mappings:
   - source: *col_uuid
     target: "inventory_uuid"
     is_optional: true
