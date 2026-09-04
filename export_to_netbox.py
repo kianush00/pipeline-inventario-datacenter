@@ -585,7 +585,7 @@ def safe_int_gb_to_mb(value: Any) -> int | None:
     """Convierte GB (string/float) a MB (entero). NetBox espera MB para memory."""
     try:
         gb = float(str(value).strip())
-        return int(gb * 1024)
+        return round(gb * 1024)
     except (ValueError, TypeError):
         return None
 
@@ -603,7 +603,7 @@ def safe_bool_si_no(value: Any) -> bool | None:
     return None
 
 
-def apply_cast(value: Any, cast_type: str | None) -> FieldValue:
+def apply_cast(value: Any, cast_type: CastType) -> FieldValue:
     """Aplica un cast específico a un valor según la definición del campo."""
     if cast_type == "int":
         return safe_int(value)
@@ -850,7 +850,16 @@ def ensure_site(
         log.info("[DRY-RUN] Crearía Site: %s", name)
         return MockNetBoxRecord(id=0, name=name, slug=slug)
 
-    obj = cast(Record, endpoints.sites.create(name=name, slug=slug))
+    try:
+        obj = cast(Record, endpoints.sites.create(name=name, slug=slug))
+    except RequestError as e:
+        log.error(
+            "Fallo crítico al inicializar el entorno base: NetBox rechazó la "
+            "creación del Site '%s'. Razón: %s",
+            name, e
+        )
+        sys.exit(1)
+    
     log.info("Site creado: %s", name)
     return obj
 
@@ -872,7 +881,16 @@ def ensure_cluster_type(
         log.info("[DRY-RUN] Crearía ClusterType: %s", name)
         return MockNetBoxRecord(id=0, name=name, slug=slug)
 
-    obj = cast(Record, endpoints.cluster_types.create(name=name, slug=slug))
+    try:
+        obj = cast(Record, endpoints.cluster_types.create(name=name, slug=slug))
+    except RequestError as e:
+        log.error(
+            "Fallo crítico al inicializar el entorno base: NetBox rechazó la "
+            "creación del ClusterType '%s'. Razón: %s",
+            name, e
+        )
+        sys.exit(1)
+        
     log.info("ClusterType creado: %s", name)
     return obj
 
@@ -1024,7 +1042,7 @@ def ensure_device_type(
 ) -> NetBoxObject:
     """Garantiza que el DeviceType exista en NetBox."""
     manufacturer_id = get_netbox_object_id(manufacturer)
-    
+
     # M-4: Extraemos el nombre para evitar colisiones del id=0 en dry-run.
     # El ID numérico se retiene solo como fallback.
     manufacturer_name = str(getattr(manufacturer, "name", manufacturer_id))
@@ -2508,6 +2526,12 @@ def main() -> None:
     config: NetBoxMappingConfig = load_config(mapping_path)
     columns: CentralizedColumns = config.columns
 
+    # ── Leer y Validar CSV (Fail-Fast) ───────────────────────
+    headers, rows = read_csv(args.csv)
+
+    if not validate_csv_headers(headers, config):
+        sys.exit(1)
+
     # ── Cargar credenciales ──────────────────────────────────
     url, token, verify_ssl = load_env()
 
@@ -2532,13 +2556,6 @@ def main() -> None:
 
     # ── Garantizar taxonomía local ──────────────────────────
     ensure_all_device_roles(endpoints, config, caches, args.dry_run)
-
-    # ── Leer CSV ─────────────────────────────────────────────
-    headers, rows = read_csv(args.csv)
-
-    # ── Validar encabezados del CSV ──────────────────────────
-    if not validate_csv_headers(headers, config):
-        sys.exit(1)
 
     # ── Contadores ───────────────────────────────────────────
     counts: SyncCounts = {
@@ -2655,20 +2672,23 @@ def main() -> None:
             counts["ERROR"] += 1
 
     # ── Resumen ──────────────────────────────────────────────
-    print()
-    print("=" * 50)
-    print("Resumen de exportación a NetBox")
-    print("=" * 50)
-    print(f"  Total filas procesadas : {len(rows)}")
-    print(f"  Creados                : {counts['CREATED']}")
-    print(f"  Actualizados           : {counts['UPDATED']}")
-    print(f"  Sin cambios            : {counts['UNCHANGED']}")
-    print(f"  Omitidos (SKIP)        : {counts['SKIPPED']}")
-    print(f"  Errores                : {counts['ERROR']}")
-    print("=" * 50)
+    resumen = (
+        "\n" + "=" * 50 + "\n"
+        "Resumen de exportación a NetBox\n"
+        + "=" * 50 + "\n"
+        f"  Total filas procesadas : {len(rows)}\n"
+        f"  Creados                : {counts['CREATED']}\n"
+        f"  Actualizados           : {counts['UPDATED']}\n"
+        f"  Sin cambios            : {counts['UNCHANGED']}\n"
+        f"  Omitidos (SKIP)        : {counts['SKIPPED']}\n"
+        f"  Errores                : {counts['ERROR']}\n"
+        + "=" * 50
+    )
 
     if args.dry_run:
-        print("(Modo DRY-RUN: no se realizaron cambios en NetBox)")
+        resumen += "\n(Modo DRY-RUN: no se realizaron cambios en NetBox)"
+
+    log.info(resumen)
 
     sys.exit(0 if counts["ERROR"] == 0 else 1)
 
