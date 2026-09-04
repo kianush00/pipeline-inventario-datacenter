@@ -875,6 +875,84 @@ def ensure_cluster_type(
     return obj
 
 
+def ensure_all_device_roles(
+    endpoints: NetBoxEndpoints,
+    cfg: NetBoxMappingConfig,
+    caches: CacheStore,
+    dry_run: bool,
+) -> None:
+    """
+    Garantiza que todos los device roles definidos en el YAML
+    existen en NetBox (/api/dcim/device-roles/).
+    Todos los roles se habilitan para su uso en Virtual Machines.
+    Puebla caches.device_roles con {nombre_lower: objeto}.
+    """
+    for role_def in cfg.device_roles:
+        name = role_def.name
+        slug = role_def.slug or slugify(name)
+        color = role_def.color
+        key = name.lower()
+
+        if key in caches.device_roles:
+            continue
+
+        results = list(endpoints.device_roles.filter(name=name))
+        if results:
+            role_obj = results[0]
+
+            if not getattr(role_obj, "vm_role", False):
+                if dry_run:
+                    log.info(
+                        "[DRY-RUN] Actualizaría DeviceRole para permitir VM: %s",
+                        name,
+                    )
+                else:
+                    try:
+                        role_obj.update({"vm_role": True})
+                        log.info(
+                            "DeviceRole actualizado para permitir VM: %s",
+                            name,
+                        )
+                    except Exception:
+                        log.exception(
+                            "Error actualizando DeviceRole '%s'",
+                            name,
+                        )
+                        continue
+
+            caches.device_roles[key] = role_obj
+            continue
+
+        if dry_run:
+            log.info("[DRY-RUN] Crearía DeviceRole: %s", name)
+            caches.device_roles[key] = MockNetBoxRecord(
+                id=0,
+                name=name,
+                vm_role=True,
+            )
+            continue
+
+        try:
+            obj = cast(
+                Record,
+                endpoints.device_roles.create(
+                    name=name,
+                    slug=slug,
+                    color=color,
+                    vm_role=True,
+                ),
+            )
+        except Exception:
+            log.exception(
+                "Error creando DeviceRole '%s'",
+                name,
+            )
+            continue
+
+        log.info("DeviceRole creado: %s", name)
+        caches.device_roles[key] = obj
+
+
 def ensure_manufacturer(
     endpoints: NetBoxEndpoints,
     name: str,
@@ -1320,243 +1398,6 @@ def ensure_custom_fields(
 
 
 # ============================================================
-# PARSEO DE INTERFACES y IPs
-# ============================================================
-
-
-def parse_network_interfaces(
-    row: CsvRow,
-    config: NetBoxMappingConfig,
-) -> list[NetworkInterfaceData] | None:
-    """
-    Parsea las 5 columnas de red del CSV (valores separados por comas)
-    y devuelve una lista de dicts con la información de cada interfaz.
-
-    Formato de celda esperado: "eth0, eth1" (elementos separados por coma).
-    Se asume que el orden de los elementos coincide (índice por índice)
-    entre las 5 columnas asociadas.
-
-    Valida formato de IP y CIDR usando ipaddress.
-    Retorna None si los arrays (listas tras el split) tienen longitudes distintas.
-    """
-    net_cfg = config.network
-    status_map: dict[str, bool] = net_cfg.interface_status_map
-
-    def split_col(col_name: str) -> list[str]:
-        raw = row.get(col_name, "")
-        if config.is_empty(raw):
-            return []
-        return [v.strip() for v in raw.split(",")]
-
-    cols = net_cfg.columns
-    names = split_col(cols.names)
-    statuses = split_col(cols.status)
-    ips = split_col(cols.ip)
-    prefixes = split_col(cols.prefix)
-    macs = split_col(cols.mac)
-
-    if not names:
-        return []
-
-    max_len = len(names)
-    for lst in (statuses, ips, prefixes, macs):
-        if lst and len(lst) != max_len:
-            return None  # Longitudes incompatibles (ej. faltó una coma en el CSV)
-
-    # Si una columna viene completamente en blanco, se asume que ninguna interfaz
-    # tiene ese dato y se genera una lista vacía del tamaño de max_len.
-    def fill_if_empty(lst: list[str], max_len: int) -> list[str]:
-        if not lst:
-            return [""] * max_len
-        return lst
-
-    statuses = fill_if_empty(statuses, max_len)
-    ips = fill_if_empty(ips, max_len)
-    prefixes = fill_if_empty(prefixes, max_len)
-    macs = fill_if_empty(macs, max_len)
-
-    interfaces: list[NetworkInterfaceData] = []
-    for i, name in enumerate(names):
-        if config.is_empty(name):
-            continue
-
-        status_raw = statuses[i].lower().strip()
-        enabled = status_map.get(status_raw, True)
-
-        ip_raw = ips[i] if not config.is_empty(ips[i]) else None
-        pfx_raw = prefixes[i] if not config.is_empty(prefixes[i]) else None
-        mac_raw = macs[i] if not config.is_empty(macs[i]) else None
-
-        # Validar IP y construir dirección CIDR si tenemos IP y prefijo.
-        cidr = None
-        if ip_raw:
-            try:
-                ipaddress.ip_address(ip_raw)
-            except ValueError:
-                log.warning(
-                    "IP '%s' en interfaz '%s' no es una dirección IP válida; "
-                    "se omitirá la asignación de IP.",
-                    ip_raw,
-                    name,
-                )
-                ip_raw = None
-
-        if ip_raw and pfx_raw:
-            try:
-                # Extraer la máscara o longitud del prefijo.
-                # Formatos soportados en la columna "Red IP":
-                #   - Red/Prefijo:  "136.23.104.128/26"
-                #   - Red/Máscara:  "192.168.1.0/255.255.255.0"
-                #   - Prefijo solo: "26"
-                #   - Máscara sola: "255.255.255.0"
-                mask_or_prefix = (
-                    pfx_raw.split("/")[1].strip()
-                    if "/" in pfx_raw
-                    else pfx_raw.strip()
-                )
-                # ip_interface acepta nativamente tanto "/24" como "/255.255.255.0"
-                # y str() normaliza siempre al formato CIDR canónico que NetBox exige.
-                cidr = str(ipaddress.ip_interface(f"{ip_raw}/{mask_or_prefix}"))
-            except ValueError:
-                log.warning(
-                    "Prefijo o CIDR inválido '%s' para IP '%s' en interfaz '%s'.",
-                    pfx_raw,
-                    ip_raw,
-                    name,
-                )
-                cidr = None
-
-        interfaces.append(
-            {
-                "name": name,
-                "enabled": enabled,
-                "mac": mac_raw,
-                "ip": ip_raw,
-                "prefix": pfx_raw,
-                "cidr": cidr,
-            }
-        )
-
-    return interfaces
-
-
-# ============================================================
-# SINCRONIZACIÓN DE INTERFACES
-# ============================================================
-
-
-def _assign_ip(
-    endpoints: NetBoxEndpoints,
-    cidr: str,
-    iface_obj: Record,
-    obj_type: ObjectType,
-) -> bool:
-    """Crea o actualiza una IP address en NetBox y la asigna a la interfaz.
-    Retorna True si fue exitoso, False en caso de error."""
-    assigned_type: str = (
-        "dcim.interface" if obj_type == "device" else "virtualization.vminterface"
-    )
-
-    existing: list[Record] = list(endpoints.ip_addresses.filter(address=cidr))
-    if existing:
-        ip_obj: Record = existing[0]
-        try:
-            ip_obj.update(
-                {
-                    "assigned_object_type": assigned_type,
-                    "assigned_object_id": iface_obj.id,
-                }
-            )
-            return True
-        except Exception:
-            log.exception("Error actualizando IP %s", cidr)
-            return False
-    else:
-        try:
-            endpoints.ip_addresses.create(
-                address=cidr,
-                status="active",
-                assigned_object_type=assigned_type,
-                assigned_object_id=iface_obj.id,
-            )
-            return True
-        except Exception:
-            log.exception("Error creando IP %s", cidr)
-            return False
-
-
-def sync_interfaces_for_object(
-    endpoints: NetBoxEndpoints,
-    obj_id: int,
-    obj_type: ObjectType,
-    interfaces: list[NetworkInterfaceData],
-    dry_run: bool,
-) -> int:
-    """Sincroniza interfaces y sus IPs para un Device o VM.
-    Retorna la cantidad de errores encontrados (0 si todo fue exitoso)."""
-    errors = 0
-    iface_endpoint: Endpoint
-    iface_filter: dict[str, int]
-    if obj_type == "device":
-        iface_endpoint = endpoints.device_interfaces
-        iface_filter = {"device_id": obj_id}
-    else:
-        iface_endpoint = endpoints.vm_interfaces
-        iface_filter = {"virtual_machine_id": obj_id}
-
-    existing: dict[str, Record] = {
-        str(iface.name): cast(Record, iface)
-        for iface in iface_endpoint.filter(**iface_filter)
-    }
-
-    for iface_data in interfaces:
-        name: str = iface_data["name"]
-        enabled: bool = iface_data["enabled"]
-        mac: str | None = iface_data.get("mac")
-        cidr: str | None = iface_data.get("cidr")
-
-        payload: NetBoxPayload = {"name": name, "enabled": enabled}
-        if mac:
-            payload["mac_address"] = mac.upper()
-        if obj_type == "device":
-            payload["device"] = obj_id
-            payload["type"] = "other"  # tipo genérico; ajustable
-        else:
-            payload["virtual_machine"] = obj_id
-
-        if dry_run:
-            action: str = "Actualizaría" if name in existing else "Crearía"
-            log.info("[DRY-RUN] %s interfaz %s en objeto %s", action, name, obj_id)
-        elif name in existing:
-            try:
-                existing[name].update(payload)
-            except Exception:
-                log.exception("Error actualizando interfaz %s", name)
-                errors += 1
-                continue
-        else:
-            try:
-                existing[name] = cast(Record, iface_endpoint.create(**payload))
-            except Exception:
-                log.exception("Error creando interfaz %s", name)
-                errors += 1
-                continue
-
-        # Asignar IP si hay CIDR.
-        if cidr and not dry_run:
-            iface_obj: Record | None = existing.get(name)
-            if iface_obj is not None and not _assign_ip(
-                endpoints, cidr, iface_obj, obj_type
-            ):
-                errors += 1
-
-        if cidr and dry_run:
-            log.info("[DRY-RUN] Asignaría IP %s a interfaz %s", cidr, name)
-
-    return errors
-
-
-# ============================================================
 # NORMALIZACIÓN DE VALORES DE FILA
 # ============================================================
 
@@ -1709,11 +1550,130 @@ def get_internal_field(
 
 
 # ============================================================
-# RESOLVER STATUS
+# PARSEO DE INTERFACES y IPs
 # ============================================================
 
 
-def resolve_netbox_status(
+def parse_network_interfaces(
+    row: CsvRow,
+    config: NetBoxMappingConfig,
+) -> list[NetworkInterfaceData] | None:
+    """
+    Parsea las 5 columnas de red del CSV (valores separados por comas)
+    y devuelve una lista de dicts con la información de cada interfaz.
+
+    Formato de celda esperado: "eth0, eth1" (elementos separados por coma).
+    Se asume que el orden de los elementos coincide (índice por índice)
+    entre las 5 columnas asociadas.
+
+    Valida formato de IP y CIDR usando ipaddress.
+    Retorna None si los arrays (listas tras el split) tienen longitudes distintas.
+    """
+    net_cfg = config.network
+    status_map: dict[str, bool] = net_cfg.interface_status_map
+
+    def split_col(col_name: str) -> list[str]:
+        raw = row.get(col_name, "")
+        if config.is_empty(raw):
+            return []
+        return [v.strip() for v in raw.split(",")]
+
+    cols = net_cfg.columns
+    names = split_col(cols.names)
+    statuses = split_col(cols.status)
+    ips = split_col(cols.ip)
+    prefixes = split_col(cols.prefix)
+    macs = split_col(cols.mac)
+
+    if not names:
+        return []
+
+    max_len = len(names)
+    for lst in (statuses, ips, prefixes, macs):
+        if lst and len(lst) != max_len:
+            return None  # Longitudes incompatibles (ej. faltó una coma en el CSV)
+
+    # Si una columna viene completamente en blanco, se asume que ninguna interfaz
+    # tiene ese dato y se genera una lista vacía del tamaño de max_len.
+    def fill_if_empty(lst: list[str], max_len: int) -> list[str]:
+        if not lst:
+            return [""] * max_len
+        return lst
+
+    statuses = fill_if_empty(statuses, max_len)
+    ips = fill_if_empty(ips, max_len)
+    prefixes = fill_if_empty(prefixes, max_len)
+    macs = fill_if_empty(macs, max_len)
+
+    interfaces: list[NetworkInterfaceData] = []
+    for i, name in enumerate(names):
+        if config.is_empty(name):
+            continue
+
+        status_raw = statuses[i].lower().strip()
+        enabled = status_map.get(status_raw, True)
+
+        ip_raw = ips[i] if not config.is_empty(ips[i]) else None
+        pfx_raw = prefixes[i] if not config.is_empty(prefixes[i]) else None
+        mac_raw = macs[i] if not config.is_empty(macs[i]) else None
+
+        # Validar IP y construir dirección CIDR si tenemos IP y prefijo.
+        cidr = None
+        if ip_raw:
+            try:
+                ipaddress.ip_address(ip_raw)
+            except ValueError:
+                log.warning(
+                    "IP '%s' en interfaz '%s' no es una dirección IP válida; "
+                    "se omitirá la asignación de IP.",
+                    ip_raw,
+                    name,
+                )
+                ip_raw = None
+
+        if ip_raw and pfx_raw:
+            try:
+                # Extraer la máscara o longitud del prefijo.
+                # Formatos soportados en la columna "Red IP":
+                #   - Red/Prefijo:  "136.23.104.128/26"
+                #   - Red/Máscara:  "192.168.1.0/255.255.255.0"
+                #   - Prefijo solo: "26"
+                #   - Máscara sola: "255.255.255.0"
+                mask_or_prefix = (
+                    pfx_raw.split("/")[1].strip() if "/" in pfx_raw else pfx_raw.strip()
+                )
+                # ip_interface acepta nativamente tanto "/24" como "/255.255.255.0"
+                # y str() normaliza siempre al formato CIDR canónico que NetBox exige.
+                cidr = str(ipaddress.ip_interface(f"{ip_raw}/{mask_or_prefix}"))
+            except ValueError:
+                log.warning(
+                    "Prefijo o CIDR inválido '%s' para IP '%s' en interfaz '%s'.",
+                    pfx_raw,
+                    ip_raw,
+                    name,
+                )
+                cidr = None
+
+        interfaces.append(
+            {
+                "name": name,
+                "enabled": enabled,
+                "mac": mac_raw,
+                "ip": ip_raw,
+                "prefix": pfx_raw,
+                "cidr": cidr,
+            }
+        )
+
+    return interfaces
+
+
+# ============================================================
+# RESOLVERS GENERALES (PARA SINCRONIZACIÓN DE OBJETOS)
+# ============================================================
+
+
+def _resolve_netbox_status(
     row: CsvRow,
     config: NetBoxMappingConfig,
     object_type: ObjectType,
@@ -1735,12 +1695,7 @@ def resolve_netbox_status(
     return config.status_defaults.virtual_machine
 
 
-# ============================================================
-# RESOLVER PLATFORM
-# ============================================================
-
-
-def resolve_platform(
+def _resolve_platform(
     endpoints: NetBoxEndpoints,
     row: CsvRow,
     payload: NetBoxPayload,
@@ -1761,12 +1716,7 @@ def resolve_platform(
         payload["platform"] = get_netbox_object_id(platform)
 
 
-# ============================================================
-# RESOLVER DEVICE
-# ============================================================
-
-
-def resolve_host_device(
+def _resolve_host_device(
     endpoints: NetBoxEndpoints,
     host_name: str,
     site_id: int | None,
@@ -1808,12 +1758,32 @@ def resolve_host_device(
         return None
 
 
+def _resolve_device_role(
+    role_name: str,
+    caches: CacheStore,
+    config: NetBoxMappingConfig,
+) -> NetBoxObject | None:
+    """
+    Busca un DeviceRole por nombre (insensible a mayúsculas).
+    Si el nombre está vacío o no existe, utiliza "Others" como fallback.
+    """
+    roles = caches.device_roles
+    if config.is_empty(role_name):
+        return roles.get("others")
+
+    normalized = role_name.strip().lower()
+    if normalized not in roles:
+        return roles.get("others")
+
+    return roles[normalized]
+
+
 # ============================================================
-# BUSCAR OBJETO POR UUID Y NOMBRE
+# SINCRONIZACIÓN DE OBJETOS (DEVICES y VMS)
 # ============================================================
 
 
-def find_existing_object(
+def _find_existing_object(
     uuid: str,
     machine_name: str,
     endpoint: Endpoint,
@@ -1844,12 +1814,7 @@ def find_existing_object(
     return existing, found_by_uuid, found_by_name
 
 
-# ============================================================
-# VALIDAR UNICIDAD DE NOMBRE
-# ============================================================
-
-
-def is_name_safely_unique(
+def _is_name_safely_unique(
     existing: list[Record],
     machine_name: str,
     csv_name_counts: Counter[str],
@@ -1877,12 +1842,7 @@ def is_name_safely_unique(
     return False
 
 
-# ============================================================
-# SINCRONIZAR OBJETO EXISTENTE/NUEVO
-# ============================================================
-
-
-def check_record_changes(
+def _check_record_changes(
     record: Record,
     payload: NetBoxPayload,
 ) -> NetBoxPayload:
@@ -1910,7 +1870,7 @@ def check_record_changes(
     return temp.updates()
 
 
-def apply_sync(
+def _apply_sync(
     endpoint: Endpoint,
     payload: NetBoxPayload,
     existing: list[Record],
@@ -1935,7 +1895,7 @@ def apply_sync(
     if dry_run:
         if existing:
             existing_id = get_netbox_object_id(existing[0])
-            diff = check_record_changes(existing[0], payload)
+            diff = _check_record_changes(existing[0], payload)
             if diff:
                 log.info(
                     "[DRY-RUN] Actualizaría %s: %s (UUID=%s) - Cambios: %s",
@@ -1990,11 +1950,6 @@ def apply_sync(
         return "ERROR", None
 
 
-# ============================================================
-# SINCRONIZADOR DE DEVICE
-# ============================================================
-
-
 def sync_device(
     endpoints: NetBoxEndpoints,
     row: CsvRow,
@@ -2034,7 +1989,7 @@ def sync_device(
     # ── Resolución de objetos relacionados ──────────────────
     # Role.
     rol_csv: str = row.get(columns.role, "").strip()
-    role_obj = resolve_device_role(rol_csv, caches, config)
+    role_obj = _resolve_device_role(rol_csv, caches, config)
     if role_obj is None:
         log.error(
             "ERROR (%s): no existe el DeviceRole 'Others' en la configuración.",
@@ -2076,7 +2031,7 @@ def sync_device(
     payload["device_type"] = get_netbox_object_id(device_type)
 
     # Platform.
-    resolve_platform(endpoints, row, payload, caches, dry_run, config)
+    _resolve_platform(endpoints, row, payload, caches, dry_run, config)
 
     # Rack.
     rack_name: str = row.get(columns.rack, "").strip()
@@ -2092,7 +2047,7 @@ def sync_device(
 
     # Campos obligatorios.
     payload["site"] = get_netbox_object_id(site)
-    payload["status"] = resolve_netbox_status(row, config, "device", columns)
+    payload["status"] = _resolve_netbox_status(row, config, "device", columns)
 
     # Cluster para hipervisores.
     if machine_type == "Hipervisor":
@@ -2108,7 +2063,7 @@ def sync_device(
 
     # ── GET o CREATE/UPDATE ──────────────────────────────────
     try:
-        existing, found_by_uuid, found_by_name = find_existing_object(
+        existing, found_by_uuid, found_by_name = _find_existing_object(
             uuid,
             machine_name,
             endpoints.devices,
@@ -2123,12 +2078,12 @@ def sync_device(
         return "ERROR", None
 
     matched_by_name_only = found_by_name and not found_by_uuid
-    if matched_by_name_only and not is_name_safely_unique(
+    if matched_by_name_only and not _is_name_safely_unique(
         existing, machine_name, csv_name_counts, "device"
     ):
         return "SKIPPED", None
 
-    return apply_sync(
+    return _apply_sync(
         endpoints.devices,
         payload,
         existing,
@@ -2137,11 +2092,6 @@ def sync_device(
         "device",
         dry_run,
     )
-
-
-# ============================================================
-# SINCRONIZADOR DE VM
-# ============================================================
 
 
 def sync_vm(
@@ -2187,7 +2137,7 @@ def sync_vm(
 
     # Role.
     rol_csv: str = row.get(columns.role, "").strip()
-    role_obj = resolve_device_role(rol_csv, caches, config)
+    role_obj = _resolve_device_role(rol_csv, caches, config)
     if role_obj is None:
         log.error(
             "ERROR (%s): no existe el DeviceRole 'Others' en la configuración.",
@@ -2198,7 +2148,7 @@ def sync_vm(
     payload["role"] = get_netbox_object_id(role_obj)
 
     # Platform.
-    resolve_platform(endpoints, row, payload, caches, dry_run, config)
+    _resolve_platform(endpoints, row, payload, caches, dry_run, config)
 
     # Cluster.
     host_name: str = row.get(columns.cluster, "").strip()
@@ -2220,7 +2170,7 @@ def sync_vm(
     payload["site"] = site_id
 
     # Device del hipervisor host (acotado a site y cacheado).
-    host_dev_id = resolve_host_device(
+    host_dev_id = _resolve_host_device(
         endpoints,
         host_name,
         site_id,
@@ -2230,7 +2180,7 @@ def sync_vm(
         payload["device"] = host_dev_id
 
     # Estado.
-    payload["status"] = resolve_netbox_status(
+    payload["status"] = _resolve_netbox_status(
         row,
         config,
         "virtual_machine",
@@ -2245,7 +2195,7 @@ def sync_vm(
 
     # ── GET o CREATE/UPDATE ──────────────────────────────────
     try:
-        existing, found_by_uuid, found_by_name = find_existing_object(
+        existing, found_by_uuid, found_by_name = _find_existing_object(
             uuid,
             machine_name,
             endpoints.virtual_machines,
@@ -2256,12 +2206,12 @@ def sync_vm(
         return "ERROR", None
 
     matched_by_name_only = found_by_name and not found_by_uuid
-    if matched_by_name_only and not is_name_safely_unique(
+    if matched_by_name_only and not _is_name_safely_unique(
         existing, machine_name, csv_name_counts, "VM"
     ):
         return "SKIPPED", None
 
-    return apply_sync(
+    return _apply_sync(
         endpoints.virtual_machines,
         payload,
         existing,
@@ -2273,106 +2223,119 @@ def sync_vm(
 
 
 # ============================================================
-# ROLES DE DISPOSITIVO
+# SINCRONIZACIÓN DE INTERFACES
 # ============================================================
 
 
-def ensure_all_device_roles(
+def _assign_ip(
     endpoints: NetBoxEndpoints,
-    cfg: NetBoxMappingConfig,
-    caches: CacheStore,
+    cidr: str,
+    iface_obj: Record,
+    obj_type: ObjectType,
+) -> bool:
+    """Crea o actualiza una IP address en NetBox y la asigna a la interfaz.
+    Retorna True si fue exitoso, False en caso de error."""
+    assigned_type: str = (
+        "dcim.interface" if obj_type == "device" else "virtualization.vminterface"
+    )
+
+    existing: list[Record] = list(endpoints.ip_addresses.filter(address=cidr))
+    if existing:
+        ip_obj: Record = existing[0]
+        try:
+            ip_obj.update(
+                {
+                    "assigned_object_type": assigned_type,
+                    "assigned_object_id": iface_obj.id,
+                }
+            )
+            return True
+        except Exception:
+            log.exception("Error actualizando IP %s", cidr)
+            return False
+    else:
+        try:
+            endpoints.ip_addresses.create(
+                address=cidr,
+                status="active",
+                assigned_object_type=assigned_type,
+                assigned_object_id=iface_obj.id,
+            )
+            return True
+        except Exception:
+            log.exception("Error creando IP %s", cidr)
+            return False
+
+
+def sync_interfaces_for_object(
+    endpoints: NetBoxEndpoints,
+    obj_id: int,
+    obj_type: ObjectType,
+    interfaces: list[NetworkInterfaceData],
     dry_run: bool,
-) -> None:
-    """
-    Garantiza que todos los device roles definidos en el YAML
-    existen en NetBox (/api/dcim/device-roles/).
-    Todos los roles se habilitan para su uso en Virtual Machines.
-    Puebla caches.device_roles con {nombre_lower: objeto}.
-    """
-    for role_def in cfg.device_roles:
-        name = role_def.name
-        slug = role_def.slug or slugify(name)
-        color = role_def.color
-        key = name.lower()
+) -> int:
+    """Sincroniza interfaces y sus IPs para un Device o VM.
+    Retorna la cantidad de errores encontrados (0 si todo fue exitoso)."""
+    errors = 0
+    iface_endpoint: Endpoint
+    iface_filter: dict[str, int]
+    if obj_type == "device":
+        iface_endpoint = endpoints.device_interfaces
+        iface_filter = {"device_id": obj_id}
+    else:
+        iface_endpoint = endpoints.vm_interfaces
+        iface_filter = {"virtual_machine_id": obj_id}
 
-        if key in caches.device_roles:
-            continue
+    existing: dict[str, Record] = {
+        str(iface.name): cast(Record, iface)
+        for iface in iface_endpoint.filter(**iface_filter)
+    }
 
-        results = list(endpoints.device_roles.filter(name=name))
-        if results:
-            role_obj = results[0]
+    for iface_data in interfaces:
+        name: str = iface_data["name"]
+        enabled: bool = iface_data["enabled"]
+        mac: str | None = iface_data.get("mac")
+        cidr: str | None = iface_data.get("cidr")
 
-            if not getattr(role_obj, "vm_role", False):
-                if dry_run:
-                    log.info(
-                        "[DRY-RUN] Actualizaría DeviceRole para permitir VM: %s",
-                        name,
-                    )
-                else:
-                    try:
-                        role_obj.update({"vm_role": True})
-                        log.info(
-                            "DeviceRole actualizado para permitir VM: %s",
-                            name,
-                        )
-                    except Exception:
-                        log.exception(
-                            "Error actualizando DeviceRole '%s'",
-                            name,
-                        )
-                        continue
-
-            caches.device_roles[key] = role_obj
-            continue
+        payload: NetBoxPayload = {"name": name, "enabled": enabled}
+        if mac:
+            payload["mac_address"] = mac.upper()
+        if obj_type == "device":
+            payload["device"] = obj_id
+            payload["type"] = "other"  # tipo genérico; ajustable
+        else:
+            payload["virtual_machine"] = obj_id
 
         if dry_run:
-            log.info("[DRY-RUN] Crearía DeviceRole: %s", name)
-            caches.device_roles[key] = MockNetBoxRecord(
-                id=0,
-                name=name,
-                vm_role=True,
-            )
-            continue
+            action: str = "Actualizaría" if name in existing else "Crearía"
+            log.info("[DRY-RUN] %s interfaz %s en objeto %s", action, name, obj_id)
+        elif name in existing:
+            try:
+                existing[name].update(payload)
+            except Exception:
+                log.exception("Error actualizando interfaz %s", name)
+                errors += 1
+                continue
+        else:
+            try:
+                existing[name] = cast(Record, iface_endpoint.create(**payload))
+            except Exception:
+                log.exception("Error creando interfaz %s", name)
+                errors += 1
+                continue
 
-        try:
-            obj = cast(
-                Record,
-                endpoints.device_roles.create(
-                    name=name,
-                    slug=slug,
-                    color=color,
-                    vm_role=True,
-                ),
-            )
-        except Exception:
-            log.exception(
-                "Error creando DeviceRole '%s'",
-                name,
-            )
-            continue
+        # Asignar IP si hay CIDR.
+        if cidr and not dry_run:
+            iface_obj: Record | None = existing.get(name)
+            if iface_obj is not None and not _assign_ip(
+                endpoints, cidr, iface_obj, obj_type
+            ):
+                errors += 1
 
-        log.info("DeviceRole creado: %s", name)
-        caches.device_roles[key] = obj
+        if cidr and dry_run:
+            log.info("[DRY-RUN] Asignaría IP %s a interfaz %s", cidr, name)
 
-
-def resolve_device_role(
-    role_name: str,
-    caches: CacheStore,
-    config: NetBoxMappingConfig,
-) -> NetBoxObject | None:
-    """
-    Busca un DeviceRole por nombre (insensible a mayúsculas).
-    Si el nombre está vacío o no existe, utiliza "Others" como fallback.
-    """
-    roles = caches.device_roles
-    if config.is_empty(role_name):
-        return roles.get("others")
-
-    normalized = role_name.strip().lower()
-    if normalized not in roles:
-        return roles.get("others")
-
-    return roles[normalized]
+    return errors
 
 
 # ============================================================
