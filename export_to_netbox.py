@@ -689,6 +689,7 @@ def load_env() -> tuple[str, str, bool]:
     url = os.environ.get("NETBOX_URL", "").rstrip("/")
     token = os.environ.get("NETBOX_TOKEN", "")
     verify_ssl = os.environ.get("NETBOX_VERIFY_SSL", "true").lower() != "false"
+    site_name = os.environ.get("NETBOX_SITE_NAME", "").strip()
 
     if not url:
         log.error("Variable de entorno NETBOX_URL no definida.")
@@ -696,6 +697,10 @@ def load_env() -> tuple[str, str, bool]:
     if not token:
         log.error("Variable de entorno NETBOX_TOKEN no definida.")
         sys.exit(1)
+    if not site_name:
+        log.error("Variable de entorno NETBOX_SITE_NAME no definida.")
+        sys.exit(1)
+
     return url, token, verify_ssl
 
 
@@ -835,12 +840,12 @@ def validate_csv_headers(
 
 def ensure_site(
     endpoints: NetBoxEndpoints,
-    cfg: NetBoxMappingConfig,
+    site_cfg: SiteConfig,
     dry_run: bool,
 ) -> NetBoxObject:
     """Garantiza que el Site definido en el YAML exista en NetBox."""
-    name = cfg.site.name
-    slug = cfg.site.slug or slugify(name)
+    name = site_cfg.name
+    slug = site_cfg.slug or slugify(name)
 
     results: list[Record] = list(endpoints.sites.filter(name=name))
     if results:
@@ -852,28 +857,28 @@ def ensure_site(
 
     try:
         obj = cast(Record, endpoints.sites.create(name=name, slug=slug))
-    except RequestError as e:
-        log.error(
+    except RequestError:
+        log.exception(
             "Fallo crítico al inicializar el entorno base: NetBox rechazó la "
-            "creación del Site '%s'. Razón: %s",
-            name, e
+            "creación del Site '%s'.",
+            name,
         )
         sys.exit(1)
-    
+
     log.info("Site creado: %s", name)
     return obj
 
 
 def ensure_cluster_type(
     endpoints: NetBoxEndpoints,
-    cfg: NetBoxMappingConfig,
+    cluster_type_cfg: ClusterTypeConfig,
     dry_run: bool,
 ) -> NetBoxObject:
     """Garantiza que el ClusterType definido en el YAML exista en NetBox."""
-    name = cfg.cluster_type.name
-    slug = cfg.cluster_type.slug or slugify(name)
+    name = cluster_type_cfg.name
+    slug = cluster_type_cfg.slug or slugify(name)
 
-    results = list(endpoints.cluster_types.filter(name=name))
+    results: list[Record] = list(endpoints.cluster_types.filter(name=name))
     if results:
         return results[0]
 
@@ -883,22 +888,22 @@ def ensure_cluster_type(
 
     try:
         obj = cast(Record, endpoints.cluster_types.create(name=name, slug=slug))
-    except RequestError as e:
-        log.error(
+    except RequestError:
+        log.exception(
             "Fallo crítico al inicializar el entorno base: NetBox rechazó la "
-            "creación del ClusterType '%s'. Razón: %s",
-            name, e
+            "creación del ClusterType '%s'.",
+            name,
         )
         sys.exit(1)
-        
+
     log.info("ClusterType creado: %s", name)
     return obj
 
 
 def ensure_all_device_roles(
     endpoints: NetBoxEndpoints,
-    cfg: NetBoxMappingConfig,
-    caches: CacheStore,
+    device_roles: list[DeviceRoleConfig],
+    device_roles_cache: dict[str, NetBoxObject],
     dry_run: bool,
 ) -> None:
     """
@@ -907,13 +912,13 @@ def ensure_all_device_roles(
     Todos los roles se habilitan para su uso en Virtual Machines.
     Puebla caches.device_roles con {nombre_lower: objeto}.
     """
-    for role_def in cfg.device_roles:
+    for role_def in device_roles:
         name = role_def.name
         slug = role_def.slug or slugify(name)
         color = role_def.color
         key = name.lower()
 
-        if key in caches.device_roles:
+        if key in device_roles_cache:
             continue
 
         results = list(endpoints.device_roles.filter(name=name))
@@ -940,12 +945,12 @@ def ensure_all_device_roles(
                         )
                         continue
 
-            caches.device_roles[key] = role_obj
+            device_roles_cache[key] = role_obj
             continue
 
         if dry_run:
             log.info("[DRY-RUN] Crearía DeviceRole: %s", name)
-            caches.device_roles[key] = MockNetBoxRecord(
+            device_roles_cache[key] = MockNetBoxRecord(
                 id=0,
                 name=name,
                 vm_role=True,
@@ -970,11 +975,11 @@ def ensure_all_device_roles(
             continue
 
         log.info("DeviceRole creado: %s", name)
-        caches.device_roles[key] = obj
+        device_roles_cache[key] = obj
 
 
 def ensure_manufacturer(
-    endpoints: NetBoxEndpoints,
+    manufacturers_endpoint: Endpoint,
     name: str,
     cache: dict[str, NetBoxObject],
     dry_run: bool,
@@ -983,7 +988,7 @@ def ensure_manufacturer(
     if name in cache:
         return cache[name]
 
-    results: list[Record] = list(endpoints.manufacturers.filter(name=name))
+    results: list[Record] = list(manufacturers_endpoint.filter(name=name))
     if results:
         cache[name] = results[0]
         return results[0]
@@ -991,7 +996,7 @@ def ensure_manufacturer(
     # Búsqueda preventiva por slug: si "H.P." genera slug "hp" y ya existe
     # un Manufacturer con ese slug (ej. "HP"), se reutiliza para deduplicar.
     slug = slugify(name)
-    slug_results: list[Record] = list(endpoints.manufacturers.filter(slug=slug))
+    slug_results: list[Record] = list(manufacturers_endpoint.filter(slug=slug))
     if slug_results:
         log.warning(
             "Manufacturer '%s' no existe, pero su slug '%s' coincide con '%s'. "
@@ -1012,7 +1017,7 @@ def ensure_manufacturer(
     try:
         obj = cast(
             Record,
-            endpoints.manufacturers.create(name=name, slug=slug),
+            manufacturers_endpoint.create(name=name, slug=slug),
         )
     except RequestError:
         # Fallback: colisión de slug por race condition o datos no previstos.
@@ -1025,7 +1030,7 @@ def ensure_manufacturer(
         )
         obj = cast(
             Record,
-            endpoints.manufacturers.create(name=name, slug=slug_fallback),
+            manufacturers_endpoint.create(name=name, slug=slug_fallback),
         )
     log.info("Manufacturer creado: %s", name)
     cache[name] = obj
@@ -1033,7 +1038,7 @@ def ensure_manufacturer(
 
 
 def ensure_device_type(
-    endpoints: NetBoxEndpoints,
+    device_types_endpoint: Endpoint,
     manufacturer: NetBoxObject,
     model: str,
     u_height: int,
@@ -1051,7 +1056,7 @@ def ensure_device_type(
         return cache[key]
 
     results: list[Record] = list(
-        endpoints.device_types.filter(model=model, manufacturer_id=manufacturer_id)
+        device_types_endpoint.filter(model=model, manufacturer_id=manufacturer_id)
     )
     if results:
         existing_dt = results[0]
@@ -1096,7 +1101,7 @@ def ensure_device_type(
     slug = slugify(f"{manufacturer_name} {model}")
 
     # Búsqueda preventiva por slug.
-    slug_results: list[Record] = list(endpoints.device_types.filter(slug=slug))
+    slug_results: list[Record] = list(device_types_endpoint.filter(slug=slug))
     if slug_results:
         log.warning(
             "DeviceType '%s/%s' no existe por nombre, pero su slug '%s' coincide "
@@ -1111,7 +1116,7 @@ def ensure_device_type(
     try:
         obj = cast(
             Record,
-            endpoints.device_types.create(
+            device_types_endpoint.create(
                 model=model,
                 slug=slug,
                 manufacturer=manufacturer_id,
@@ -1129,7 +1134,7 @@ def ensure_device_type(
         )
         obj = cast(
             Record,
-            endpoints.device_types.create(
+            device_types_endpoint.create(
                 model=model,
                 slug=slug_fallback,
                 manufacturer=manufacturer_id,
@@ -1142,7 +1147,7 @@ def ensure_device_type(
 
 
 def ensure_platform(
-    endpoints: NetBoxEndpoints,
+    platforms_endpoint: Endpoint,
     name: str,
     cache: dict[str, NetBoxObject],
     dry_run: bool,
@@ -1151,7 +1156,7 @@ def ensure_platform(
     if name in cache:
         return cache[name]
 
-    results: list[Record] = list(endpoints.platforms.filter(name=name))
+    results: list[Record] = list(platforms_endpoint.filter(name=name))
     if results:
         cache[name] = results[0]
         return results[0]
@@ -1164,7 +1169,7 @@ def ensure_platform(
 
     # Búsqueda preventiva por slug para deduplicar variantes tipográficas.
     slug = slugify(name)
-    slug_results: list[Record] = list(endpoints.platforms.filter(slug=slug))
+    slug_results: list[Record] = list(platforms_endpoint.filter(slug=slug))
     if slug_results:
         log.warning(
             "Platform '%s' no existe, pero su slug '%s' coincide con '%s'. "
@@ -1177,7 +1182,7 @@ def ensure_platform(
         return slug_results[0]
 
     try:
-        obj = cast(Record, endpoints.platforms.create(name=name, slug=slug))
+        obj = cast(Record, platforms_endpoint.create(name=name, slug=slug))
     except RequestError:
         slug_fallback = f"{slug}-{hash(name) % 10000:04d}"
         log.warning(
@@ -1188,7 +1193,7 @@ def ensure_platform(
         )
         obj = cast(
             Record,
-            endpoints.platforms.create(name=name, slug=slug_fallback),
+            platforms_endpoint.create(name=name, slug=slug_fallback),
         )
     log.info("Platform creado: %s", name)
     cache[name] = obj
@@ -1196,7 +1201,7 @@ def ensure_platform(
 
 
 def ensure_rack(
-    endpoints: NetBoxEndpoints,
+    racks_endpoint: Endpoint,
     name: str,
     site: NetBoxObject,
     cache: dict[tuple[int, str], NetBoxObject],
@@ -1209,7 +1214,7 @@ def ensure_rack(
     if cache_key in cache:
         return cache[cache_key]
 
-    results: list[Record] = list(endpoints.racks.filter(name=name, site_id=site_id))
+    results: list[Record] = list(racks_endpoint.filter(name=name, site_id=site_id))
     if results:
         cache[cache_key] = results[0]
         return results[0]
@@ -1220,14 +1225,14 @@ def ensure_rack(
         cache[cache_key] = obj
         return obj
 
-    obj = cast(Record, endpoints.racks.create(name=name, site=site_id))
+    obj = cast(Record, racks_endpoint.create(name=name, site=site_id))
     log.info("Rack creado: %s", name)
     cache[cache_key] = obj
     return obj
 
 
 def ensure_cluster(
-    endpoints: NetBoxEndpoints,
+    clusters_endpoint: Endpoint,
     name: str,
     cluster_type: NetBoxObject,
     site: NetBoxObject,
@@ -1241,7 +1246,7 @@ def ensure_cluster(
     if cache_key in cache:
         return cache[cache_key]
 
-    results: list[Record] = list(endpoints.clusters.filter(name=name, site_id=site_id))
+    results: list[Record] = list(clusters_endpoint.filter(name=name, site_id=site_id))
     if results:
         cache[cache_key] = results[0]
         return results[0]
@@ -1256,7 +1261,7 @@ def ensure_cluster(
 
     obj = cast(
         Record,
-        endpoints.clusters.create(
+        clusters_endpoint.create(
             name=name,
             type=cluster_type_id,
             site=site_id,
@@ -1316,25 +1321,21 @@ def _get_object_type_id(
     return ot_id
 
 
-def _get_choice_set_choices(choice_set_cfg: ChoiceSetConfig) -> list[list[str]]:
+def _get_choice_set_choices(choices: list[ChoiceItemConfig]) -> list[list[str]]:
     """Obtiene las opciones de un choice set, ya sea de tipo lista de listas o iterable."""
-    return [
-        [
-            choice.value,
-            choice.label,
-        ]
-        for choice in choice_set_cfg.choices
-    ]
+    return [[choice.value, choice.label] for choice in choices]
 
 
-def _normalize_choices(choices: Iterable[Sequence[Any]] | None) -> list[list[str]]:
+def _normalize_choices(
+    extra_choices: Iterable[Sequence[Any]] | None,
+) -> list[list[str]]:
     """Convierte las opciones de un choice set a una lista de listas de strings."""
-    if not choices:
+    if not extra_choices:
         return []
 
     return [
         [str(choice[0]), str(choice[1])]
-        for choice in choices
+        for choice in extra_choices
         if isinstance(choice, (list, tuple)) and len(choice) >= 2
     ]
 
@@ -1347,7 +1348,7 @@ def _ensure_choice_set(
 ) -> int | None:
     """Crea un choice set si no existe en NetBox."""
     choice_set_name: str = choice_set_cfg.name
-    choices: list[list[str]] = _get_choice_set_choices(choice_set_cfg)
+    choices: list[list[str]] = _get_choice_set_choices(choice_set_cfg.choices)
     choice_set: Record | None = existing_choice_sets.get(choice_set_name)
 
     if choice_set is None:
@@ -1381,7 +1382,9 @@ def _ensure_choice_set(
         )
         return cast(int, choice_set.id)
 
-    current_choices: list[list[str]] = _normalize_choices(choice_set.extra_choices)
+    current_choices: list[list[str]] = _normalize_choices(
+        getattr(choice_set, "extra_choices", None)
+    )
 
     if current_choices != choices:
         if dry_run:
@@ -1851,7 +1854,7 @@ def _resolve_platform(
     if not config.is_empty(platform_name):
         platforms_cache = caches.platforms
         platform = ensure_platform(
-            endpoints,
+            endpoints.platforms,
             platform_name,
             platforms_cache,
             dry_run,
@@ -1860,7 +1863,7 @@ def _resolve_platform(
 
 
 def _resolve_host_device(
-    endpoints: NetBoxEndpoints,
+    devices_endpoint: Endpoint,
     host_name: str,
     site_id: int | None,
     cache: dict[tuple[int, str], int | None],
@@ -1878,7 +1881,7 @@ def _resolve_host_device(
 
     try:
         host_devices: list[Record] = list(
-            endpoints.devices.filter(name=host_name, site_id=site_id)
+            devices_endpoint.filter(name=host_name, site_id=site_id)
         )
         if host_devices:
             dev_id: int = get_netbox_object_id(host_devices[0])
@@ -1903,22 +1906,21 @@ def _resolve_host_device(
 
 def _resolve_device_role(
     role_name: str,
-    caches: CacheStore,
+    roles_cache: dict[str, NetBoxObject],
     config: NetBoxMappingConfig,
 ) -> NetBoxObject | None:
     """
     Busca un DeviceRole por nombre (insensible a mayúsculas).
     Si el nombre está vacío o no existe, utiliza "Others" como fallback.
     """
-    roles = caches.device_roles
     if config.is_empty(role_name):
-        return roles.get("others")
+        return roles_cache.get("others")
 
     normalized = role_name.strip().lower()
-    if normalized not in roles:
-        return roles.get("others")
+    if normalized not in roles_cache:
+        return roles_cache.get("others")
 
-    return roles[normalized]
+    return roles_cache[normalized]
 
 
 # ============================================================
@@ -2132,7 +2134,7 @@ def sync_device(
     # ── Resolución de objetos relacionados ──────────────────
     # Role.
     rol_csv: str = row.get(columns.role, "").strip()
-    role_obj = _resolve_device_role(rol_csv, caches, config)
+    role_obj = _resolve_device_role(rol_csv, caches.device_roles, config)
     if role_obj is None:
         log.error(
             "ERROR (%s): no existe el DeviceRole 'Others' en la configuración.",
@@ -2149,7 +2151,7 @@ def sync_device(
         log.warning("SKIP (%s): sin Marca o Modelo.", machine_name)
         return "SKIPPED", None
     manufacturer = ensure_manufacturer(
-        endpoints,
+        endpoints.manufacturers,
         marca,
         caches.manufacturers,
         dry_run,
@@ -2164,7 +2166,7 @@ def sync_device(
 
     # Resolver DeviceType.
     device_type = ensure_device_type(
-        endpoints,
+        endpoints.device_types,
         manufacturer,
         modelo,
         u_height,
@@ -2180,7 +2182,7 @@ def sync_device(
     rack_name: str = row.get(columns.rack, "").strip()
     if not config.is_empty(rack_name):
         rack = ensure_rack(
-            endpoints,
+            endpoints.racks,
             rack_name,
             site,
             caches.racks,
@@ -2195,7 +2197,7 @@ def sync_device(
     # Cluster para hipervisores.
     if machine_type == "Hipervisor":
         cluster = ensure_cluster(
-            endpoints,
+            endpoints.clusters,
             machine_name,
             cluster_type,
             site,
@@ -2280,7 +2282,7 @@ def sync_vm(
 
     # Role.
     rol_csv: str = row.get(columns.role, "").strip()
-    role_obj = _resolve_device_role(rol_csv, caches, config)
+    role_obj = _resolve_device_role(rol_csv, caches.device_roles, config)
     if role_obj is None:
         log.error(
             "ERROR (%s): no existe el DeviceRole 'Others' en la configuración.",
@@ -2299,7 +2301,7 @@ def sync_vm(
         log.warning("SKIP (%s): VM sin %s.", machine_name, columns.cluster)
         return "SKIPPED", None
     cluster = ensure_cluster(
-        endpoints,
+        endpoints.clusters,
         host_name,
         cluster_type,
         site,
@@ -2314,7 +2316,7 @@ def sync_vm(
 
     # Device del hipervisor host (acotado a site y cacheado).
     host_dev_id = _resolve_host_device(
-        endpoints,
+        endpoints.devices,
         host_name,
         site_id,
         caches.host_devices,
@@ -2548,14 +2550,18 @@ def main() -> None:
     ensure_custom_fields(endpoints, config, args.dry_run)
 
     # ── Garantizar taxonomía global ──────────────────────────
-    site: NetBoxObject = ensure_site(endpoints, config, args.dry_run)
-    cluster_type: NetBoxObject = ensure_cluster_type(endpoints, config, args.dry_run)
+    site: NetBoxObject = ensure_site(endpoints, config.site, args.dry_run)
+    cluster_type: NetBoxObject = ensure_cluster_type(
+        endpoints, config.cluster_type, args.dry_run
+    )
 
     # ── Inicializar caches ───────────────────────────────────
     caches: CacheStore = CacheStore()
 
     # ── Garantizar taxonomía local ──────────────────────────
-    ensure_all_device_roles(endpoints, config, caches, args.dry_run)
+    ensure_all_device_roles(
+        endpoints, config.device_roles, caches.device_roles, args.dry_run
+    )
 
     # ── Contadores ───────────────────────────────────────────
     counts: SyncCounts = {
@@ -2674,15 +2680,13 @@ def main() -> None:
     # ── Resumen ──────────────────────────────────────────────
     resumen = (
         "\n" + "=" * 50 + "\n"
-        "Resumen de exportación a NetBox\n"
-        + "=" * 50 + "\n"
+        "Resumen de exportación a NetBox\n" + "=" * 50 + "\n"
         f"  Total filas procesadas : {len(rows)}\n"
         f"  Creados                : {counts['CREATED']}\n"
         f"  Actualizados           : {counts['UPDATED']}\n"
         f"  Sin cambios            : {counts['UNCHANGED']}\n"
         f"  Omitidos (SKIP)        : {counts['SKIPPED']}\n"
-        f"  Errores                : {counts['ERROR']}\n"
-        + "=" * 50
+        f"  Errores                : {counts['ERROR']}\n" + "=" * 50
     )
 
     if args.dry_run:
