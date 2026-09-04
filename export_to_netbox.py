@@ -68,6 +68,7 @@ from pydantic import (
 )
 from pynetbox.core.api import Api
 from pynetbox.core.endpoint import Endpoint
+from pynetbox.core.query import RequestError
 from pynetbox.core.response import Record
 
 # ============================================================
@@ -968,19 +969,41 @@ def ensure_manufacturer(
         cache[name] = results[0]
         return results[0]
 
+    # Búsqueda preventiva por slug: si "H.P." genera slug "hp" y ya existe
+    # un Manufacturer con ese slug (ej. "HP"), se reutiliza para deduplicar.
+    slug = slugify(name)
+    slug_results: list[Record] = list(endpoints.manufacturers.filter(slug=slug))
+    if slug_results:
+        log.warning(
+            "Manufacturer '%s' no existe, pero su slug '%s' coincide con '%s'. "
+            "Se reutiliza el objeto existente.",
+            name, slug, getattr(slug_results[0], "name", "?"),
+        )
+        cache[name] = slug_results[0]
+        return slug_results[0]
+
     if dry_run:
         log.info("[DRY-RUN] Crearía Manufacturer: %s", name)
         obj: NetBoxObject = MockNetBoxRecord(id=0, name=name)
         cache[name] = obj
         return obj
 
-    obj = cast(
-        Record,
-        endpoints.manufacturers.create(
-            name=name,
-            slug=slugify(name),
-        ),
-    )
+    try:
+        obj = cast(
+            Record,
+            endpoints.manufacturers.create(name=name, slug=slug),
+        )
+    except RequestError:
+        # Fallback: colisión de slug por race condition o datos no previstos.
+        slug_fallback = f"{slug}-{hash(name) % 10000:04d}"
+        log.warning(
+            "Slug '%s' colisionó al crear Manufacturer '%s'; reintentando con '%s'.",
+            slug, name, slug_fallback,
+        )
+        obj = cast(
+            Record,
+            endpoints.manufacturers.create(name=name, slug=slug_fallback),
+        )
     log.info("Manufacturer creado: %s", name)
     cache[name] = obj
     return obj
@@ -1036,16 +1059,48 @@ def ensure_device_type(
         cache[key] = obj
         return obj
 
-    obj = cast(
-        Record,
-        endpoints.device_types.create(
-            model=model,
-            slug=slugify(model),
-            manufacturer=manufacturer_id,
-            u_height=u_height or 1,
-        ),
-    )
-    log.info("DeviceType creado: %s / %s", getattr(manufacturer, "name", "?"), model)
+    # Prefijamos el slug con el nombre del fabricante para evitar colisiones
+    # entre modelos homónimos de distintas marcas (ej. "PowerEdge" de Dell vs HP).
+    manufacturer_name = str(getattr(manufacturer, "name", ""))
+    slug = slugify(f"{manufacturer_name} {model}")
+
+    # Búsqueda preventiva por slug.
+    slug_results: list[Record] = list(endpoints.device_types.filter(slug=slug))
+    if slug_results:
+        log.warning(
+            "DeviceType '%s/%s' no existe por nombre, pero su slug '%s' coincide "
+            "con un DeviceType existente. Se reutiliza.",
+            manufacturer_name, model, slug,
+        )
+        cache[key] = slug_results[0]
+        return slug_results[0]
+
+    try:
+        obj = cast(
+            Record,
+            endpoints.device_types.create(
+                model=model,
+                slug=slug,
+                manufacturer=manufacturer_id,
+                u_height=u_height or 1,
+            ),
+        )
+    except RequestError:
+        slug_fallback = f"{slug}-{hash(model) % 10000:04d}"
+        log.warning(
+            "Slug '%s' colisionó al crear DeviceType '%s/%s'; reintentando con '%s'.",
+            slug, manufacturer_name, model, slug_fallback,
+        )
+        obj = cast(
+            Record,
+            endpoints.device_types.create(
+                model=model,
+                slug=slug_fallback,
+                manufacturer=manufacturer_id,
+                u_height=u_height or 1,
+            ),
+        )
+    log.info("DeviceType creado: %s / %s", manufacturer_name, model)
     cache[key] = obj
     return obj
 
@@ -1071,7 +1126,30 @@ def ensure_platform(
         cache[name] = obj
         return obj
 
-    obj = cast(Record, endpoints.platforms.create(name=name, slug=slugify(name)))
+    # Búsqueda preventiva por slug para deduplicar variantes tipográficas.
+    slug = slugify(name)
+    slug_results: list[Record] = list(endpoints.platforms.filter(slug=slug))
+    if slug_results:
+        log.warning(
+            "Platform '%s' no existe, pero su slug '%s' coincide con '%s'. "
+            "Se reutiliza el objeto existente.",
+            name, slug, getattr(slug_results[0], "name", "?"),
+        )
+        cache[name] = slug_results[0]
+        return slug_results[0]
+
+    try:
+        obj = cast(Record, endpoints.platforms.create(name=name, slug=slug))
+    except RequestError:
+        slug_fallback = f"{slug}-{hash(name) % 10000:04d}"
+        log.warning(
+            "Slug '%s' colisionó al crear Platform '%s'; reintentando con '%s'.",
+            slug, name, slug_fallback,
+        )
+        obj = cast(
+            Record,
+            endpoints.platforms.create(name=name, slug=slug_fallback),
+        )
     log.info("Platform creado: %s", name)
     cache[name] = obj
     return obj
