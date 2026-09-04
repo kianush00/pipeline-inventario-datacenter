@@ -552,7 +552,7 @@ class CacheStore(BaseModel):
     device_types: dict[tuple[str, str], NetBoxObject] = Field(default_factory=dict)
     platforms: dict[str, NetBoxObject] = Field(default_factory=dict)
     racks: dict[tuple[int, str], NetBoxObject] = Field(default_factory=dict)
-    clusters: dict[str, NetBoxObject] = Field(default_factory=dict)
+    clusters: dict[tuple[int, str], NetBoxObject] = Field(default_factory=dict)
     device_roles: dict[str, NetBoxObject] = Field(default_factory=dict)
     host_devices: dict[tuple[int, str], int | None] = Field(default_factory=dict)
 
@@ -1191,25 +1191,29 @@ def ensure_cluster(
     name: str,
     cluster_type: NetBoxObject,
     site: NetBoxObject,
-    cache: dict[str, NetBoxObject],
+    cache: dict[tuple[int, str], NetBoxObject],
     dry_run: bool,
 ) -> NetBoxObject:
     """Garantiza que el Cluster exista en NetBox."""
-    if name in cache:
-        return cache[name]
+    site_id = get_netbox_object_id(site)
+    cache_key = (site_id, name)
+    
+    if cache_key in cache:
+        return cache[cache_key]
 
-    results: list[Record] = list(endpoints.clusters.filter(name=name))
+    results: list[Record] = list(
+        endpoints.clusters.filter(name=name, site_id=site_id)
+    )
     if results:
-        cache[name] = results[0]
+        cache[cache_key] = results[0]
         return results[0]
 
     cluster_type_id = get_netbox_object_id(cluster_type)
-    site_id = get_netbox_object_id(site)
 
     if dry_run:
         log.info("[DRY-RUN] Crearía Cluster: %s", name)
         obj: NetBoxObject = MockNetBoxRecord(id=0, name=name)
-        cache[name] = obj
+        cache[cache_key] = obj
         return obj
 
     obj = cast(
@@ -1221,7 +1225,7 @@ def ensure_cluster(
         ),
     )
     log.info("Cluster creado: %s", name)
-    cache[name] = obj
+    cache[cache_key] = obj
     return obj
 
 
