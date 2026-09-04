@@ -393,6 +393,7 @@ custom_fields:
 # 'target' → campo en el API de NetBox.
 # 'is_optional' → Si es true, omite el campo si el valor está vacío.
 #                 Si es false, el valor es obligatorio (Fail-Fast si falta).
+# 'is_unique' (Opc) → Si es true, el valor debe ser único en el tenant y objeto.
 # 'cast' (Opc) → Funciones de conversión permitidas: int, int_gb_to_mb, bool_si_no.
 # 'transform' (Opc) → Operaciones de estructura: concat_dot (concatena lista con '.').
 # 'map' (Opc) → Diccionario declarado en este yaml para traducir valores.
@@ -408,10 +409,12 @@ device_fields:
   - source: *col_serial
     target: "serial"
     is_optional: true
+    is_unique: true
 
   - source: *col_asset_tag
     target: "asset_tag"
     is_optional: true
+    is_unique: true
 
   - source: *col_pos_u
     target: "position"

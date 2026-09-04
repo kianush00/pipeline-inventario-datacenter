@@ -50,7 +50,6 @@ import os
 import re
 import sys
 from collections import Counter
-from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Literal, TypeAlias, TypedDict, cast
 
@@ -288,6 +287,7 @@ class FieldMappingConfig(BaseModel):
     source: str | list[str]
     target: str = Field(min_length=1)
     is_optional: bool = True
+    is_unique: bool = False
     cast: Literal["int", "int_gb_to_mb", "bool_si_no"] | None = None
     transform: Literal["concat_dot"] | None = None
     map: str | None = None
@@ -1326,11 +1326,9 @@ def _get_choice_set_choices(choices: list[ChoiceItemConfig]) -> list[list[str]]:
     return [[choice.value, choice.label] for choice in choices]
 
 
-def _normalize_choices(
-    extra_choices: Iterable[Sequence[Any]] | None,
-) -> list[list[str]]:
+def _normalize_choices(extra_choices: Any) -> list[list[str]]:
     """Convierte las opciones de un choice set a una lista de listas de strings."""
-    if not extra_choices:
+    if not isinstance(extra_choices, (list, tuple)):
         return []
 
     return [
@@ -1667,12 +1665,22 @@ def build_payload(
             # Campo interno del script (ej. _u_height), no va al API directamente.
             continue
         value = resolve_field_value(row, fd, config)
+
+        # Sanitización dinámica de constraints UNIQUE dictadas por el YAML.
+        if fd.is_unique and value == "":
+            value = None
+
         if value is not None:
             payload[target] = value
 
     for fd in cf_defs:
         target = fd.target
         value = resolve_field_value(row, fd, config)
+
+        # Sanitización dinámica de constraints UNIQUE dictadas por el YAML para Custom Fields.
+        if fd.is_unique and value == "":
+            value = None
+
         if value is not None:
             cf_payload[target] = value
 
