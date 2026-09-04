@@ -1004,8 +1004,31 @@ def ensure_device_type(
         endpoints.device_types.filter(model=model, manufacturer_id=manufacturer_id)
     )
     if results:
-        cache[key] = results[0]
-        return results[0]
+        existing_dt = results[0]
+        target_height = u_height or 1
+        
+        # NetBox puede devolver u_height como float por el soporte a "half-units" (ej. 1.5U).
+        # Usamos float() para comparar de forma segura el valor local e int/float de NetBox.
+        current_height = float(getattr(existing_dt, "u_height", 1) or 1)
+        
+        if current_height != float(target_height):
+            if dry_run:
+                log.info(
+                    "[DRY-RUN] Actualizaría u_height de DeviceType '%s' (de %g a %g)",
+                    model, current_height, target_height
+                )
+            else:
+                try:
+                    existing_dt.update({"u_height": target_height})
+                    log.info(
+                        "DeviceType '%s' u_height actualizado a %g", 
+                        model, target_height
+                    )
+                except Exception:
+                    log.exception("Error actualizando u_height de DeviceType '%s'", model)
+
+        cache[key] = existing_dt
+        return existing_dt
 
     if dry_run:
         log.info("[DRY-RUN] Crearía DeviceType: %s / %s", manufacturer, model)
