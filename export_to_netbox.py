@@ -1459,13 +1459,13 @@ def ensure_custom_fields(
     /api/extras/custom-field-choice-sets/.
     """
     # Obtener Custom Fields y Choice Sets existentes.
-    existing_cfs: dict[str, Record] = {
-        str(cf.name): cast(Record, cf) for cf in endpoints.custom_fields.all()
-    }
+    custom_fields = cast(list[Record], endpoints.custom_fields.all())
+    choice_sets = cast(list[Record], endpoints.choice_sets.all())
+
+    existing_cfs: dict[str, Record] = {str(cf.name): cf for cf in custom_fields}
 
     existing_choice_sets: dict[str, Record] = {
-        str(choice_set.name): cast(Record, choice_set)
-        for choice_set in endpoints.choice_sets.all()
+        str(ch_set.name): ch_set for ch_set in choice_sets
     }
 
     # Construir mapa nombre → ID de Object Type.
@@ -1499,6 +1499,7 @@ def ensure_custom_fields(
             if choice_set_id is None:
                 continue
 
+        # Crear el Custom Field si no existe.
         _ensure_custom_field(
             endpoints.custom_fields,
             existing_cfs,
@@ -1676,51 +1677,103 @@ def build_payload(
 # ============================================================
 
 
+def _validate_interface_ip(ip_raw: str, name: str) -> str | None:
+    """Valida que un string sea una dirección IP correcta."""
+    try:
+        ipaddress.ip_address(ip_raw)
+        return ip_raw
+    except ValueError:
+        log.warning(
+            "IP '%s' en interfaz '%s' no es una dirección IP válida; "
+            "se omitirá la asignación de IP.",
+            ip_raw,
+            name,
+        )
+        return None
+
+
+def _build_interface_cidr(ip_val: str, pfx_val: str, name: str) -> str | None:
+    """Valida IP y prefijo construyendo una dirección CIDR válida."""
+    try:
+        mask_or_prefix = (
+            pfx_val.split("/")[1].strip() if "/" in pfx_val else pfx_val.strip()
+        )
+        return str(ipaddress.ip_interface(f"{ip_val}/{mask_or_prefix}"))
+    except ValueError:
+        log.warning(
+            "Prefijo o CIDR inválido '%s' para IP '%s' en interfaz '%s'.",
+            pfx_val,
+            ip_val,
+            name,
+        )
+        return None
+
+
+def _parse_single_network_interface(
+    name: str,
+    status_raw: str,
+    ip_raw: str,
+    pfx_raw: str,
+    mac_raw: str,
+    status_map: dict[str, bool],
+    config: NetBoxMappingConfig,
+) -> NetworkInterfaceData | None:
+    """Parsea una única interfaz aislando la lógica de validación de IPs."""
+    if config.is_empty(name):
+        return None
+
+    enabled = status_map.get(status_raw.lower().strip(), True)
+    ip_val = ip_raw if not config.is_empty(ip_raw) else None
+    pfx_val = pfx_raw if not config.is_empty(pfx_raw) else None
+    mac_val = mac_raw if not config.is_empty(mac_raw) else None
+
+    cidr = None
+    if ip_val:
+        ip_val = _validate_interface_ip(ip_val, name)
+        if ip_val and pfx_val:
+            cidr = _build_interface_cidr(ip_val, pfx_val, name)
+
+    return {
+        "name": name,
+        "enabled": enabled,
+        "mac": mac_val,
+        "ip": ip_val,
+        "prefix": pfx_val,
+        "cidr": cidr,
+    }
+
+
 def parse_network_interfaces(
     row: CsvRow,
     config: NetBoxMappingConfig,
 ) -> list[NetworkInterfaceData] | None:
     """
-    Parsea las 5 columnas de red del CSV (valores separados por comas)
-    y devuelve una lista de dicts con la información de cada interfaz.
-
-    Formato de celda esperado: "eth0, eth1" (elementos separados por coma).
-    Se asume que el orden de los elementos coincide (índice por índice)
-    entre las 5 columnas asociadas.
-
-    Valida formato de IP y CIDR usando ipaddress.
+    Parsea las columnas de red del CSV y devuelve una lista de interfaces.
     Retorna None si los arrays (listas tras el split) tienen longitudes distintas.
     """
     net_cfg = config.network
-    status_map: dict[str, bool] = net_cfg.interface_status_map
+    cols = net_cfg.columns
 
     def split_col(col_name: str) -> list[str]:
         raw = row.get(col_name, "")
-        if config.is_empty(raw):
-            return []
-        return [v.strip() for v in raw.split(",")]
+        return [v.strip() for v in raw.split(",")] if not config.is_empty(raw) else []
 
-    cols = net_cfg.columns
     names = split_col(cols.names)
+    if not names:
+        return []
+
     statuses = split_col(cols.status)
     ips = split_col(cols.ip)
     prefixes = split_col(cols.prefix)
     macs = split_col(cols.mac)
 
-    if not names:
-        return []
-
     max_len = len(names)
     for lst in (statuses, ips, prefixes, macs):
         if lst and len(lst) != max_len:
-            return None  # Longitudes incompatibles (ej. faltó una coma en el CSV)
+            return None  # Longitudes incompatibles
 
-    # Si una columna viene completamente en blanco, se asume que ninguna interfaz
-    # tiene ese dato y se genera una lista vacía del tamaño de max_len.
-    def fill_if_empty(lst: list[str], max_len: int) -> list[str]:
-        if not lst:
-            return [""] * max_len
-        return lst
+    def fill_if_empty(lst: list[str], length: int) -> list[str]:
+        return lst if lst else [""] * length
 
     statuses = fill_if_empty(statuses, max_len)
     ips = fill_if_empty(ips, max_len)
@@ -1729,63 +1782,17 @@ def parse_network_interfaces(
 
     interfaces: list[NetworkInterfaceData] = []
     for i, name in enumerate(names):
-        if config.is_empty(name):
-            continue
-
-        status_raw = statuses[i].lower().strip()
-        enabled = status_map.get(status_raw, True)
-
-        ip_raw = ips[i] if not config.is_empty(ips[i]) else None
-        pfx_raw = prefixes[i] if not config.is_empty(prefixes[i]) else None
-        mac_raw = macs[i] if not config.is_empty(macs[i]) else None
-
-        # Validar IP y construir dirección CIDR si tenemos IP y prefijo.
-        cidr = None
-        if ip_raw:
-            try:
-                ipaddress.ip_address(ip_raw)
-            except ValueError:
-                log.warning(
-                    "IP '%s' en interfaz '%s' no es una dirección IP válida; "
-                    "se omitirá la asignación de IP.",
-                    ip_raw,
-                    name,
-                )
-                ip_raw = None
-
-        if ip_raw and pfx_raw:
-            try:
-                # Extraer la máscara o longitud del prefijo.
-                # Formatos soportados en la columna "Red IP":
-                #   - Red/Prefijo:  "136.23.104.128/26"
-                #   - Red/Máscara:  "192.168.1.0/255.255.255.0"
-                #   - Prefijo solo: "26"
-                #   - Máscara sola: "255.255.255.0"
-                mask_or_prefix = (
-                    pfx_raw.split("/")[1].strip() if "/" in pfx_raw else pfx_raw.strip()
-                )
-                # ip_interface acepta nativamente tanto "/24" como "/255.255.255.0"
-                # y str() normaliza siempre al formato CIDR canónico que NetBox exige.
-                cidr = str(ipaddress.ip_interface(f"{ip_raw}/{mask_or_prefix}"))
-            except ValueError:
-                log.warning(
-                    "Prefijo o CIDR inválido '%s' para IP '%s' en interfaz '%s'.",
-                    pfx_raw,
-                    ip_raw,
-                    name,
-                )
-                cidr = None
-
-        interfaces.append(
-            {
-                "name": name,
-                "enabled": enabled,
-                "mac": mac_raw,
-                "ip": ip_raw,
-                "prefix": pfx_raw,
-                "cidr": cidr,
-            }
+        parsed = _parse_single_network_interface(
+            name=name,
+            status_raw=statuses[i],
+            ip_raw=ips[i],
+            pfx_raw=prefixes[i],
+            mac_raw=macs[i],
+            status_map=net_cfg.interface_status_map,
+            config=config,
         )
+        if parsed:
+            interfaces.append(parsed)
 
     return interfaces
 

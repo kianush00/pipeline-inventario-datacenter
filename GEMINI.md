@@ -30,9 +30,9 @@ Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes prin
 
 - Prioriza la legibilidad, la intención y la robustez profesional sobre la brevedad o soluciones rápidas.
 - **Cero atajos o parches forzados:** Toda modificación debe ser limpia, cuidadosa y respetar estrictamente los patrones de diseño y convenciones ya establecidas en el código base.
-- **Reutilización de utilidades existentes:** Prohibido duplicar lógica ad-hoc. Aprovecha siempre las funciones auxiliares y utilidades existentes en el proyecto (ej. `get_netbox_object_id`, `safe_int`, `apply_cast`, helpers de configuración y cache).
+- **Reutilización y creación de utilidades:** Prohibido duplicar lógica ad-hoc. Aprovecha siempre las funciones auxiliares existentes en el proyecto (ej. `get_netbox_object_id`, `safe_int`, `apply_cast`, helpers de configuración y cache). Si introduces código nuevo que resuelva transformaciones, parseos o validaciones comunes no cubiertas actualmente, abstáelo en una nueva función auxiliar reutilizable siguiendo el diseño de los módulos de soporte existentes.
 - Nombra variables, funciones y clases de forma descriptiva, revelando su intención en el modelo de dominio (ej. `SyncStatus`, `NetBoxPayload`).
-- Sigue el principio de Responsabilidad Única (SRP): las funciones deben hacer una sola cosa y hacerla bien.
+- **Principio de Responsabilidad Única (SRP)**: las funciones deben hacer una sola cosa y hacerla bien.
 - Mantén un manejo de errores robusto. Nunca falles silenciosamente; utiliza logs (`logging`) detallados con contexto y niveles adecuados (INFO, WARNING, ERROR).
 
 ## 3. Escalabilidad y Eficiencia
