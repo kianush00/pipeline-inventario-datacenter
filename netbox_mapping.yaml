@@ -18,7 +18,7 @@
 #
 # Cada entrada define:
 #   - Una clave semántica (ej. machine_name) usada en el script Python.
-#   - Un ancla YAML (&col_xxx) para reutilizar como alias (*col_xxx)
+#   - Un ancla YAML (&col_id) para reutilizar como alias (*col_id)
 #     en las secciones de mapeo más abajo.
 #   - El nombre textual exacto de la columna en el CSV.
 #
@@ -94,7 +94,7 @@ site:
 
 # ── ClusterType ──────────────────────────────────────────────
 # Las VMs se agrupan en un Cluster cuyo nombre coincide con el
-# valor del campo 'Host/Cluster/Chassis' en el CSV.
+# valor del campo 'cluster' en el CSV.
 # El cluster_type se crea automáticamente si no existe.
 cluster_type:
   name: "Hipervisor"
@@ -176,7 +176,7 @@ device_roles:
 # ── Special Custom Fields (Lógica Core) ──────────────────────
 # NOTA: 'machine_type' y 'environment' se declaran aquí en la raíz,
 # fuera del bloque 'custom_field_definitions' estándar, porque dictan el flujo
-# lógico de enrutamiento principal del pipeline.
+# de enrutamiento principal del pipeline.
 
 # ── Tipo de máquina ──────────────────────────────────────────
 # Clasificación interna del inventario.
@@ -221,6 +221,10 @@ environment:
       - value: "development"
         label: "Desarrollo"
 
+# ── Mapeo de Entorno ─────────────────────────────────────────
+# Transforma los valores de entorno del CSV al slug/valor interno
+# admitido por el Choice Set del Custom Field en NetBox.
+#
 # NOTA: Cualquier diccionario en la raíz del YAML cuya clave termine
 # en `_map` (ej. environment_map) será detectado y registrado automáticamente
 # por el script como un mapa de resolución. Puedes utilizar estos mapas
@@ -242,14 +246,14 @@ machine_type_map:
 # 'Estado' del inventario maestro utiliza directamente la
 # semántica del campo status de NetBox.
 #
-# Valores admitidos:
-#   active
-#   planned
-#   staged
-#   failed
-#   inventory
-#   decommissioning
-#   offline
+# Valores admitidos por NetBox:
+#   active          → Operativo y en producción
+#   planned         → Proyectado o pendiente de instalación
+#   staged          → En preparación o preconfiguración
+#   failed          → Con fallas o fuera de servicio por fallos
+#   inventory       → Almacenado como repuesto o stock disponible
+#   decommissioning → En proceso de desmantelamiento o retiro
+#   offline         → Apagado o temporalmente inaccesible
 #
 # El valor almacenado en el CSV está en español y se transforma
 # al valor interno utilizado por NetBox.
@@ -276,32 +280,31 @@ status_defaults:
 # Esta sección DEFINE la estructura de los campos en la base de datos
 # de NetBox (creación si no existen). NO extrae datos del CSV.
 #
-# Los campos de tipo "selection" utilizan choice_set para definir
-# sus valores válidos.
+# Significado de los campos:
+# 'name'         → (Requerido) Nombre interno (slug) del custom field en NetBox.
+# 'label'        → (Requerido) Nombre descriptivo mostrado en la interfaz web.
+# 'type'         → (Requerido) Tipo de dato (ver lista de soportados abajo).
+# 'required'     → (Requerido) Si es true, el campo será obligatorio en el esquema
+#                    interno (DDL) de NetBox. NO afecta el parseo ni la validación del CSV.
+# 'object_types' → (Requerido) Lista de modelos NetBox a los que aplica
+#                    (ej. "dcim.device", "virtualization.virtualmachine").
+# 'default'      → (Opcional) Valor por defecto a nivel de base de datos.
+# 'choice_set'   → (Opcional) Define los valores válidos. Obligatorio si type="selection".
 #
-# NOTA NetBox 4.6+:
-#   - El campo se llama "object_types".
-#   - Los tipos se referencian mediante app_label.model.
-#   - Los Custom Fields de selección utilizan Choice Sets.
-#
-# IMPORTANTE sobre la clave 'required':
-#   Define si el campo será obligatorio en el esquema interno (DDL) de NetBox.
-#   NO afecta el parseo ni la validación del CSV.
-#
-# Tipos de Custom Field soportados por NetBox:
-#   text            → Texto libre
-#   longtext        → Texto largo (textarea)
-#   integer         → Número entero
-#   decimal         → Número decimal
-#   boolean         → Verdadero/Falso
-#   date            → Fecha (YYYY-MM-DD)
-#   datetime        → Fecha y hora
-#   url             → URL válida
-#   json            → JSON arbitrario
-#   selection       → Selección única (requiere choice_set)
-#   multiselect     → Selección múltiple (requiere choice_set)
-#   object          → Referencia a otro objeto NetBox
-#   multiobject     → Referencia múltiple a objetos NetBox
+# Tipos de Custom Field soportados por NetBox 4.6+:
+#   text           → Texto libre
+#   longtext       → Texto largo (textarea)
+#   integer        → Número entero
+#   decimal        → Número decimal
+#   boolean        → Verdadero/Falso
+#   date           → Fecha (YYYY-MM-DD)
+#   datetime       → Fecha y hora
+#   url            → URL válida
+#   json           → JSON arbitrario
+#   select         → Selección única (requiere choice_set)
+#   multiselect    → Selección múltiple (requiere choice_set)
+#   object         → Referencia a otro objeto NetBox
+#   multiobject    → Referencia múltiple a objetos NetBox
 
 custom_field_definitions:
   - name: "inventory_uuid"
@@ -382,7 +385,7 @@ custom_field_definitions:
     label: "Nodo Rundeck"
     type: "boolean"
     required: false
-    default: false # por defecto es false, o sea que no es un nodo de rundeck
+    default: false
     object_types:
       - "dcim.device"
       - "virtualization.virtualmachine"
@@ -413,15 +416,16 @@ custom_field_definitions:
 # Sección DML: define cómo EXTRAER datos del CSV y MAPEARLOS a
 # campos nativos de la API de NetBox para objetos Device.
 #
-# 'source' → nombre exacto de la columna en merged_inventory.csv.
-# 'target' → campo en el API de NetBox.
-# 'is_optional' → Si es true, omite el campo si el valor está vacío.
-#                 Si es false, el valor es obligatorio (Fail-Fast si falta).
-# 'is_unique' (Opc) → Si es true, un string vacío se sanitiza a null para
-#                      evitar violaciones de constraint UNIQUE en NetBox.
-# 'cast' (Opc) → Funciones de conversión permitidas: int, int_gb_to_mb, bool_si_no.
-# 'transform' (Opc) → Operaciones de estructura: concat_dot (concatena lista con '.').
-# 'map' (Opc) → Diccionario declarado en este yaml para traducir valores.
+# 'source'      → (Requerido) nombre exacto de la columna en merged_inventory.csv.
+# 'target'      → (Requerido) campo en el API de NetBox.
+# 'is_optional' → (Requerido) Si es true, omite el campo si el valor está vacío.
+#                  Si es false, el valor es obligatorio (Fail-Fast si falta).
+# 'is_unique'   → (Opcional) Si es true, un string vacío se sanitiza a null para
+#                  evitar violaciones de constraint UNIQUE en NetBox.
+# 'cast'        → (Opcional) Funciones de conversión permitidas: int, int_gb_to_mb, bool_si_no.
+# 'transform'   → (Opcional) Operaciones de estructura: concat_dot (concatena lista con '.').
+# 'map'         → (Opcional) Diccionario declarado en este yaml para traducir valores.
+#
 # NOTA: Claves foráneas como 'site', 'role', 'platform', 'rack' y
 # 'device_type' son resueltas a objetos/IDs NetBox por sus respectivas
 # funciones especializadas en el script, por lo que no forman parte de esta lista.
@@ -623,10 +627,10 @@ vm_custom_mappings:
 #   (campo `address` de IP Address: POST /api/ipam/ip-addresses/).
 #
 #   Formatos soportados:
-#     - Red/Prefijo:  "136.12.34.128/26"     → se extrae "26"
+#     - Red/Prefijo:  "136.12.34.128/26"          → se extrae "26"
 #     - Red/Máscara:  "192.168.1.0/255.255.255.0" → se extrae "255.255.255.0"
-#     - Prefijo solo: "26"                     → se usa directamente
-#     - Máscara sola: "255.255.255.0"          → se usa directamente
+#     - Prefijo solo: "26"                        → se usa directamente
+#     - Máscara sola: "255.255.255.0"             → se usa directamente
 #
 #   En todos los casos, el script normaliza al formato CIDR canónico
 #   (ej. "136.12.34.147/26") antes de enviarlo a NetBox.

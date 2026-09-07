@@ -196,7 +196,7 @@ class ChoiceItemConfig(BaseModel):
 
 
 class ChoiceSetConfig(BaseModel):
-    """Definición de un Choice Set para Custom Fields de tipo selection."""
+    """Definición de un Choice Set para Custom Fields de tipo 'select'."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -207,18 +207,32 @@ class ChoiceSetConfig(BaseModel):
 OBJECT_TYPE_PATTERN = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 
 
-class BaseCustomFieldDef(BaseModel):
-    """Definición base para campos personalizados."""
+class CustomFieldConfig(BaseModel):
+    """Definición unificada de Custom Field para campos personalizados."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    name: str = Field(min_length=1)
     label: str = Field(min_length=1)
-    type: Literal["text", "integer", "boolean", "selection", "date", "url", "json"] = (
-        "text"
-    )
+    type: Literal[
+        "text",
+        "longtext",
+        "integer",
+        "decimal",
+        "boolean",
+        "date",
+        "datetime",
+        "url",
+        "json",
+        "select",
+        "multiselect",
+        "object",
+        "multiobject",
+    ] = "text"
     required: bool = False
     object_types: list[str] = Field(default_factory=list)
     choice_set: ChoiceSetConfig | None = None
+    default: Any = None
 
     @field_validator("object_types")
     @classmethod
@@ -232,19 +246,12 @@ class BaseCustomFieldDef(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def validate_choice_set_if_selection(self) -> "BaseCustomFieldDef":
-        if self.type == "selection" and not self.choice_set:
+    def validate_choice_set_if_select(self) -> "CustomFieldConfig":
+        if self.type == "select" and not self.choice_set:
             raise ValueError(
-                "Los campos de tipo 'selection' deben definir un 'choice_set'."
+                "Los campos de tipo 'select' deben definir un 'choice_set'."
             )
         return self
-
-
-class CustomFieldConfig(BaseCustomFieldDef):
-    """Definición unificada de Custom Field."""
-
-    name: str = Field(min_length=1)
-    default: Any = None
 
 
 class FieldMappingConfig(BaseModel):
@@ -329,6 +336,10 @@ class NetBoxMappingConfig(BaseModel):
     Contrato completo de configuración y mapeo cargado desde netbox_mapping.yaml.
     Valida tipos, restricciones de valor y consistencia referencial.
     Centraliza el acceso a columnas y métodos utilitarios de ejecución como is_empty().
+
+    NOTA: Las listas y diccionarios de este modelo (ej. custom_field_definitions) son
+    poblados automáticamente por Pydantic en la función load_config() al deserializar el
+    archivo YAML.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -1437,7 +1448,7 @@ def ensure_custom_fields(
         - machine_type
         - environment
 
-    Para los custom fields de tipo 'selection', garantiza también
+    Para los custom fields de tipo 'select', garantiza también
     la existencia del Choice Set asociado.
 
     NetBox 4.5+:
@@ -1476,7 +1487,7 @@ def ensure_custom_fields(
         choice_set_id: int | None = None
         choice_set_cfg: ChoiceSetConfig | None = cf_def.choice_set
 
-        if cf_def.type == "selection" and choice_set_cfg:
+        if cf_def.type == "select" and choice_set_cfg:
             choice_set_id = _ensure_choice_set(
                 endpoints.choice_sets,
                 existing_choice_sets,
@@ -1569,10 +1580,10 @@ def resolve_field_value(
             return None if is_optional else ""
         value = mapped
 
-    # Validación Temprana (Fail-Fast) para Custom Fields de tipo 'selection'
+    # Validación Temprana (Fail-Fast) para Custom Fields de tipo 'select'
     if (
         custom_field_def
-        and custom_field_def.type == "selection"
+        and custom_field_def.type == "select"
         and custom_field_def.choice_set
     ):
         valid_choices = [c.value for c in custom_field_def.choice_set.choices]
