@@ -395,11 +395,6 @@ class NetBoxMappingConfig(BaseModel):
         """Alias ergonómico de acceso al glosario de columnas del CSV."""
         return self.csv_column_aliases
 
-    @property
-    def empty_values_set(self) -> frozenset[str]:
-        """Conjunto inmutable de valores considerados vacíos."""
-        return self._empty_values_set
-
     def get_required_columns(self) -> set[str]:
         """
         Retorna el conjunto de columnas obligatorias configuradas en el YAML.
@@ -906,11 +901,12 @@ def _sync_single_device_role(
         return
 
     try:
+        slug = role_def.slug or slugify(name)
         obj = cast(
             Record,
             endpoints.device_roles.create(
                 name=name,
-                slug=role_def.slug or slugify(name),
+                slug=slug,
                 color=role_def.color,
                 vm_role=True,
             ),
@@ -996,6 +992,79 @@ def ensure_manufacturer(
     return obj
 
 
+def _sync_device_type_u_height(
+    existing_dt: Record,
+    model: str,
+    target_height: int,
+    dry_run: bool,
+) -> None:
+    """Sincroniza la altura en U del modelo de servidor."""
+    target_height_val = target_height or 1
+    current_height = float(getattr(existing_dt, "u_height", 1) or 1)
+
+    if current_height == float(target_height_val):
+        return
+
+    if dry_run:
+        log.info(
+            "[DRY-RUN] Actualizaría u_height de DeviceType '%s' (de %g a %g)",
+            model,
+            current_height,
+            target_height_val,
+        )
+        return
+
+    try:
+        existing_dt.update({"u_height": target_height_val})
+        log.info(
+            "DeviceType '%s' u_height actualizado a %g",
+            model,
+            target_height_val,
+        )
+    except Exception:
+        log.exception("Error actualizando u_height de DeviceType '%s'", model)
+
+
+def _create_device_type(
+    endpoint: Endpoint,
+    model: str,
+    slug: str,
+    manufacturer_id: int,
+    u_height: int,
+    manufacturer_name: str,
+) -> Record:
+    """Intenta crear el DeviceType, manejando colisiones de slug."""
+    u_height_val = u_height or 1
+    try:
+        return cast(
+            Record,
+            endpoint.create(
+                model=model,
+                slug=slug,
+                manufacturer=manufacturer_id,
+                u_height=u_height_val,
+            ),
+        )
+    except RequestError:
+        slug_fallback = f"{slug}-{hash(model) % 10000:04d}"
+        log.warning(
+            "Slug '%s' colisionó al crear DeviceType '%s/%s'; reintentando con '%s'.",
+            slug,
+            manufacturer_name,
+            model,
+            slug_fallback,
+        )
+        return cast(
+            Record,
+            endpoint.create(
+                model=model,
+                slug=slug_fallback,
+                manufacturer=manufacturer_id,
+                u_height=u_height_val,
+            ),
+        )
+
+
 def ensure_device_type(
     device_types_endpoint: Endpoint,
     manufacturer: NetBoxObject,
@@ -1007,7 +1076,6 @@ def ensure_device_type(
     """Garantiza que el DeviceType exista en NetBox."""
     manufacturer_id = get_netbox_object_id(manufacturer)
 
-    # M-4: Extraemos el nombre para evitar colisiones del id=0 en dry-run.
     # El ID numérico se retiene solo como fallback.
     manufacturer_name = str(getattr(manufacturer, "name", manufacturer_id))
     key = (manufacturer_name, model)
@@ -1019,39 +1087,13 @@ def ensure_device_type(
     )
     if results:
         existing_dt = results[0]
-        target_height = u_height or 1
-
-        # NetBox puede devolver u_height como float por el soporte a "half-units" (ej. 1.5U).
-        # Usamos float() para comparar de forma segura el valor local e int/float de NetBox.
-        current_height = float(getattr(existing_dt, "u_height", 1) or 1)
-
-        if current_height != float(target_height):
-            if dry_run:
-                log.info(
-                    "[DRY-RUN] Actualizaría u_height de DeviceType '%s' (de %g a %g)",
-                    model,
-                    current_height,
-                    target_height,
-                )
-            else:
-                try:
-                    existing_dt.update({"u_height": target_height})
-                    log.info(
-                        "DeviceType '%s' u_height actualizado a %g",
-                        model,
-                        target_height,
-                    )
-                except Exception:
-                    log.exception(
-                        "Error actualizando u_height de DeviceType '%s'", model
-                    )
-
+        _sync_device_type_u_height(existing_dt, model, u_height, dry_run)
         cache[key] = existing_dt
         return existing_dt
 
     if dry_run:
-        log.info("[DRY-RUN] Crearía DeviceType: %s / %s", manufacturer, model)
-        obj: NetBoxObject = MockNetBoxRecord(id=0, model=model)
+        log.info("[DRY-RUN] Crearía DeviceType: %s / %s", manufacturer_name, model)
+        obj = MockNetBoxRecord(id=0, model=model)
         cache[key] = obj
         return obj
 
@@ -1072,34 +1114,14 @@ def ensure_device_type(
         cache[key] = slug_results[0]
         return slug_results[0]
 
-    try:
-        obj = cast(
-            Record,
-            device_types_endpoint.create(
-                model=model,
-                slug=slug,
-                manufacturer=manufacturer_id,
-                u_height=u_height or 1,
-            ),
-        )
-    except RequestError:
-        slug_fallback = f"{slug}-{hash(model) % 10000:04d}"
-        log.warning(
-            "Slug '%s' colisionó al crear DeviceType '%s/%s'; reintentando con '%s'.",
-            slug,
-            manufacturer_name,
-            model,
-            slug_fallback,
-        )
-        obj = cast(
-            Record,
-            device_types_endpoint.create(
-                model=model,
-                slug=slug_fallback,
-                manufacturer=manufacturer_id,
-                u_height=u_height or 1,
-            ),
-        )
+    obj = _create_device_type(
+        device_types_endpoint,
+        model,
+        slug,
+        manufacturer_id,
+        u_height,
+        manufacturer_name,
+    )
     log.info("DeviceType creado: %s / %s", manufacturer_name, model)
     cache[key] = obj
     return obj
@@ -1339,34 +1361,27 @@ def _ensure_choice_set(
         )
         return cast(int, choice_set.id)
 
-    current_choices: list[list[str]] = _normalize_choices(
-        getattr(choice_set, "extra_choices", None)
-    )
+    extra_choices: Any = getattr(choice_set, "extra_choices", None)
+    current_choices: list[list[str]] = _normalize_choices(extra_choices)
 
-    if current_choices != choices:
-        if dry_run:
-            log.info(
-                "[DRY-RUN] Actualizaría Choice Set: %s",
-                choice_set_name,
-            )
-        else:
-            try:
-                choice_set.update(
-                    {
-                        "extra_choices": choices,
-                        "order_alphabetically": False,
-                    }
-                )
-                log.info(
-                    "Choice Set actualizado: %s",
-                    choice_set_name,
-                )
-            except Exception:
-                log.exception(
-                    "Error al actualizar Choice Set '%s'",
-                    choice_set_name,
-                )
-                return None
+    if current_choices == choices:
+        return cast(int, choice_set.id)
+
+    if dry_run:
+        log.info("[DRY-RUN] Actualizaría Choice Set: %s", choice_set_name)
+        return cast(int, choice_set.id)
+
+    try:
+        choice_set.update(
+            {
+                "extra_choices": choices,
+                "order_alphabetically": False,
+            }
+        )
+        log.info("Choice Set actualizado: %s", choice_set_name)
+    except Exception:
+        log.exception("Error al actualizar Choice Set '%s'", choice_set_name)
+        return None
 
     return cast(int, choice_set.id)
 
