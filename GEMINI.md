@@ -23,12 +23,14 @@ Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes prin
 
 - Todo el código Python debe estar fuertemente tipado utilizando las anotaciones del módulo `typing` nativo.
 - Evita a toda costa el uso injustificado de `Any`.
-- Utiliza elementos como `TypeAlias`, `TypedDict`, y Modelos Pydantic (`BaseModel`) para definir estructuras de datos complejas o payloads de APIs, garantizando una semántica clara.
-- Asegúrate de que el código base esté diseñado para pasar verificadores de tipo estáticos.
+- Utiliza elementos como `TypeAlias`, `TypedDict`, `dataclasses` y Modelos Pydantic (`BaseModel`) para definir estructuras de datos complejas o payloads de APIs, garantizando una semántica clara.
+- Asegúrate de que el código base esté diseñado para pasar verificadores de tipo estáticos sin advertencias (Pylance/MyPy).
 
-## 2. Calidad de Código y Semántica (Clean Code)
+## 2. Calidad de Código, Semántica y Consistencia Arquitectónica (Clean Code)
 
-- Prioriza la legibilidad, la intención y la claridad sobre la brevedad excesiva.
+- Prioriza la legibilidad, la intención y la robustez profesional sobre la brevedad o soluciones rápidas.
+- **Cero atajos o parches forzados:** Toda modificación debe ser limpia, cuidadosa y respetar estrictamente los patrones de diseño y convenciones ya establecidas en el código base.
+- **Reutilización de utilidades existentes:** Prohibido duplicar lógica ad-hoc. Aprovecha siempre las funciones auxiliares y utilidades existentes en el proyecto (ej. `get_netbox_object_id`, `safe_int`, `apply_cast`, helpers de configuración y cache).
 - Nombra variables, funciones y clases de forma descriptiva, revelando su intención en el modelo de dominio (ej. `SyncStatus`, `NetBoxPayload`).
 - Sigue el principio de Responsabilidad Única (SRP): las funciones deben hacer una sola cosa y hacerla bien.
 - Mantén un manejo de errores robusto. Nunca falles silenciosamente; utiliza logs (`logging`) detallados con contexto y niveles adecuados (INFO, WARNING, ERROR).
@@ -52,5 +54,6 @@ Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes prin
 
 ## 6. Comunicación y Formato de Respuestas
 
-- **Tono directo y profesional:** Ve directo al grano sin preámbulos, saludos, cortesías innecesarias ni felicitaciones ("¡Buena pregunta!", "Excelente código", "Buena intuición", "Excelente observación", etc.).
+- **Tono directo y profesional:** Ve directo al grano sin preámbulos, saludos, cortesías innecesarias ni felicitaciones (ej. "¡Buena pregunta!", "Excelente código", "Buena intuición", "Excelente observación", etc.).
 - **Enfoque en la solución técnica:** Proporciona explicaciones técnicas concisas, fundamentadas, precisas y profesionales.
+- **Diffs limpios y contextualizados:** Entrega los bloques de código modificados listos para integrarse sin placeholders ambiguos, asegurando total coherencia con el resto del script.

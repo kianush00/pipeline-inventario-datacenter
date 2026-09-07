@@ -232,7 +232,7 @@ class CustomFieldConfig(BaseModel):
     required: bool = False
     object_types: list[str] = Field(default_factory=list)
     choice_set: ChoiceSetConfig | None = None
-    default: Any = None
+    default: FieldValue = None
 
     @field_validator("object_types")
     @classmethod
@@ -255,7 +255,7 @@ class CustomFieldConfig(BaseModel):
 
 
 class FieldMappingConfig(BaseModel):
-    """Definición de mapeo entre columna(s) CSV y atributo NetBox."""
+    """Definición de mapeo entre columnas CSV y atributo NetBox."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -606,6 +606,15 @@ def get_netbox_object_id(obj: NetBoxObject) -> int:
 # ============================================================
 
 
+def _pre_process_site_slug(raw_config: dict[str, Any]) -> None:
+    """Asegura que el site tenga un slug válido antes de la validación de Pydantic."""
+    site_data = raw_config.get("site")
+    if isinstance(site_data, dict):
+        raw_slug = site_data.get("slug") or site_data.get("name")
+        if raw_slug:
+            site_data["slug"] = slugify(str(raw_slug))
+
+
 def load_config(mapping_path: Path) -> NetBoxMappingConfig:
     """
     Carga y valida el archivo de mapping YAML utilizando Pydantic.
@@ -616,10 +625,10 @@ def load_config(mapping_path: Path) -> NetBoxMappingConfig:
         log.error("No se encontró el archivo de mapping: %s", mapping_path)
         sys.exit(1)
 
+    # Cargar el YAML
     try:
         with mapping_path.open("r", encoding="utf-8") as f:
             raw_yaml = f.read()
-
         # Expande sintaxis $VAR o ${VAR} usando variables de entorno
         expanded_yaml = os.path.expandvars(raw_yaml)
         raw = yaml.safe_load(expanded_yaml)
@@ -634,13 +643,10 @@ def load_config(mapping_path: Path) -> NetBoxMappingConfig:
         )
         sys.exit(1)
 
-    # El slug del site debe ser único, por lo que se genera a partir del nombre
-    site_data = raw.get("site")
-    if isinstance(site_data, dict):
-        raw_slug = site_data.get("slug") or site_data.get("name")
-        if raw_slug:
-            site_data["slug"] = slugify(str(raw_slug))
+    # El slug del site debe ser único, por lo que se pre-procesa a partir del nombre
+    _pre_process_site_slug(raw)
 
+    # Validar el esquema Pydantic para el archivo de mapping
     try:
         return NetBoxMappingConfig.model_validate(raw)
     except ValidationError as exc:
@@ -659,17 +665,19 @@ def load_config(mapping_path: Path) -> NetBoxMappingConfig:
 def load_env() -> tuple[str, str, bool]:
     url = os.environ.get("NETBOX_URL", "").rstrip("/")
     token = os.environ.get("NETBOX_TOKEN", "")
-    verify_ssl = os.environ.get("NETBOX_VERIFY_SSL", "true").lower() != "false"
     site_name = os.environ.get("NETBOX_SITE_NAME", "").strip()
+    verify_ssl = os.environ.get("NETBOX_VERIFY_SSL", "true").lower() != "false"
 
-    if not url:
-        log.error("Variable de entorno NETBOX_URL no definida.")
-        sys.exit(1)
-    if not token:
-        log.error("Variable de entorno NETBOX_TOKEN no definida.")
-        sys.exit(1)
-    if not site_name:
-        log.error("Variable de entorno NETBOX_SITE_NAME no definida.")
+    required_vars = {
+        "NETBOX_URL": url,
+        "NETBOX_TOKEN": token,
+        "NETBOX_SITE_NAME": site_name,
+    }
+
+    missing = [name for name, val in required_vars.items() if not val]
+    if missing:
+        for var in missing:
+            log.error("Variable de entorno %s no definida.", var)
         sys.exit(1)
 
     return url, token, verify_ssl
@@ -892,7 +900,7 @@ def ensure_all_device_roles(
         if key in device_roles_cache:
             continue
 
-        results = list(endpoints.device_roles.filter(name=name))
+        results: list[Record] = list(endpoints.device_roles.filter(name=name))
         if results:
             role_obj = results[0]
 
@@ -1420,14 +1428,12 @@ def _ensure_custom_field(
     if choice_set_id is not None:
         create_kwargs["choice_set"] = choice_set_id
 
-    default_value: Any = getattr(cf_def, "default", None)
+    default_value: FieldValue = cf_def.default
     if default_value is not None:
         create_kwargs["default"] = default_value
 
     try:
-        created_cf: Record = cast(
-            Record, custom_fields_endpoint.create(**create_kwargs)
-        )
+        created_cf = cast(Record, custom_fields_endpoint.create(**create_kwargs))
         existing_cfs[name] = created_cf
         log.info("Custom field creado: %s", name)
     except Exception:
@@ -1509,11 +1515,11 @@ def ensure_custom_fields(
 
 
 # ============================================================
-# NORMALIZACIÓN DE VALORES DE FILA
+# CONSTRUCCIÓN DE PAYLOAD
 # ============================================================
 
 
-def resolve_field_value(
+def _resolve_field_value(
     row: CsvRow,
     field_def: FieldMappingConfig,
     config: NetBoxMappingConfig,
@@ -1608,11 +1614,6 @@ def resolve_field_value(
     return value
 
 
-# ============================================================
-# CONSTRUCCIÓN DE PAYLOAD
-# ============================================================
-
-
 def build_payload(
     row: CsvRow,
     field_defs: list[FieldMappingConfig],
@@ -1626,48 +1627,25 @@ def build_payload(
     payload: NetBoxPayload = {}
     cf_payload: CustomFieldsPayload = {}
 
-    for fd in field_defs:
-        target = fd.target
-        if target.startswith("_"):
-            # Campo interno del script (ej. _u_height), no va al API directamente.
-            continue
-        value = resolve_field_value(row, fd, config)
+    for defs, target_dict, is_native in [
+        (field_defs, payload, True),
+        (cf_defs, cf_payload, False),
+    ]:
+        for fd in defs:
+            value = _resolve_field_value(row, fd, config)
 
-        # Sanitización dinámica de constraints UNIQUE dictadas por el YAML.
-        if fd.is_unique and value == "":
-            value = None
+            # Sanitización dinámica de constraints UNIQUE dictadas por el YAML.
+            if fd.is_unique and value == "":
+                value = None
 
-        if value is not None:
-            payload[target] = value
+            if value is not None:
+                target_dict[fd.target] = value
 
-    for fd in cf_defs:
-        target = fd.target
-        value = resolve_field_value(row, fd, config)
-
-        # Sanitización dinámica de constraints UNIQUE dictadas por el YAML para Custom Fields.
-        if fd.is_unique and value == "":
-            value = None
-
-        if value is not None:
-            cf_payload[target] = value
-
+    # Agregar los custom fields al payload
     if cf_payload:
         payload["custom_fields"] = cf_payload
 
     return payload, cf_payload
-
-
-def get_internal_field(
-    row: CsvRow,
-    field_defs: list[FieldMappingConfig],
-    internal_key: str,
-    config: NetBoxMappingConfig,
-) -> FieldValue:
-    """Extrae un campo interno (prefijado con '_') de los field_defs."""
-    for fd in field_defs:
-        if fd.target == internal_key:
-            return resolve_field_value(row, fd, config)
-    return None
 
 
 # ============================================================
@@ -2131,12 +2109,7 @@ def sync_device(
         caches.manufacturers,
         dry_run,
     )
-    raw_u_height = get_internal_field(
-        row,
-        device_fields_cfg,
-        "_u_height",
-        config,
-    )
+    raw_u_height = row.get(columns["alt_u"], "").strip()
     u_height = safe_int(raw_u_height) or 1
 
     # Resolver DeviceType.

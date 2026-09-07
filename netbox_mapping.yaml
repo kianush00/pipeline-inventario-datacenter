@@ -48,7 +48,7 @@ csv_column_aliases:
   serial: &col_serial "Serial Number"
   asset_tag: &col_asset_tag "Nro Inventario"
   pos_u: &col_pos_u "Posicion (U)"
-  alt_u: &col_alt_u "Altura (U)"
+  alt_u: "Altura (U)"
   desc: &col_desc "Descripcion"
   notes: &col_notas "Notas"
   env: &col_entorno "Entorno"
@@ -447,11 +447,6 @@ device_native_mappings:
 
   - source: *col_pos_u
     target: "position"
-    is_optional: true
-    cast: "int"
-
-  - source: *col_alt_u
-    target: "_u_height"
     is_optional: true
     cast: "int"
 
