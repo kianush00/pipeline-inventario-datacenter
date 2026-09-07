@@ -1825,24 +1825,25 @@ def _resolve_netbox_status(
 
 
 def _resolve_platform(
-    endpoints: NetBoxEndpoints,
+    plt_endpoint: Endpoint,
     row: CsvRow,
     payload: NetBoxPayload,
-    caches: CacheStore,
+    plt_cache: dict[str, NetBoxObject],
     dry_run: bool,
     config: NetBoxMappingConfig,
 ) -> None:
     """Resuelve el Platform desde la columna OS y lo agrega al payload si existe."""
-    platform_name = row.get(config.columns["os"], "").strip()
-    if not config.is_empty(platform_name):
-        platforms_cache = caches.platforms
-        platform = ensure_platform(
-            endpoints.platforms,
-            platform_name,
-            platforms_cache,
-            dry_run,
-        )
-        payload["platform"] = get_netbox_object_id(platform)
+    plt_name = row.get(config.columns["os"], "").strip()
+    if config.is_empty(plt_name):
+        return
+
+    platform = ensure_platform(
+        plt_endpoint,
+        plt_name,
+        plt_cache,
+        dry_run,
+    )
+    payload["platform"] = get_netbox_object_id(platform)
 
 
 def _resolve_host_device(
@@ -1931,14 +1932,17 @@ def _find_existing_object(
     existing: list[Record] = []
     found_by_uuid = False
     found_by_name = False
+
     if not config.is_empty(uuid):
         existing = list(endpoint.filter(cf_inventory_uuid=uuid))
         found_by_uuid = bool(existing)
+
     if not existing:
         existing_by_name: list[Record] = list(endpoint.filter(name=machine_name))
         found_by_name = bool(existing_by_name)
         if found_by_name:
             existing = existing_by_name
+
     return existing, found_by_uuid, found_by_name
 
 
@@ -2021,34 +2025,34 @@ def _apply_sync(
     uuid = raw_uuid or "N/A"
 
     if dry_run:
-        if existing:
-            existing_id = get_netbox_object_id(existing[0])
-            diff = _check_record_changes(existing[0], payload)
-            if diff:
-                log.info(
-                    "[DRY-RUN] Actualizaría %s: %s (UUID=%s) - Cambios: %s",
-                    object_label,
-                    machine_name,
-                    uuid,
-                    list(diff.keys()),
-                )
-                return "UPDATED", existing_id
-            else:
-                log.info(
-                    "[DRY-RUN] UNCHANGED %s: %s (UUID=%s)",
-                    object_label,
-                    machine_name,
-                    uuid,
-                )
-                return "UNCHANGED", existing_id
+        if not existing:
+            log.info(
+                "[DRY-RUN] Crearía %s: %s (UUID=%s)",
+                object_label,
+                machine_name,
+                uuid,
+            )
+            return "CREATED", 0
+
+        existing_id = get_netbox_object_id(existing[0])
+        diff = _check_record_changes(existing[0], payload)
+        if diff:
+            log.info(
+                "[DRY-RUN] Actualizaría %s: %s (UUID=%s) - Cambios: %s",
+                object_label,
+                machine_name,
+                uuid,
+                list(diff.keys()),
+            )
+            return "UPDATED", existing_id
 
         log.info(
-            "[DRY-RUN] Crearía %s: %s (UUID=%s)",
+            "[DRY-RUN] UNCHANGED %s: %s (UUID=%s)",
             object_label,
             machine_name,
             uuid,
         )
-        return "CREATED", 0
+        return "UNCHANGED", existing_id
 
     if not existing:
         try:
@@ -2066,9 +2070,9 @@ def _apply_sync(
         if updated:
             log.info("UPDATED %s: %s", object_label, machine_name)
             return "UPDATED", existing_id
-        else:
-            log.info("UNCHANGED %s: %s", object_label, machine_name)
-            return "UNCHANGED", existing_id
+
+        log.info("UNCHANGED %s: %s", object_label, machine_name)
+        return "UNCHANGED", existing_id
     except Exception:
         log.exception(
             "ERROR actualizando %s %s",
@@ -2154,7 +2158,9 @@ def sync_device(
     payload["device_type"] = get_netbox_object_id(device_type)
 
     # Platform.
-    _resolve_platform(endpoints, row, payload, caches, dry_run, config)
+    _resolve_platform(
+        endpoints.platforms, row, payload, caches.platforms, dry_run, config
+    )
 
     # Rack.
     rack_name: str = row.get(columns["rack"], "").strip()
@@ -2271,7 +2277,9 @@ def sync_vm(
     payload["role"] = get_netbox_object_id(role_obj)
 
     # Platform.
-    _resolve_platform(endpoints, row, payload, caches, dry_run, config)
+    _resolve_platform(
+        endpoints.platforms, row, payload, caches.platforms, dry_run, config
+    )
 
     # Cluster.
     host_name: str = row.get(columns["cluster"], "").strip()
