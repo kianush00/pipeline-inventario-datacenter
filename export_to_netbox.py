@@ -1514,6 +1514,84 @@ def ensure_custom_fields(
 # ============================================================
 
 
+def _resolve_default_or_empty(default: FieldValue, is_optional: bool) -> FieldValue:
+    """Centraliza la política de fallback (default > None > cadena vacía)."""
+    if default is not None:
+        return default
+    return None if is_optional else ""
+
+
+def _extract_concat_dot_value(
+    row: CsvRow,
+    source: list[str],
+    config: NetBoxMappingConfig,
+) -> str:
+    """Resuelve un campo multi-columna vía concatenación con punto."""
+    parts = [row.get(s, "") for s in source]
+    return concat_dot(parts, config)
+
+
+def _extract_raw_source_value(row: CsvRow, source: str | list[str]) -> str:
+    """Extrae el valor crudo de la(s) columna(s) origen, sin transformar."""
+    if isinstance(source, str):
+        return row.get(source, "")
+    return row.get(source[0], "") if source else ""
+
+
+def _apply_value_map(
+    value: str,
+    map_key: str,
+    config: NetBoxMappingConfig,
+    source: str | list[str],
+) -> FieldValue:
+    """
+    Aplica el mapeo declarativo (ej. environment_map) sobre un valor crudo.
+    Retorna None si el valor no está definido en el mapa (miss).
+    """
+    mapped = config.get_map(map_key).get(value.strip())
+    if mapped is None:
+        log.warning(
+            "Valor '%s' de la columna '%s' no está definido en '%s'; "
+            "el campo se omitirá para esta fila.",
+            value,
+            source,
+            map_key,
+        )
+    return mapped
+
+
+def _validate_select_choice(
+    value: FieldValue,
+    custom_field_def: CustomFieldConfig | None,
+    target: str,
+    is_optional: bool,
+) -> FieldValue:
+    """
+    Valida value contra choice_set cuando el Custom Field es de tipo
+    'select'. No-op para cualquier otro tipo de campo.
+    """
+    if not (
+        custom_field_def
+        and custom_field_def.type == "select"
+        and custom_field_def.choice_set
+    ):
+        return value
+
+    valid_choices = [c.value for c in custom_field_def.choice_set.choices]
+    if value in valid_choices:
+        return value
+
+    log.warning(
+        "Valor '%s' no es válido para el Custom Field '%s'. Opciones válidas: %s.",
+        value,
+        target,
+        valid_choices,
+    )
+    if is_optional:
+        return None
+    raise ValueError(f"Valor inválido '{value}' para el campo requerido '{target}'.")
+
+
 def _resolve_field_value(
     row: CsvRow,
     field_def: FieldMappingConfig,
@@ -1521,90 +1599,40 @@ def _resolve_field_value(
 ) -> FieldValue:
     """
     Resuelve el valor de un campo según su definición tipada en el YAML.
-
-    Los valores específicos del origen se obtienen desde field_def.
-    Los atributos globales del Custom Field, como 'default', se
-    obtienen desde la definición global del Custom Field.
+    Orquesta las etapas (extracción, mapeo, validación de choices, cast)
+    delegando cada una a una función de responsabilidad única; corta
+    temprano (fail-fast) en cuanto una etapa determina el valor final.
     """
     source = field_def.source
     target = field_def.target
     is_optional = field_def.is_optional
-    transform = field_def.transform
-    cast_type = field_def.cast
-    map_key = field_def.map
-
     custom_field_def = config.get_custom_field_def(target)
-    default = (
-        getattr(custom_field_def, "default", None)
-        if custom_field_def is not None
-        else None
-    )
+    default = custom_field_def.default if custom_field_def is not None else None
 
-    # Transformación multi-source (concat_dot).
-    if isinstance(source, list) and transform == "concat_dot":
-        parts = [row.get(s, "") for s in source]
-        value = concat_dot(parts, config)
+    # Ruta independiente: multi-columna con concatenación no pasa por
+    # map/select/cast, igual que en el comportamiento original.
+    if isinstance(source, list) and field_def.transform == "concat_dot":
+        value = _extract_concat_dot_value(row, source, config)
+        if value:
+            return value
+        return _resolve_default_or_empty(default, is_optional)
 
-        if not value:
-            if default is not None:
-                return default
-            if is_optional:
-                return None
+    raw_value = _extract_raw_source_value(row, source)
+    if config.is_empty(raw_value):
+        return _resolve_default_or_empty(default, is_optional)
 
-        return value
+    value: FieldValue = raw_value
 
-    # Campo simple (source es str o list sin transform).
-    if isinstance(source, str):
-        value = row.get(source, "")
-    else:
-        value = row.get(source[0], "") if source else ""
-
-    if config.is_empty(value):
-        if default is not None:
-            return default
-        return None if is_optional else ""
-
-    # Mapeo de valores (ej. environment_map).
-    if map_key:
-        mapping_dict = config.get_map(map_key)
-        mapped = mapping_dict.get(value.strip())
+    if field_def.map:
+        mapped = _apply_value_map(raw_value, field_def.map, config, source)
         if mapped is None:
-            log.warning(
-                "Valor '%s' de la columna '%s' no está definido en '%s'; "
-                "el campo se omitirá para esta fila.",
-                value,
-                source,
-                map_key,
-            )
-            if default is not None:
-                return default
-            return None if is_optional else ""
+            return _resolve_default_or_empty(default, is_optional)
         value = mapped
 
-    # Validación Temprana (Fail-Fast) para Custom Fields de tipo 'select'
-    if (
-        custom_field_def
-        and custom_field_def.type == "select"
-        and custom_field_def.choice_set
-    ):
-        valid_choices = [c.value for c in custom_field_def.choice_set.choices]
-        if value not in valid_choices:
-            log.warning(
-                "Valor '%s' no es válido para el Custom Field '%s'. "
-                "Opciones válidas: %s.",
-                value,
-                target,
-                valid_choices,
-            )
-            if is_optional:
-                return None
-            raise ValueError(
-                f"Valor inválido '{value}' para el campo requerido '{target}'."
-            )
+    value = _validate_select_choice(value, custom_field_def, target, is_optional)
 
-    # Cast de tipo.
-    if cast_type:
-        value = apply_cast(value, cast_type)
+    if field_def.cast:
+        value = apply_cast(value, field_def.cast)
 
     return value
 
