@@ -269,33 +269,24 @@ class FieldMappingConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_transform_and_source(self) -> "FieldMappingConfig":
-        if self.transform == "concat_dot":
-            if not isinstance(self.source, list) or len(self.source) < 1:
-                raise ValueError(
-                    f"El transform 'concat_dot' para target '{self.target}' "
-                    "requiere que 'source' sea una lista no vacía."
-                )
-            for s in self.source:
-                if not isinstance(s, str) or not s.strip():
-                    raise ValueError(
-                        f"En 'source' para transform 'concat_dot' (target '{self.target}'), "
-                        "ningún elemento puede estar vacío."
-                    )
-        elif isinstance(self.source, str):
-            if not self.source.strip():
-                raise ValueError(
-                    f"El campo 'source' para target '{self.target}' no puede estar vacío."
-                )
-        elif isinstance(self.source, list):
-            if not self.source:
-                raise ValueError(
-                    f"El campo 'source' para target '{self.target}' no puede ser una lista vacía."
-                )
-            for s in self.source:
-                if not isinstance(s, str) or not s.strip():
-                    raise ValueError(
-                        f"En 'source' (target '{self.target}'), ningún elemento puede estar vacío."
-                    )
+        source_list = self.source if isinstance(self.source, list) else [self.source]
+
+        if not source_list:
+            raise ValueError(
+                f"El campo 'source' para target '{self.target}' no puede estar vacío."
+            )
+
+        if any(not s.strip() for s in source_list):
+            raise ValueError(
+                f"En 'source' (target '{self.target}'), ningún elemento puede estar vacío."
+            )
+
+        if self.transform == "concat_dot" and not isinstance(self.source, list):
+            raise ValueError(
+                f"El transform 'concat_dot' para target '{self.target}' "
+                "requiere que 'source' sea explícitamente una lista."
+            )
+
         return self
 
 
@@ -879,6 +870,57 @@ def ensure_cluster_type(
     return obj
 
 
+def _sync_single_device_role(
+    endpoints: NetBoxEndpoints,
+    role_def: DeviceRoleConfig,
+    device_roles_cache: dict[str, NetBoxObject],
+    dry_run: bool,
+) -> None:
+    """Sincroniza un único DeviceRole y asegura que permita VMs."""
+    name = role_def.name
+    key = name.lower()
+
+    if key in device_roles_cache:
+        return
+
+    results: list[Record] = list(endpoints.device_roles.filter(name=name))
+    if results:
+        role_obj = results[0]
+        if not getattr(role_obj, "vm_role", False):
+            if dry_run:
+                log.info("[DRY-RUN] Actualizaría DeviceRole para permitir VM: %s", name)
+            else:
+                try:
+                    role_obj.update({"vm_role": True})
+                    log.info("DeviceRole actualizado para permitir VM: %s", name)
+                except Exception:
+                    log.exception("Error actualizando DeviceRole '%s'", name)
+                    return
+
+        device_roles_cache[key] = role_obj
+        return
+
+    if dry_run:
+        log.info("[DRY-RUN] Crearía DeviceRole: %s", name)
+        device_roles_cache[key] = MockNetBoxRecord(id=0, name=name, vm_role=True)
+        return
+
+    try:
+        obj = cast(
+            Record,
+            endpoints.device_roles.create(
+                name=name,
+                slug=role_def.slug or slugify(name),
+                color=role_def.color,
+                vm_role=True,
+            ),
+        )
+        log.info("DeviceRole creado: %s", name)
+        device_roles_cache[key] = obj
+    except Exception:
+        log.exception("Error creando DeviceRole '%s'", name)
+
+
 def ensure_all_device_roles(
     endpoints: NetBoxEndpoints,
     device_roles: list[DeviceRoleConfig],
@@ -892,69 +934,7 @@ def ensure_all_device_roles(
     Puebla caches.device_roles con {nombre_lower: objeto}.
     """
     for role_def in device_roles:
-        name = role_def.name
-        slug = role_def.slug or slugify(name)
-        color = role_def.color
-        key = name.lower()
-
-        if key in device_roles_cache:
-            continue
-
-        results: list[Record] = list(endpoints.device_roles.filter(name=name))
-        if results:
-            role_obj = results[0]
-
-            if not getattr(role_obj, "vm_role", False):
-                if dry_run:
-                    log.info(
-                        "[DRY-RUN] Actualizaría DeviceRole para permitir VM: %s",
-                        name,
-                    )
-                else:
-                    try:
-                        role_obj.update({"vm_role": True})
-                        log.info(
-                            "DeviceRole actualizado para permitir VM: %s",
-                            name,
-                        )
-                    except Exception:
-                        log.exception(
-                            "Error actualizando DeviceRole '%s'",
-                            name,
-                        )
-                        continue
-
-            device_roles_cache[key] = role_obj
-            continue
-
-        if dry_run:
-            log.info("[DRY-RUN] Crearía DeviceRole: %s", name)
-            device_roles_cache[key] = MockNetBoxRecord(
-                id=0,
-                name=name,
-                vm_role=True,
-            )
-            continue
-
-        try:
-            obj = cast(
-                Record,
-                endpoints.device_roles.create(
-                    name=name,
-                    slug=slug,
-                    color=color,
-                    vm_role=True,
-                ),
-            )
-        except Exception:
-            log.exception(
-                "Error creando DeviceRole '%s'",
-                name,
-            )
-            continue
-
-        log.info("DeviceRole creado: %s", name)
-        device_roles_cache[key] = obj
+        _sync_single_device_role(endpoints, role_def, device_roles_cache, dry_run)
 
 
 def ensure_manufacturer(
