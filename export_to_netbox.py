@@ -1912,6 +1912,31 @@ def _resolve_device_role(
 # ============================================================
 
 
+def _check_missing_core_fields(
+    machine_name: str,
+    machine_type: str,
+    columns: dict[str, str],
+    config: NetBoxMappingConfig,
+) -> bool:
+    """
+    Verifica si faltan campos principales requeridos (nombre o tipo).
+    Retorna True si falta alguno y registra la advertencia (SKIP).
+    """
+    if config.is_empty(machine_name) or config.is_empty(machine_type):
+        empty_field = (
+            columns["machine_name"]
+            if config.is_empty(machine_name)
+            else columns["machine_type"]
+        )
+        log.warning(
+            "SKIP (%s): campo requerido '%s' vacío.",
+            machine_name or "N/A",
+            empty_field,
+        )
+        return True
+    return False
+
+
 def _find_existing_object(
     uuid: str,
     machine_name: str,
@@ -2088,29 +2113,47 @@ def _apply_sync(
         return "ERROR", None
 
 
-def _check_missing_core_fields(
+def _execute_sync(
+    endpoint: Endpoint,
+    payload: NetBoxPayload,
     machine_name: str,
-    machine_type: str,
-    columns: dict[str, str],
+    uuid: str,
+    csv_name_counts: Counter[str],
     config: NetBoxMappingConfig,
-) -> bool:
-    """
-    Verifica si faltan campos principales requeridos (nombre o tipo).
-    Retorna True si falta alguno y registra la advertencia (SKIP).
-    """
-    if config.is_empty(machine_name) or config.is_empty(machine_type):
-        empty_field = (
-            columns["machine_name"]
-            if config.is_empty(machine_name)
-            else columns["machine_type"]
+    dry_run: bool,
+) -> SyncResult:
+    """Busca un objeto en NetBox, valida su unicidad si coincide por nombre y ejecuta la sincronización."""
+    try:
+        existing, found_by_uuid, found_by_name = _find_existing_object(
+            uuid,
+            machine_name,
+            endpoint,
+            config,
         )
-        log.warning(
-            "SKIP (%s): campo requerido '%s' vacío.",
-            machine_name or "N/A",
-            empty_field,
+    except Exception:
+        object_label = _get_object_label(endpoint)
+        log.exception(
+            "ERROR buscando %s '%s' (UUID=%s)",
+            object_label,
+            machine_name,
+            uuid or "N/A",
         )
-        return True
-    return False
+        return "ERROR", None
+
+    matched_by_name_only = found_by_name and not found_by_uuid
+    if matched_by_name_only and not _is_name_safely_unique(
+        endpoint, existing, machine_name, csv_name_counts
+    ):
+        return "SKIPPED", None
+
+    return _apply_sync(
+        endpoint,
+        payload,
+        existing,
+        machine_name,
+        uuid,
+        dry_run,
+    )
 
 
 def sync_device(
@@ -2152,52 +2195,16 @@ def sync_device(
 
     payload["role"] = get_netbox_object_id(role_obj)
 
-    # Manufacturer y DeviceType.
-    marca: str = row.get(columns["manufacturer"], "").strip()
-    modelo: str = row.get(columns["model"], "").strip()
-    if config.is_empty(marca) or config.is_empty(modelo):
-        log.warning("SKIP (%s): sin Marca o Modelo.", machine_name)
-        return "SKIPPED", None
-    manufacturer = ensure_manufacturer(
-        endpoints.manufacturers,
-        marca,
-        caches.manufacturers,
-        dry_run,
-    )
-    raw_u_height = row.get(columns["alt_u"], "").strip()
-    u_height = safe_int(raw_u_height) or 1
-
-    # Resolver DeviceType.
-    device_type = ensure_device_type(
-        endpoints.device_types,
-        manufacturer,
-        modelo,
-        u_height,
-        caches.device_types,
-        dry_run,
-    )
-    payload["device_type"] = get_netbox_object_id(device_type)
-
     # Platform.
     _resolve_platform(
         endpoints.platforms, row, payload, caches.platforms, dry_run, config
     )
 
-    # Rack.
-    rack_name: str = row.get(columns["rack"], "").strip()
-    if not config.is_empty(rack_name):
-        rack = ensure_rack(
-            endpoints.racks,
-            rack_name,
-            site,
-            caches.racks,
-            dry_run,
-        )
-        payload["rack"] = get_netbox_object_id(rack)
-
-    # Campos obligatorios.
-    payload["site"] = get_netbox_object_id(site)
+    # Estado.
     payload["status"] = _resolve_netbox_status(row, config, "device", columns)
+
+    # Site.
+    payload["site"] = get_netbox_object_id(site)
 
     # Cluster para hipervisores.
     if machine_type == "Hipervisor":
@@ -2211,37 +2218,53 @@ def sync_device(
         )
         payload["cluster"] = get_netbox_object_id(cluster)
 
-    # ── GET o CREATE/UPDATE ──────────────────────────────────
-    try:
-        existing, found_by_uuid, found_by_name = _find_existing_object(
-            uuid,
-            machine_name,
-            endpoints.devices,
-            config,
-        )
-    except Exception:
-        log.exception(
-            "ERROR buscando device '%s' (UUID=%s)",
-            machine_name,
-            uuid or "N/A",
-        )
-        return "ERROR", None
-
-    # Si se encuentra por nombre pero no por UUID, y el nombre no es único
-    # en el CSV, se omite el registro para evitar sobrescritura.
-    matched_by_name_only = found_by_name and not found_by_uuid
-    if matched_by_name_only and not _is_name_safely_unique(
-        endpoints.devices, existing, machine_name, csv_name_counts
-    ):
+    # Manufacturer.
+    manufacturer: str = row.get(columns["manufacturer"], "").strip()
+    model: str = row.get(columns["model"], "").strip()
+    if config.is_empty(manufacturer) or config.is_empty(model):
+        log.warning("SKIP (%s): sin Marca o Modelo.", machine_name)
         return "SKIPPED", None
 
-    # Si no hay conflicto, se crea o actualiza.
-    return _apply_sync(
+    manufacturer_obj = ensure_manufacturer(
+        endpoints.manufacturers,
+        manufacturer,
+        caches.manufacturers,
+        dry_run,
+    )
+    raw_u_height = row.get(columns["alt_u"], "").strip()
+    u_height = safe_int(raw_u_height) or 1
+
+    # Rack.
+    rack_name: str = row.get(columns["rack"], "").strip()
+    if not config.is_empty(rack_name):
+        rack = ensure_rack(
+            endpoints.racks,
+            rack_name,
+            site,
+            caches.racks,
+            dry_run,
+        )
+        payload["rack"] = get_netbox_object_id(rack)
+
+    # Resolver DeviceType.
+    device_type = ensure_device_type(
+        endpoints.device_types,
+        manufacturer_obj,
+        model,
+        u_height,
+        caches.device_types,
+        dry_run,
+    )
+    payload["device_type"] = get_netbox_object_id(device_type)
+
+    # ── GET o CREATE/UPDATE ──────────────────────────────────
+    return _execute_sync(
         endpoints.devices,
         payload,
-        existing,
         machine_name,
         uuid,
+        csv_name_counts,
+        config,
         dry_run,
     )
 
@@ -2277,6 +2300,7 @@ def sync_vm(
         config,
     )
 
+    # ── Resolución de objetos relacionados ──────────────────
     # Role.
     rol_csv: str = row.get(columns["role"], "").strip()
     role_obj = _resolve_device_role(rol_csv, caches.device_roles, config)
@@ -2294,6 +2318,13 @@ def sync_vm(
         endpoints.platforms, row, payload, caches.platforms, dry_run, config
     )
 
+    # Estado.
+    payload["status"] = _resolve_netbox_status(row, config, "virtual_machine", columns)
+
+    # Site.
+    site_id = get_netbox_object_id(site)
+    payload["site"] = site_id
+
     # Cluster.
     host_name: str = row.get(columns["cluster"], "").strip()
     if config.is_empty(host_name):
@@ -2309,10 +2340,6 @@ def sync_vm(
     )
     payload["cluster"] = get_netbox_object_id(cluster)
 
-    # Campos obligatorios.
-    site_id = get_netbox_object_id(site)
-    payload["site"] = site_id
-
     # Device del hipervisor host (acotado a site y cacheado).
     host_dev_id = _resolve_host_device(
         endpoints.devices,
@@ -2323,14 +2350,6 @@ def sync_vm(
     if host_dev_id is not None:
         payload["device"] = host_dev_id
 
-    # Estado.
-    payload["status"] = _resolve_netbox_status(
-        row,
-        config,
-        "virtual_machine",
-        columns,
-    )
-
     # vcpus.
     cores: str = row.get(columns["cores"], "").strip()
     cores_int = safe_int(cores)
@@ -2338,32 +2357,13 @@ def sync_vm(
         payload["vcpus"] = float(cores_int)
 
     # ── GET o CREATE/UPDATE ──────────────────────────────────
-    try:
-        existing, found_by_uuid, found_by_name = _find_existing_object(
-            uuid,
-            machine_name,
-            endpoints.virtual_machines,
-            config,
-        )
-    except Exception:
-        log.exception("ERROR buscando VM '%s' (UUID=%s)", machine_name, uuid or "N/A")
-        return "ERROR", None
-
-    # Si se encuentra por nombre pero no por UUID, y el nombre no es único
-    # en el CSV, se omite el registro para evitar sobrescritura.
-    matched_by_name_only = found_by_name and not found_by_uuid
-    if matched_by_name_only and not _is_name_safely_unique(
-        endpoints.virtual_machines, existing, machine_name, csv_name_counts
-    ):
-        return "SKIPPED", None
-
-    # Si no hay conflicto, se crea o actualiza.
-    return _apply_sync(
+    return _execute_sync(
         endpoints.virtual_machines,
         payload,
-        existing,
         machine_name,
         uuid,
+        csv_name_counts,
+        config,
         dry_run,
     )
 
