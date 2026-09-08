@@ -51,7 +51,7 @@ import re
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Any, Literal, TypeAlias, TypedDict, cast
+from typing import Any, Literal, NoReturn, TypeAlias, TypedDict, cast
 
 import requests
 import urllib3
@@ -1827,15 +1827,14 @@ def _resolve_netbox_status(
 def _resolve_platform(
     plt_endpoint: Endpoint,
     row: CsvRow,
-    payload: NetBoxPayload,
     plt_cache: dict[str, NetBoxObject],
     dry_run: bool,
     config: NetBoxMappingConfig,
-) -> None:
-    """Resuelve el Platform desde la columna OS y lo agrega al payload si existe."""
+) -> int | None:
+    """Resuelve el Platform desde la columna OS y retorna su ID (si existe)."""
     plt_name = row.get(config.columns["os"], "").strip()
     if config.is_empty(plt_name):
-        return
+        return None
 
     platform = ensure_platform(
         plt_endpoint,
@@ -1843,7 +1842,7 @@ def _resolve_platform(
         plt_cache,
         dry_run,
     )
-    payload["platform"] = get_netbox_object_id(platform)
+    return get_netbox_object_id(platform)
 
 
 def _resolve_host_device(
@@ -2188,21 +2187,22 @@ def sync_device(
 
     # ── Resolución de objetos relacionados ──────────────────
     # Role.
-    rol_csv: str = row.get(columns["role"], "").strip()
-    role_obj = _resolve_device_role(rol_csv, caches.device_roles, config)
+    role_csv: str = row.get(columns["role"], "").strip()
+    role_obj = _resolve_device_role(role_csv, caches.device_roles, config)
     if role_obj is None:
         log.error(
             "ERROR (%s): no existe el DeviceRole 'Others' en la configuración.",
             machine_name,
         )
         return "ERROR", None
-
     payload["role"] = get_netbox_object_id(role_obj)
 
     # Platform.
-    _resolve_platform(
-        endpoints.platforms, row, payload, caches.platforms, dry_run, config
+    platform_id = _resolve_platform(
+        endpoints.platforms, row, caches.platforms, dry_run, config
     )
+    if platform_id is not None:
+        payload["platform"] = platform_id
 
     # Estado.
     payload["status"] = _resolve_netbox_status(row, config, "device", columns)
@@ -2318,9 +2318,11 @@ def sync_vm(
     payload["role"] = get_netbox_object_id(role_obj)
 
     # Platform.
-    _resolve_platform(
-        endpoints.platforms, row, payload, caches.platforms, dry_run, config
+    platform_id = _resolve_platform(
+        endpoints.platforms, row, caches.platforms, dry_run, config
     )
+    if platform_id is not None:
+        payload["platform"] = platform_id
 
     # Estado.
     payload["status"] = _resolve_netbox_status(row, config, "virtual_machine", columns)
@@ -2493,6 +2495,31 @@ def sync_interfaces_for_object(
 # ============================================================
 
 
+def _print_summary_and_exit(
+    total_rows: int,
+    counts: SyncCounts,
+    dry_run: bool,
+) -> NoReturn:
+    """Imprime el resumen de la operación y finaliza la ejecución."""
+    summary = (
+        "\n" + "=" * 50 + "\n"
+        "Resumen de exportación a NetBox\n" + "=" * 50 + "\n"
+        f"  Total filas procesadas : {total_rows}\n"
+        f"  Creados                : {counts['CREATED']}\n"
+        f"  Actualizados           : {counts['UPDATED']}\n"
+        f"  Sin cambios            : {counts['UNCHANGED']}\n"
+        f"  Omitidos (SKIP)        : {counts['SKIPPED']}\n"
+        f"  Errores                : {counts['ERROR']}\n" + "=" * 50
+    )
+
+    if dry_run:
+        summary += "\n(Modo DRY-RUN: no se realizaron cambios en NetBox)"
+
+    log.info(summary)
+
+    sys.exit(0 if counts["ERROR"] == 0 else 1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Exporta merged_inventory.csv a NetBox 4.6+"
@@ -2586,15 +2613,15 @@ def main() -> None:
 
     # ── Procesar filas ───────────────────────────────────────
     for row_num, row in enumerate(rows, start=2):
-        raw_type = row.get(columns["machine_type"], "").strip()
-        node_type: NodeType | None = config.machine_type_map.get(raw_type)
+        type_csv = row.get(columns["machine_type"], "").strip()
+        node_type: NodeType | None = config.machine_type_map.get(type_csv)
 
         if node_type is None:
             log.warning(
                 "Fila %d SKIP: %s '%s' no está en machine_type_map.",
                 row_num,
                 columns["machine_type"],
-                raw_type,
+                type_csv,
             )
             counts["SKIPPED"] += 1
             continue
@@ -2680,23 +2707,7 @@ def main() -> None:
             counts["ERROR"] += 1
 
     # ── Resumen ──────────────────────────────────────────────
-    resumen = (
-        "\n" + "=" * 50 + "\n"
-        "Resumen de exportación a NetBox\n" + "=" * 50 + "\n"
-        f"  Total filas procesadas : {len(rows)}\n"
-        f"  Creados                : {counts['CREATED']}\n"
-        f"  Actualizados           : {counts['UPDATED']}\n"
-        f"  Sin cambios            : {counts['UNCHANGED']}\n"
-        f"  Omitidos (SKIP)        : {counts['SKIPPED']}\n"
-        f"  Errores                : {counts['ERROR']}\n" + "=" * 50
-    )
-
-    if args.dry_run:
-        resumen += "\n(Modo DRY-RUN: no se realizaron cambios en NetBox)"
-
-    log.info(resumen)
-
-    sys.exit(0 if counts["ERROR"] == 0 else 1)
+    _print_summary_and_exit(len(rows), counts, args.dry_run)
 
 
 if __name__ == "__main__":
