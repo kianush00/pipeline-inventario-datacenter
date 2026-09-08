@@ -865,74 +865,6 @@ def ensure_cluster_type(
     return obj
 
 
-def _sync_single_device_role(
-    endpoints: NetBoxEndpoints,
-    role_def: DeviceRoleConfig,
-    device_roles_cache: dict[str, NetBoxObject],
-    dry_run: bool,
-) -> None:
-    """Sincroniza un único DeviceRole y asegura que permita VMs."""
-    name = role_def.name
-    key = name.lower()
-
-    if key in device_roles_cache:
-        return
-
-    results: list[Record] = list(endpoints.device_roles.filter(name=name))
-    if results:
-        role_obj = results[0]
-        if not getattr(role_obj, "vm_role", False):
-            if dry_run:
-                log.info("[DRY-RUN] Actualizaría DeviceRole para permitir VM: %s", name)
-            else:
-                try:
-                    role_obj.update({"vm_role": True})
-                    log.info("DeviceRole actualizado para permitir VM: %s", name)
-                except Exception:
-                    log.exception("Error actualizando DeviceRole '%s'", name)
-                    return
-
-        device_roles_cache[key] = role_obj
-        return
-
-    if dry_run:
-        log.info("[DRY-RUN] Crearía DeviceRole: %s", name)
-        device_roles_cache[key] = MockNetBoxRecord(id=0, name=name, vm_role=True)
-        return
-
-    try:
-        slug = role_def.slug or slugify(name)
-        obj = cast(
-            Record,
-            endpoints.device_roles.create(
-                name=name,
-                slug=slug,
-                color=role_def.color,
-                vm_role=True,
-            ),
-        )
-        log.info("DeviceRole creado: %s", name)
-        device_roles_cache[key] = obj
-    except Exception:
-        log.exception("Error creando DeviceRole '%s'", name)
-
-
-def ensure_all_device_roles(
-    endpoints: NetBoxEndpoints,
-    device_roles: list[DeviceRoleConfig],
-    device_roles_cache: dict[str, NetBoxObject],
-    dry_run: bool,
-) -> None:
-    """
-    Garantiza que todos los device roles definidos en el YAML
-    existen en NetBox (/api/dcim/device-roles/).
-    Todos los roles se habilitan para su uso en Virtual Machines.
-    Puebla caches.device_roles con {nombre_lower: objeto}.
-    """
-    for role_def in device_roles:
-        _sync_single_device_role(endpoints, role_def, device_roles_cache, dry_run)
-
-
 def ensure_manufacturer(
     manufacturers_endpoint: Endpoint,
     name: str,
@@ -1253,6 +1185,74 @@ def ensure_cluster(
     return obj
 
 
+def _sync_single_device_role(
+    endpoints: NetBoxEndpoints,
+    role_def: DeviceRoleConfig,
+    device_roles_cache: dict[str, NetBoxObject],
+    dry_run: bool,
+) -> None:
+    """Sincroniza un único DeviceRole y asegura que permita VMs."""
+    name = role_def.name
+    key = name.lower()
+
+    if key in device_roles_cache:
+        return
+
+    results: list[Record] = list(endpoints.device_roles.filter(name=name))
+    if results:
+        role_obj = results[0]
+        if not getattr(role_obj, "vm_role", False):
+            if dry_run:
+                log.info("[DRY-RUN] Actualizaría DeviceRole para permitir VM: %s", name)
+            else:
+                try:
+                    role_obj.update({"vm_role": True})
+                    log.info("DeviceRole actualizado para permitir VM: %s", name)
+                except Exception:
+                    log.exception("Error actualizando DeviceRole '%s'", name)
+                    return
+
+        device_roles_cache[key] = role_obj
+        return
+
+    if dry_run:
+        log.info("[DRY-RUN] Crearía DeviceRole: %s", name)
+        device_roles_cache[key] = MockNetBoxRecord(id=0, name=name, vm_role=True)
+        return
+
+    try:
+        slug = role_def.slug or slugify(name)
+        obj = cast(
+            Record,
+            endpoints.device_roles.create(
+                name=name,
+                slug=slug,
+                color=role_def.color,
+                vm_role=True,
+            ),
+        )
+        log.info("DeviceRole creado: %s", name)
+        device_roles_cache[key] = obj
+    except Exception:
+        log.exception("Error creando DeviceRole '%s'", name)
+
+
+def ensure_all_device_roles(
+    endpoints: NetBoxEndpoints,
+    device_roles: list[DeviceRoleConfig],
+    device_roles_cache: dict[str, NetBoxObject],
+    dry_run: bool,
+) -> None:
+    """
+    Garantiza que todos los device roles definidos en el YAML
+    existen en NetBox (/api/dcim/device-roles/).
+    Todos los roles se habilitan para su uso en Virtual Machines.
+    Puebla caches.device_roles con {nombre_lower: objeto}.
+    """
+    for role_def in device_roles:
+        _sync_single_device_role(endpoints, role_def, device_roles_cache, dry_run)
+
+
 # ============================================================
 # CUSTOM FIELDS: ensure_custom_fields
 # ============================================================
@@ -1511,6 +1511,131 @@ def ensure_custom_fields(
 
 
 # ============================================================
+# PARSEO DE INTERFACES y IPs
+# ============================================================
+
+
+def _validate_interface_ip(ip_raw: str, name: str) -> str | None:
+    """Valida que un string sea una dirección IP correcta."""
+    try:
+        ipaddress.ip_address(ip_raw)
+        return ip_raw
+    except ValueError:
+        log.warning(
+            "IP '%s' en interfaz '%s' no es una dirección IP válida; "
+            "se omitirá la asignación de IP.",
+            ip_raw,
+            name,
+        )
+        return None
+
+
+def _build_interface_cidr(ip_val: str, pfx_val: str, name: str) -> str | None:
+    """Valida IP y prefijo construyendo una dirección CIDR válida."""
+    try:
+        mask_or_prefix = (
+            pfx_val.split("/")[1].strip() if "/" in pfx_val else pfx_val.strip()
+        )
+        return str(ipaddress.ip_interface(f"{ip_val}/{mask_or_prefix}"))
+    except ValueError:
+        log.warning(
+            "Prefijo o CIDR inválido '%s' para IP '%s' en interfaz '%s'.",
+            pfx_val,
+            ip_val,
+            name,
+        )
+        return None
+
+
+def _parse_single_network_interface(
+    name: str,
+    status_raw: str,
+    ip_raw: str,
+    pfx_raw: str,
+    mac_raw: str,
+    status_map: dict[str, bool],
+    config: NetBoxMappingConfig,
+) -> NetworkInterfaceData | None:
+    """Parsea una única interfaz aislando la lógica de validación de IPs."""
+    if config.is_empty(name):
+        return None
+
+    enabled = status_map.get(status_raw.lower().strip(), True)
+    ip_val = ip_raw if not config.is_empty(ip_raw) else None
+    pfx_val = pfx_raw if not config.is_empty(pfx_raw) else None
+    mac_val = mac_raw if not config.is_empty(mac_raw) else None
+
+    cidr = None
+    if ip_val:
+        ip_val = _validate_interface_ip(ip_val, name)
+        if ip_val and pfx_val:
+            cidr = _build_interface_cidr(ip_val, pfx_val, name)
+
+    return {
+        "name": name,
+        "enabled": enabled,
+        "mac": mac_val,
+        "ip": ip_val,
+        "prefix": pfx_val,
+        "cidr": cidr,
+    }
+
+
+def parse_network_interfaces(
+    row: CsvRow,
+    config: NetBoxMappingConfig,
+) -> list[NetworkInterfaceData] | None:
+    """
+    Parsea las columnas de red del CSV y devuelve una lista de interfaces.
+    Retorna None si los arrays (listas tras el split) tienen longitudes distintas.
+    """
+    net_cfg = config.network
+    cols = net_cfg.columns
+
+    def split_col(col_name: str) -> list[str]:
+        raw = row.get(col_name, "")
+        return [v.strip() for v in raw.split(",")] if not config.is_empty(raw) else []
+
+    names = split_col(cols.names)
+    if not names:
+        return []
+
+    statuses = split_col(cols.status)
+    ips = split_col(cols.ip)
+    prefixes = split_col(cols.prefix)
+    macs = split_col(cols.mac)
+
+    max_len = len(names)
+    for lst in (statuses, ips, prefixes, macs):
+        if lst and len(lst) != max_len:
+            return None  # Longitudes incompatibles
+
+    def fill_if_empty(lst: list[str], length: int) -> list[str]:
+        return lst if lst else [""] * length
+
+    statuses = fill_if_empty(statuses, max_len)
+    ips = fill_if_empty(ips, max_len)
+    prefixes = fill_if_empty(prefixes, max_len)
+    macs = fill_if_empty(macs, max_len)
+
+    interfaces: list[NetworkInterfaceData] = []
+    for i, name in enumerate(names):
+        parsed = _parse_single_network_interface(
+            name=name,
+            status_raw=statuses[i],
+            ip_raw=ips[i],
+            pfx_raw=prefixes[i],
+            mac_raw=macs[i],
+            status_map=net_cfg.interface_status_map,
+            config=config,
+        )
+        if parsed:
+            interfaces.append(parsed)
+
+    return interfaces
+
+
+# ============================================================
 # CONSTRUCCIÓN DE PAYLOAD
 # ============================================================
 
@@ -1640,8 +1765,8 @@ def _resolve_field_value(
 
 def build_payload(
     row: CsvRow,
-    field_defs: list[FieldMappingConfig],
-    cf_defs: list[FieldMappingConfig],
+    native_maps: list[FieldMappingConfig],
+    custom_maps: list[FieldMappingConfig],
     config: NetBoxMappingConfig,
 ) -> tuple[NetBoxPayload, CustomFieldsPayload]:
     """
@@ -1651,11 +1776,11 @@ def build_payload(
     payload: NetBoxPayload = {}
     cf_payload: CustomFieldsPayload = {}
 
-    for defs, target_dict, is_native in [
-        (field_defs, payload, True),
-        (cf_defs, cf_payload, False),
+    for maps, target_dict in [
+        (native_maps, payload),
+        (custom_maps, cf_payload),
     ]:
-        for fd in defs:
+        for fd in maps:
             value = _resolve_field_value(row, fd, config)
 
             # Sanitización dinámica de constraints UNIQUE dictadas por el YAML.
@@ -1670,131 +1795,6 @@ def build_payload(
         payload["custom_fields"] = cf_payload
 
     return payload, cf_payload
-
-
-# ============================================================
-# PARSEO DE INTERFACES y IPs
-# ============================================================
-
-
-def _validate_interface_ip(ip_raw: str, name: str) -> str | None:
-    """Valida que un string sea una dirección IP correcta."""
-    try:
-        ipaddress.ip_address(ip_raw)
-        return ip_raw
-    except ValueError:
-        log.warning(
-            "IP '%s' en interfaz '%s' no es una dirección IP válida; "
-            "se omitirá la asignación de IP.",
-            ip_raw,
-            name,
-        )
-        return None
-
-
-def _build_interface_cidr(ip_val: str, pfx_val: str, name: str) -> str | None:
-    """Valida IP y prefijo construyendo una dirección CIDR válida."""
-    try:
-        mask_or_prefix = (
-            pfx_val.split("/")[1].strip() if "/" in pfx_val else pfx_val.strip()
-        )
-        return str(ipaddress.ip_interface(f"{ip_val}/{mask_or_prefix}"))
-    except ValueError:
-        log.warning(
-            "Prefijo o CIDR inválido '%s' para IP '%s' en interfaz '%s'.",
-            pfx_val,
-            ip_val,
-            name,
-        )
-        return None
-
-
-def _parse_single_network_interface(
-    name: str,
-    status_raw: str,
-    ip_raw: str,
-    pfx_raw: str,
-    mac_raw: str,
-    status_map: dict[str, bool],
-    config: NetBoxMappingConfig,
-) -> NetworkInterfaceData | None:
-    """Parsea una única interfaz aislando la lógica de validación de IPs."""
-    if config.is_empty(name):
-        return None
-
-    enabled = status_map.get(status_raw.lower().strip(), True)
-    ip_val = ip_raw if not config.is_empty(ip_raw) else None
-    pfx_val = pfx_raw if not config.is_empty(pfx_raw) else None
-    mac_val = mac_raw if not config.is_empty(mac_raw) else None
-
-    cidr = None
-    if ip_val:
-        ip_val = _validate_interface_ip(ip_val, name)
-        if ip_val and pfx_val:
-            cidr = _build_interface_cidr(ip_val, pfx_val, name)
-
-    return {
-        "name": name,
-        "enabled": enabled,
-        "mac": mac_val,
-        "ip": ip_val,
-        "prefix": pfx_val,
-        "cidr": cidr,
-    }
-
-
-def parse_network_interfaces(
-    row: CsvRow,
-    config: NetBoxMappingConfig,
-) -> list[NetworkInterfaceData] | None:
-    """
-    Parsea las columnas de red del CSV y devuelve una lista de interfaces.
-    Retorna None si los arrays (listas tras el split) tienen longitudes distintas.
-    """
-    net_cfg = config.network
-    cols = net_cfg.columns
-
-    def split_col(col_name: str) -> list[str]:
-        raw = row.get(col_name, "")
-        return [v.strip() for v in raw.split(",")] if not config.is_empty(raw) else []
-
-    names = split_col(cols.names)
-    if not names:
-        return []
-
-    statuses = split_col(cols.status)
-    ips = split_col(cols.ip)
-    prefixes = split_col(cols.prefix)
-    macs = split_col(cols.mac)
-
-    max_len = len(names)
-    for lst in (statuses, ips, prefixes, macs):
-        if lst and len(lst) != max_len:
-            return None  # Longitudes incompatibles
-
-    def fill_if_empty(lst: list[str], length: int) -> list[str]:
-        return lst if lst else [""] * length
-
-    statuses = fill_if_empty(statuses, max_len)
-    ips = fill_if_empty(ips, max_len)
-    prefixes = fill_if_empty(prefixes, max_len)
-    macs = fill_if_empty(macs, max_len)
-
-    interfaces: list[NetworkInterfaceData] = []
-    for i, name in enumerate(names):
-        parsed = _parse_single_network_interface(
-            name=name,
-            status_raw=statuses[i],
-            ip_raw=ips[i],
-            pfx_raw=prefixes[i],
-            mac_raw=macs[i],
-            status_map=net_cfg.interface_status_map,
-            config=config,
-        )
-        if parsed:
-            interfaces.append(parsed)
-
-    return interfaces
 
 
 # ============================================================
@@ -2082,6 +2082,31 @@ def _apply_sync(
         return "ERROR", None
 
 
+def _check_missing_core_fields(
+    machine_name: str,
+    machine_type: str,
+    columns: dict[str, str],
+    config: NetBoxMappingConfig,
+) -> bool:
+    """
+    Verifica si faltan campos principales requeridos (nombre o tipo).
+    Retorna True si falta alguno y registra la advertencia (SKIP).
+    """
+    if config.is_empty(machine_name) or config.is_empty(machine_type):
+        empty_field = (
+            columns["machine_name"]
+            if config.is_empty(machine_name)
+            else columns["machine_type"]
+        )
+        log.warning(
+            "SKIP (%s): campo requerido '%s' vacío.",
+            machine_name or "N/A",
+            empty_field,
+        )
+        return True
+    return False
+
+
 def sync_device(
     endpoints: NetBoxEndpoints,
     row: CsvRow,
@@ -2101,22 +2126,12 @@ def sync_device(
     uuid: str = row.get(columns["uuid"], "").strip()
     machine_type: str = row.get(columns["machine_type"], "").strip()
 
-    # Si falta el nombre de la máquina o el tipo de máquina, saltar.
-    if config.is_empty(machine_name) or config.is_empty(machine_type):
-        if config.is_empty(machine_name):
-            empty_field = columns["machine_name"]
-        else:
-            empty_field = columns["machine_type"]
-        log.warning(
-            "SKIP (%s): campo requerido '%s' vacío.",
-            machine_name or "N/A",
-            empty_field,
-        )
+    if _check_missing_core_fields(machine_name, machine_type, columns, config):
         return "SKIPPED", None
 
-    device_fields_cfg = config.device_native_mappings
-    device_cf_cfg = config.device_custom_mappings
-    payload, _ = build_payload(row, device_fields_cfg, device_cf_cfg, config)
+    device_native_maps = config.device_native_mappings
+    device_custom_maps = config.device_custom_mappings
+    payload, _ = build_payload(row, device_native_maps, device_custom_maps, config)
 
     # ── Resolución de objetos relacionados ──────────────────
     # Role.
@@ -2206,19 +2221,23 @@ def sync_device(
         )
         return "ERROR", None
 
+    # Si se encuentra por nombre pero no por UUID, y el nombre no es único
+    # en el CSV, se omite el registro para evitar sobrescritura.
+    object_label = "device"
     matched_by_name_only = found_by_name and not found_by_uuid
     if matched_by_name_only and not _is_name_safely_unique(
-        existing, machine_name, csv_name_counts, "device"
+        existing, machine_name, csv_name_counts, object_label
     ):
         return "SKIPPED", None
 
+    # Si no hay conflicto, se crea o actualiza.
     return _apply_sync(
         endpoints.devices,
         payload,
         existing,
         machine_name,
         uuid,
-        "device",
+        object_label,
         dry_run,
     )
 
@@ -2242,25 +2261,15 @@ def sync_vm(
     uuid: str = row.get(columns["uuid"], "").strip()
     machine_type: str = row.get(columns["machine_type"], "").strip()
 
-    # Si falta el nombre de la máquina o el tipo de máquina, saltar.
-    if config.is_empty(machine_name) or config.is_empty(machine_type):
-        if config.is_empty(machine_name):
-            empty_field = columns["machine_name"]
-        else:
-            empty_field = columns["machine_type"]
-        log.warning(
-            "SKIP (%s): campo requerido '%s' vacío.",
-            machine_name or "N/A",
-            empty_field,
-        )
+    if _check_missing_core_fields(machine_name, machine_type, columns, config):
         return "SKIPPED", None
 
-    vm_fields_cfg = config.vm_native_mappings
-    vm_cf_cfg = config.vm_custom_mappings
+    vm_native_maps = config.vm_native_mappings
+    vm_custom_maps = config.vm_custom_mappings
     payload, _ = build_payload(
         row,
-        vm_fields_cfg,
-        vm_cf_cfg,
+        vm_native_maps,
+        vm_custom_maps,
         config,
     )
 
@@ -2336,19 +2345,23 @@ def sync_vm(
         log.exception("ERROR buscando VM '%s' (UUID=%s)", machine_name, uuid or "N/A")
         return "ERROR", None
 
+    # Si se encuentra por nombre pero no por UUID, y el nombre no es único
+    # en el CSV, se omite el registro para evitar sobrescritura.
+    object_label = "VM"
     matched_by_name_only = found_by_name and not found_by_uuid
     if matched_by_name_only and not _is_name_safely_unique(
-        existing, machine_name, csv_name_counts, "VM"
+        existing, machine_name, csv_name_counts, object_label
     ):
         return "SKIPPED", None
 
+    # Si no hay conflicto, se crea o actualiza.
     return _apply_sync(
         endpoints.virtual_machines,
         payload,
         existing,
         machine_name,
         uuid,
-        "VM",
+        object_label,
         dry_run,
     )
 
