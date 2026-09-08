@@ -1768,9 +1768,9 @@ def build_payload(
     native_maps: list[FieldMappingConfig],
     custom_maps: list[FieldMappingConfig],
     config: NetBoxMappingConfig,
-) -> tuple[NetBoxPayload, CustomFieldsPayload]:
+) -> NetBoxPayload:
     """
-    Construye (payload_nativo, payload_cf) para una fila del CSV.
+    Construye el payload nativo (y custom fields anidados) para una fila del CSV.
     Los campos con valor None (vacíos + is_optional) se excluyen.
     """
     payload: NetBoxPayload = {}
@@ -1794,7 +1794,7 @@ def build_payload(
     if cf_payload:
         payload["custom_fields"] = cf_payload
 
-    return payload, cf_payload
+    return payload
 
 
 # ============================================================
@@ -1946,11 +1946,16 @@ def _find_existing_object(
     return existing, found_by_uuid, found_by_name
 
 
+def _get_object_label(endpoint: Endpoint) -> str:
+    """Returns the object label for the given endpoint."""
+    return "VM" if getattr(endpoint, "name", "") == "virtual-machines" else "DEVICE"
+
+
 def _is_name_safely_unique(
+    endpoint: Endpoint,
     existing: list[Record],
     machine_name: str,
     csv_name_counts: Counter[str],
-    object_label: str,
 ) -> bool:
     """
     Valida que un nombre de máquina sea único tanto en NetBox
@@ -1959,6 +1964,7 @@ def _is_name_safely_unique(
 
     Retorna True si el nombre es único en ambos sistemas.
     """
+    object_label = _get_object_label(endpoint)
     nb_count = len(existing)
     csv_count = csv_name_counts.get(machine_name, 0)
     if nb_count == 1 and csv_count == 1:
@@ -2008,7 +2014,6 @@ def _apply_sync(
     existing: list[Record],
     machine_name: str,
     raw_uuid: str,
-    object_label: str,
     dry_run: bool,
 ) -> SyncResult:
     """
@@ -2023,6 +2028,7 @@ def _apply_sync(
     en creación dry-run se retorna 0 (mock).
     """
     uuid = raw_uuid or "N/A"
+    object_label = _get_object_label(endpoint)
 
     if dry_run:
         if not existing:
@@ -2131,7 +2137,7 @@ def sync_device(
 
     device_native_maps = config.device_native_mappings
     device_custom_maps = config.device_custom_mappings
-    payload, _ = build_payload(row, device_native_maps, device_custom_maps, config)
+    payload = build_payload(row, device_native_maps, device_custom_maps, config)
 
     # ── Resolución de objetos relacionados ──────────────────
     # Role.
@@ -2223,10 +2229,9 @@ def sync_device(
 
     # Si se encuentra por nombre pero no por UUID, y el nombre no es único
     # en el CSV, se omite el registro para evitar sobrescritura.
-    object_label = "device"
     matched_by_name_only = found_by_name and not found_by_uuid
     if matched_by_name_only and not _is_name_safely_unique(
-        existing, machine_name, csv_name_counts, object_label
+        endpoints.devices, existing, machine_name, csv_name_counts
     ):
         return "SKIPPED", None
 
@@ -2237,7 +2242,6 @@ def sync_device(
         existing,
         machine_name,
         uuid,
-        object_label,
         dry_run,
     )
 
@@ -2266,7 +2270,7 @@ def sync_vm(
 
     vm_native_maps = config.vm_native_mappings
     vm_custom_maps = config.vm_custom_mappings
-    payload, _ = build_payload(
+    payload = build_payload(
         row,
         vm_native_maps,
         vm_custom_maps,
@@ -2347,10 +2351,9 @@ def sync_vm(
 
     # Si se encuentra por nombre pero no por UUID, y el nombre no es único
     # en el CSV, se omite el registro para evitar sobrescritura.
-    object_label = "VM"
     matched_by_name_only = found_by_name and not found_by_uuid
     if matched_by_name_only and not _is_name_safely_unique(
-        existing, machine_name, csv_name_counts, object_label
+        endpoints.virtual_machines, existing, machine_name, csv_name_counts
     ):
         return "SKIPPED", None
 
@@ -2361,7 +2364,6 @@ def sync_vm(
         existing,
         machine_name,
         uuid,
-        object_label,
         dry_run,
     )
 
