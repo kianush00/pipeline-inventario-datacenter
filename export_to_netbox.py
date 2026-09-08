@@ -88,7 +88,7 @@ log = logging.getLogger("export_to_netbox")
 
 SyncStatus: TypeAlias = Literal["CREATED", "UPDATED", "UNCHANGED", "SKIPPED", "ERROR"]
 SyncResult: TypeAlias = tuple[SyncStatus, int | None]
-ObjectType: TypeAlias = Literal["device", "virtual_machine"]
+NodeType: TypeAlias = Literal["device", "virtual_machine"]
 CastType: TypeAlias = Literal["int", "int_gb_to_mb", "bool_si_no"]
 CsvRow: TypeAlias = dict[str, str]
 FieldValue: TypeAlias = str | int | float | bool | None
@@ -1805,7 +1805,7 @@ def build_payload(
 def _resolve_netbox_status(
     row: CsvRow,
     config: NetBoxMappingConfig,
-    object_type: ObjectType,
+    node_type: NodeType,
     columns: CsvColumnAliases,
 ) -> str:
     """
@@ -1819,7 +1819,7 @@ def _resolve_netbox_status(
     status_mapped = config.status_map.get(estado)
     if status_mapped:
         return status_mapped
-    if object_type == "device":
+    if node_type == "device":
         return config.status_defaults.device
     return config.status_defaults.virtual_machine
 
@@ -1971,9 +1971,13 @@ def _find_existing_object(
     return existing, found_by_uuid, found_by_name
 
 
-def _get_object_label(endpoint: Endpoint) -> str:
-    """Returns the object label for the given endpoint."""
-    return "VM" if getattr(endpoint, "name", "") == "virtual-machines" else "DEVICE"
+def _get_node_type_from_endpoint(endpoint: Endpoint) -> NodeType:
+    """Returns the node type (VM or DEVICE) for the given endpoint."""
+    return (
+        "virtual_machine"
+        if getattr(endpoint, "name", "") == "virtual-machines"
+        else "device"
+    )
 
 
 def _is_name_safely_unique(
@@ -1989,7 +1993,7 @@ def _is_name_safely_unique(
 
     Retorna True si el nombre es único en ambos sistemas.
     """
-    object_label = _get_object_label(endpoint)
+    node_type = _get_node_type_from_endpoint(endpoint)
     nb_count = len(existing)
     csv_count = csv_name_counts.get(machine_name, 0)
     if nb_count == 1 and csv_count == 1:
@@ -1997,7 +2001,7 @@ def _is_name_safely_unique(
     log.warning(
         "SKIP %s '%s': coincidencia por nombre, pero no es único "
         "(NetBox=%d, CSV=%d). Se requiere UUID para sincronizar.",
-        object_label,
+        node_type,
         machine_name,
         nb_count,
         csv_count,
@@ -2033,7 +2037,7 @@ def _check_record_changes(
     return temp.updates()
 
 
-def _apply_sync(
+def _execute_sync(
     endpoint: Endpoint,
     payload: NetBoxPayload,
     existing: list[Record],
@@ -2053,13 +2057,13 @@ def _apply_sync(
     en creación dry-run se retorna 0 (mock).
     """
     uuid = raw_uuid or "N/A"
-    object_label = _get_object_label(endpoint)
+    node_type = _get_node_type_from_endpoint(endpoint)
 
     if dry_run:
         if not existing:
             log.info(
                 "[DRY-RUN] Crearía %s: %s (UUID=%s)",
-                object_label,
+                node_type,
                 machine_name,
                 uuid,
             )
@@ -2070,7 +2074,7 @@ def _apply_sync(
         if diff:
             log.info(
                 "[DRY-RUN] Actualizaría %s: %s (UUID=%s) - Cambios: %s",
-                object_label,
+                node_type,
                 machine_name,
                 uuid,
                 list(diff.keys()),
@@ -2079,7 +2083,7 @@ def _apply_sync(
 
         log.info(
             "[DRY-RUN] UNCHANGED %s: %s (UUID=%s)",
-            object_label,
+            node_type,
             machine_name,
             uuid,
         )
@@ -2089,31 +2093,31 @@ def _apply_sync(
         try:
             obj = cast(Record, endpoint.create(**payload))
             obj_id = get_netbox_object_id(obj)
-            log.info("CREATED %s: %s (ID=%d)", object_label, machine_name, obj_id)
+            log.info("CREATED %s: %s (ID=%d)", node_type, machine_name, obj_id)
             return "CREATED", obj_id
         except Exception:
-            log.exception("ERROR creando %s %s", object_label, machine_name)
+            log.exception("ERROR creando %s %s", node_type, machine_name)
             return "ERROR", None
 
     existing_id = get_netbox_object_id(existing[0])
     try:
         updated = existing[0].update(payload)
         if updated:
-            log.info("UPDATED %s: %s", object_label, machine_name)
+            log.info("UPDATED %s: %s", node_type, machine_name)
             return "UPDATED", existing_id
 
-        log.info("UNCHANGED %s: %s", object_label, machine_name)
+        log.info("UNCHANGED %s: %s", node_type, machine_name)
         return "UNCHANGED", existing_id
     except Exception:
         log.exception(
             "ERROR actualizando %s %s",
-            object_label,
+            node_type,
             machine_name,
         )
         return "ERROR", None
 
 
-def _execute_sync(
+def _validate_sync(
     endpoint: Endpoint,
     payload: NetBoxPayload,
     machine_name: str,
@@ -2131,10 +2135,10 @@ def _execute_sync(
             config,
         )
     except Exception:
-        object_label = _get_object_label(endpoint)
+        node_type = _get_node_type_from_endpoint(endpoint)
         log.exception(
             "ERROR buscando %s '%s' (UUID=%s)",
-            object_label,
+            node_type,
             machine_name,
             uuid or "N/A",
         )
@@ -2146,7 +2150,7 @@ def _execute_sync(
     ):
         return "SKIPPED", None
 
-    return _apply_sync(
+    return _execute_sync(
         endpoint,
         payload,
         existing,
@@ -2258,7 +2262,7 @@ def sync_device(
     payload["device_type"] = get_netbox_object_id(device_type)
 
     # ── GET o CREATE/UPDATE ──────────────────────────────────
-    return _execute_sync(
+    return _validate_sync(
         endpoints.devices,
         payload,
         machine_name,
@@ -2357,7 +2361,7 @@ def sync_vm(
         payload["vcpus"] = float(cores_int)
 
     # ── GET o CREATE/UPDATE ──────────────────────────────────
-    return _execute_sync(
+    return _validate_sync(
         endpoints.virtual_machines,
         payload,
         machine_name,
@@ -2377,12 +2381,12 @@ def _assign_ip(
     endpoints: NetBoxEndpoints,
     cidr: str,
     iface_obj: Record,
-    obj_type: ObjectType,
+    node_type: NodeType,
 ) -> bool:
     """Crea o actualiza una IP address en NetBox y la asigna a la interfaz.
     Retorna True si fue exitoso, False en caso de error."""
     assigned_type: str = (
-        "dcim.interface" if obj_type == "device" else "virtualization.vminterface"
+        "dcim.interface" if node_type == "device" else "virtualization.vminterface"
     )
 
     existing: list[Record] = list(endpoints.ip_addresses.filter(address=cidr))
@@ -2416,7 +2420,7 @@ def _assign_ip(
 def sync_interfaces_for_object(
     endpoints: NetBoxEndpoints,
     obj_id: int,
-    obj_type: ObjectType,
+    node_type: NodeType,
     interfaces: list[NetworkInterfaceData],
     dry_run: bool,
 ) -> int:
@@ -2425,7 +2429,7 @@ def sync_interfaces_for_object(
     errors = 0
     iface_endpoint: Endpoint
     iface_filter: dict[str, int]
-    if obj_type == "device":
+    if node_type == "device":
         iface_endpoint = endpoints.device_interfaces
         iface_filter = {"device_id": obj_id}
     else:
@@ -2446,7 +2450,7 @@ def sync_interfaces_for_object(
         payload: NetBoxPayload = {"name": name, "enabled": enabled}
         if mac:
             payload["mac_address"] = mac.upper()
-        if obj_type == "device":
+        if node_type == "device":
             payload["device"] = obj_id
             payload["type"] = "other"  # tipo genérico; ajustable
         else:
@@ -2474,7 +2478,7 @@ def sync_interfaces_for_object(
         if cidr and not dry_run:
             iface_obj: Record | None = existing.get(name)
             if iface_obj is not None and not _assign_ip(
-                endpoints, cidr, iface_obj, obj_type
+                endpoints, cidr, iface_obj, node_type
             ):
                 errors += 1
 
@@ -2582,15 +2586,15 @@ def main() -> None:
 
     # ── Procesar filas ───────────────────────────────────────
     for row_num, row in enumerate(rows, start=2):
-        tipo_raw = row.get(columns["machine_type"], "").strip()
-        nb_type = config.machine_type_map.get(tipo_raw)
+        raw_type = row.get(columns["machine_type"], "").strip()
+        node_type: NodeType | None = config.machine_type_map.get(raw_type)
 
-        if nb_type is None:
+        if node_type is None:
             log.warning(
                 "Fila %d SKIP: %s '%s' no está en machine_type_map.",
                 row_num,
                 columns["machine_type"],
-                tipo_raw,
+                raw_type,
             )
             counts["SKIPPED"] += 1
             continue
@@ -2608,8 +2612,7 @@ def main() -> None:
 
         # ── Sincronizar Device o VM ───────────────────────────
         try:
-            object_type: ObjectType
-            if nb_type == "device":
+            if node_type == "device":
                 result, obj_id = sync_device(
                     endpoints,
                     row,
@@ -2620,7 +2623,6 @@ def main() -> None:
                     csv_name_counts,
                     args.dry_run,
                 )
-                object_type = "device"
             else:
                 result, obj_id = sync_vm(
                     endpoints,
@@ -2632,7 +2634,6 @@ def main() -> None:
                     csv_name_counts,
                     args.dry_run,
                 )
-                object_type = "virtual_machine"
         except ValueError as e:
             log.warning("SKIP fila %d: %s", row_num, e)
             counts["SKIPPED"] += 1
@@ -2665,7 +2666,7 @@ def main() -> None:
             iface_errors = sync_interfaces_for_object(
                 endpoints,
                 obj_id,
-                object_type,
+                node_type,
                 interfaces,
                 args.dry_run,
             )
