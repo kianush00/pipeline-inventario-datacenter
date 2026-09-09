@@ -2396,6 +2396,7 @@ def _assign_ip(
     ip_addresses_endpoint: Endpoint,
     cidr: str,
     iface_obj: Record,
+    dry_run: bool,
 ) -> bool:
     """Crea o actualiza una IP address en NetBox y la asigna a la interfaz.
     Retorna True si fue exitoso, False en caso de error."""
@@ -2407,6 +2408,9 @@ def _assign_ip(
 
     if existing:
         ip_obj: Record = existing[0]
+        if dry_run:
+            log.info("[DRY-RUN] Actualizaría IP %s (asignación a objeto %s)", cidr, iface_obj.id)
+            return True
         try:
             ip_obj.update(
                 {
@@ -2418,6 +2422,10 @@ def _assign_ip(
         except Exception:
             log.exception("Error actualizando IP %s", cidr)
             return False
+
+    if dry_run:
+        log.info("[DRY-RUN] Crearía IP %s (asignada a objeto %s)", cidr, iface_obj.id)
+        return True
 
     try:
         ip_addresses_endpoint.create(
@@ -2478,7 +2486,7 @@ def _sync_single_interface(
 
     if cidr:
         iface_obj = existing[name]
-        return _assign_ip(ip_addresses_endpoint, cidr, iface_obj)
+        return _assign_ip(ip_addresses_endpoint, cidr, iface_obj, dry_run)
 
     return True
 
