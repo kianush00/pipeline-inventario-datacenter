@@ -587,6 +587,20 @@ def get_netbox_object_id(obj: NetBoxObject) -> int:
     return int(obj_id)
 
 
+def get_node_type_from_object(obj: Endpoint | Record) -> NodeType:
+    """Returns the node type (virtual_machine or device) from an endpoint or record."""
+    url = getattr(obj, "url", "")
+    if "virtualization" in url or getattr(obj, "name", "") == "virtual-machines":
+        return "virtual_machine"
+    return "device"
+
+
+def get_node_type_from_row(row: CsvRow, config: NetBoxMappingConfig) -> NodeType | None:
+    """Returns the node type (virtual_machine or device) from a CSV row."""
+    machine_type = row.get(config.columns["machine_type"], "").strip()
+    return config.machine_type_map.get(machine_type)
+
+
 # ============================================================
 # CARGA DE CONFIGURACIÓN
 # ============================================================
@@ -1680,7 +1694,6 @@ def build_payload(
 def _resolve_netbox_status(
     row: CsvRow,
     config: NetBoxMappingConfig,
-    node_type: NodeType,
     columns: CsvColumnAliases,
 ) -> str:
     """
@@ -1690,8 +1703,18 @@ def _resolve_netbox_status(
         device         -> inventory
         virtual_machine -> staged
     """
+    node_type: NodeType | None = get_node_type_from_row(row, config)
     estado = row.get(columns["status"], "").strip()
     status_mapped = config.status_map.get(estado)
+
+    if node_type is None:
+        log.error(
+            "No se pudo determinar el tipo de nodo. Máquina: '%s', Tipo: '%s'",
+            row.get(config.columns["machine_name"], "?"),
+            row.get(config.columns["machine_type"], "?"),
+        )
+        raise ValueError("No se pudo determinar el tipo de nodo.")
+
     if status_mapped:
         return status_mapped
     if node_type == "device":
@@ -1845,15 +1868,6 @@ def _find_existing_object(
     return existing, found_by_uuid, found_by_name
 
 
-def _get_node_type_from_endpoint(endpoint: Endpoint) -> NodeType:
-    """Returns the node type (VM or DEVICE) for the given endpoint."""
-    return (
-        "virtual_machine"
-        if getattr(endpoint, "name", "") == "virtual-machines"
-        else "device"
-    )
-
-
 def _is_name_safely_unique(
     endpoint: Endpoint,
     existing: list[Record],
@@ -1867,7 +1881,7 @@ def _is_name_safely_unique(
 
     Retorna True si el nombre es único en ambos sistemas.
     """
-    node_type = _get_node_type_from_endpoint(endpoint)
+    node_type = get_node_type_from_object(endpoint)
     nb_count = len(existing)
     csv_count = csv_name_counts.get(machine_name, 0)
     if nb_count == 1 and csv_count == 1:
@@ -1931,7 +1945,7 @@ def _execute_sync(
     en creación dry-run se retorna 0 (mock).
     """
     uuid = raw_uuid or "N/A"
-    node_type = _get_node_type_from_endpoint(endpoint)
+    node_type = get_node_type_from_object(endpoint)
 
     if dry_run:
         if not existing:
@@ -2009,7 +2023,7 @@ def _validate_sync(
             config,
         )
     except Exception:
-        node_type = _get_node_type_from_endpoint(endpoint)
+        node_type = get_node_type_from_object(endpoint)
         log.exception(
             "ERROR buscando %s '%s' (UUID=%s)",
             node_type,
@@ -2080,7 +2094,7 @@ def sync_device(
         payload["platform"] = platform_id
 
     # Estado.
-    payload["status"] = _resolve_netbox_status(row, config, "device", columns)
+    payload["status"] = _resolve_netbox_status(row, config, columns)
 
     # Site.
     payload["site"] = get_netbox_object_id(site)
@@ -2200,7 +2214,7 @@ def sync_vm(
         payload["platform"] = platform_id
 
     # Estado.
-    payload["status"] = _resolve_netbox_status(row, config, "virtual_machine", columns)
+    payload["status"] = _resolve_netbox_status(row, config, columns)
 
     # Site.
     site_id = get_netbox_object_id(site)
@@ -2383,10 +2397,10 @@ def _assign_ip(
     ip_addresses_endpoint: Endpoint,
     cidr: str,
     iface_obj: Record,
-    node_type: NodeType,
 ) -> bool:
     """Crea o actualiza una IP address en NetBox y la asigna a la interfaz.
     Retorna True si fue exitoso, False en caso de error."""
+    node_type = get_node_type_from_object(iface_obj)
     assigned_type: str = (
         "dcim.interface" if node_type == "device" else "virtualization.vminterface"
     )
@@ -2422,7 +2436,6 @@ def _assign_ip(
 def _sync_single_interface(
     iface_data: NetworkInterfaceData,
     obj_id: int,
-    node_type: NodeType,
     iface_endpoint: Endpoint,
     existing: dict[str, Record],
     ip_addresses_endpoint: Endpoint,
@@ -2432,6 +2445,7 @@ def _sync_single_interface(
     Sincroniza una interfaz individual y le asigna su IP.
     Retorna True si la sincronización fue exitosa, False en caso de error.
     """
+    node_type = get_node_type_from_object(iface_endpoint)
     name: str = iface_data["name"]
     enabled: bool = iface_data["enabled"]
     mac: str | None = iface_data.get("mac")
@@ -2465,7 +2479,7 @@ def _sync_single_interface(
 
     if cidr:
         iface_obj = existing[name]
-        return _assign_ip(ip_addresses_endpoint, cidr, iface_obj, node_type)
+        return _assign_ip(ip_addresses_endpoint, cidr, iface_obj)
 
     return True
 
@@ -2494,7 +2508,6 @@ def sync_interfaces_for_object(
         success = _sync_single_interface(
             iface_data,
             obj_id,
-            node_type,
             iface_endpoint,
             existing,
             endpoints.ip_addresses,
@@ -2632,15 +2645,14 @@ def main() -> None:
         machine_name_raw = row.get(columns["machine_name"], "").strip()
         machine_name = machine_name_raw or f"fila {row_num}"
 
-        machine_type = row.get(columns["machine_type"], "").strip()
-        node_type: NodeType | None = config.machine_type_map.get(machine_type)
+        node_type: NodeType | None = get_node_type_from_row(row, config)
 
         if node_type is None:
             log.warning(
                 "Fila %d SKIP: %s '%s' no está en machine_type_map.",
                 row_num,
                 columns["machine_type"],
-                machine_type,
+                row.get(columns["machine_type"], "").strip(),
             )
             counts["SKIPPED"] += 1
             continue
@@ -2686,6 +2698,15 @@ def main() -> None:
         if result not in ("CREATED", "UPDATED", "UNCHANGED"):
             continue
 
+        # ── Validar ID para interfaces (Fail-Fast) ────────────
+        if not obj_id:
+            if not args.dry_run:
+                log.warning(
+                    "SKIP interfaces de '%s': el objeto no tiene ID.",
+                    machine_name,
+                )
+            continue
+
         # ── Parsear interfaces ────────────────────────────────
         interfaces = parse_network_interfaces(row, config)
         if interfaces is None:
@@ -2697,13 +2718,6 @@ def main() -> None:
             continue
 
         # ── Sincronizar interfaces del objeto ─────────────────
-        if not obj_id:
-            log.warning(
-                "SKIP interfaces de '%s': el objeto no tiene ID.",
-                machine_name,
-            )
-            continue
-
         try:
             iface_errors = sync_interfaces_for_object(
                 endpoints,
