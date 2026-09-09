@@ -2380,7 +2380,7 @@ def sync_vm(
 
 
 def _assign_ip(
-    endpoints: NetBoxEndpoints,
+    ip_addresses_endpoint: Endpoint,
     cidr: str,
     iface_obj: Record,
     node_type: NodeType,
@@ -2390,8 +2390,8 @@ def _assign_ip(
     assigned_type: str = (
         "dcim.interface" if node_type == "device" else "virtualization.vminterface"
     )
+    existing: list[Record] = list(ip_addresses_endpoint.filter(address=cidr))
 
-    existing: list[Record] = list(endpoints.ip_addresses.filter(address=cidr))
     if existing:
         ip_obj: Record = existing[0]
         try:
@@ -2405,18 +2405,69 @@ def _assign_ip(
         except Exception:
             log.exception("Error actualizando IP %s", cidr)
             return False
+
+    try:
+        ip_addresses_endpoint.create(
+            address=cidr,
+            status="active",
+            assigned_object_type=assigned_type,
+            assigned_object_id=iface_obj.id,
+        )
+        return True
+    except Exception:
+        log.exception("Error creando IP %s", cidr)
+        return False
+
+
+def _sync_single_interface(
+    iface_data: NetworkInterfaceData,
+    obj_id: int,
+    node_type: NodeType,
+    iface_endpoint: Endpoint,
+    existing: dict[str, Record],
+    ip_addresses_endpoint: Endpoint,
+    dry_run: bool,
+) -> bool:
+    """
+    Sincroniza una interfaz individual y le asigna su IP.
+    Retorna True si la sincronización fue exitosa, False en caso de error.
+    """
+    name: str = iface_data["name"]
+    enabled: bool = iface_data["enabled"]
+    mac: str | None = iface_data.get("mac")
+    cidr: str | None = iface_data.get("cidr")
+
+    payload: NetBoxPayload = {"name": name, "enabled": enabled}
+    if mac:
+        payload["mac_address"] = mac.upper()
+
+    if node_type == "device":
+        payload["device"] = obj_id
+        payload["type"] = "other"  # tipo genérico; ajustable
     else:
-        try:
-            endpoints.ip_addresses.create(
-                address=cidr,
-                status="active",
-                assigned_object_type=assigned_type,
-                assigned_object_id=iface_obj.id,
-            )
-            return True
-        except Exception:
-            log.exception("Error creando IP %s", cidr)
-            return False
+        payload["virtual_machine"] = obj_id
+
+    if dry_run:
+        action = "Actualizaría" if name in existing else "Crearía"
+        log.info("[DRY-RUN] %s interfaz %s en objeto %s", action, name, obj_id)
+        if cidr:
+            log.info("[DRY-RUN] Asignaría IP %s a interfaz %s", cidr, name)
+        return True
+
+    try:
+        if name in existing:
+            existing[name].update(payload)
+        else:
+            existing[name] = cast(Record, iface_endpoint.create(**payload))
+    except Exception:
+        log.exception("Error procesando interfaz %s", name)
+        return False
+
+    if cidr:
+        iface_obj = existing[name]
+        return _assign_ip(ip_addresses_endpoint, cidr, iface_obj, node_type)
+
+    return True
 
 
 def sync_interfaces_for_object(
@@ -2428,9 +2479,6 @@ def sync_interfaces_for_object(
 ) -> int:
     """Sincroniza interfaces y sus IPs para un Device o VM.
     Retorna la cantidad de errores encontrados (0 si todo fue exitoso)."""
-    errors = 0
-    iface_endpoint: Endpoint
-    iface_filter: dict[str, int]
     if node_type == "device":
         iface_endpoint = endpoints.device_interfaces
         iface_filter = {"device_id": obj_id}
@@ -2438,54 +2486,22 @@ def sync_interfaces_for_object(
         iface_endpoint = endpoints.vm_interfaces
         iface_filter = {"virtual_machine_id": obj_id}
 
-    existing: dict[str, Record] = {
-        str(iface.name): cast(Record, iface)
-        for iface in iface_endpoint.filter(**iface_filter)
-    }
+    filtered_ifaces: list[Record] = list(iface_endpoint.filter(**iface_filter))
+    existing: dict[str, Record] = {str(iface.name): iface for iface in filtered_ifaces}
 
+    errors = 0
     for iface_data in interfaces:
-        name: str = iface_data["name"]
-        enabled: bool = iface_data["enabled"]
-        mac: str | None = iface_data.get("mac")
-        cidr: str | None = iface_data.get("cidr")
-
-        payload: NetBoxPayload = {"name": name, "enabled": enabled}
-        if mac:
-            payload["mac_address"] = mac.upper()
-        if node_type == "device":
-            payload["device"] = obj_id
-            payload["type"] = "other"  # tipo genérico; ajustable
-        else:
-            payload["virtual_machine"] = obj_id
-
-        if dry_run:
-            action: str = "Actualizaría" if name in existing else "Crearía"
-            log.info("[DRY-RUN] %s interfaz %s en objeto %s", action, name, obj_id)
-        elif name in existing:
-            try:
-                existing[name].update(payload)
-            except Exception:
-                log.exception("Error actualizando interfaz %s", name)
-                errors += 1
-                continue
-        else:
-            try:
-                existing[name] = cast(Record, iface_endpoint.create(**payload))
-            except Exception:
-                log.exception("Error creando interfaz %s", name)
-                errors += 1
-                continue
-
-        # Asignar IP si hay CIDR.
-        if cidr and not dry_run:
-            iface_obj: Record | None = existing.get(name)
-            if iface_obj is not None and not _assign_ip(
-                endpoints, cidr, iface_obj, node_type
-            ):
-                errors += 1
-
-        if cidr and dry_run:
-            log.info("[DRY-RUN] Asignaría IP %s a interfaz %s", cidr, name)
+        success = _sync_single_interface(
+            iface_data,
+            obj_id,
+            node_type,
+            iface_endpoint,
+            existing,
+            endpoints.ip_addresses,
+            dry_run,
+        )
+        if not success:
+            errors += 1
 
     return errors
 
