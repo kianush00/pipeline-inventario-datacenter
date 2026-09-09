@@ -2404,15 +2404,32 @@ def _assign_ip(
     assigned_type: str = (
         "dcim.interface" if node_type == "device" else "virtualization.vminterface"
     )
-    existing: list[Record] = list(ip_addresses_endpoint.filter(address=cidr))
+    existing_ips: list[Record] = list(ip_addresses_endpoint.filter(address=cidr))
 
-    if existing:
-        ip_obj: Record = existing[0]
+    # 1. Verificar si la IP ya está asignada a esta interfaz
+    for ip_obj in existing_ips:
+        current_id = getattr(ip_obj, "assigned_object_id", None)
+        current_type = getattr(ip_obj, "assigned_object_type", None)
+        if current_id == iface_obj.id and str(current_type) == assigned_type:
+            return True
+
+    # 2. Buscar si hay alguna IP libre con este valor que podamos reclamar
+    unassigned_ip = None
+    for ip_obj in existing_ips:
+        if getattr(ip_obj, "assigned_object_id", None) is None:
+            unassigned_ip = ip_obj
+            break
+
+    if unassigned_ip:
         if dry_run:
-            log.info("[DRY-RUN] Actualizaría IP %s (asignación a objeto %s)", cidr, iface_obj.id)
+            log.info(
+                "[DRY-RUN] Actualizaría IP libre %s (asignación a objeto %s)",
+                cidr,
+                iface_obj.id,
+            )
             return True
         try:
-            ip_obj.update(
+            unassigned_ip.update(
                 {
                     "assigned_object_type": assigned_type,
                     "assigned_object_id": iface_obj.id,
@@ -2420,11 +2437,14 @@ def _assign_ip(
             )
             return True
         except Exception:
-            log.exception("Error actualizando IP %s", cidr)
+            log.exception("Error actualizando IP libre %s", cidr)
             return False
 
+    # 3. Todas las IPs existentes están ocupadas por otros nodos. Crear una nueva.
     if dry_run:
-        log.info("[DRY-RUN] Crearía IP %s (asignada a objeto %s)", cidr, iface_obj.id)
+        log.info(
+            "[DRY-RUN] Crearía nueva IP %s (asignada a objeto %s)", cidr, iface_obj.id
+        )
         return True
 
     try:
@@ -2444,7 +2464,7 @@ def _sync_single_interface(
     iface_data: NetworkInterfaceData,
     obj_id: int,
     iface_endpoint: Endpoint,
-    existing: dict[str, Record],
+    existing_ifaces: dict[str, Record],
     ip_addresses_endpoint: Endpoint,
     dry_run: bool,
 ) -> bool:
@@ -2469,23 +2489,23 @@ def _sync_single_interface(
         payload["virtual_machine"] = obj_id
 
     if dry_run:
-        action = "Actualizaría" if name in existing else "Crearía"
+        action = "Actualizaría" if name in existing_ifaces else "Crearía"
         log.info("[DRY-RUN] %s interfaz %s en objeto %s", action, name, obj_id)
         if cidr:
             log.info("[DRY-RUN] Asignaría IP %s a interfaz %s", cidr, name)
         return True
 
     try:
-        if name in existing:
-            existing[name].update(payload)
+        if name in existing_ifaces:
+            existing_ifaces[name].update(payload)
         else:
-            existing[name] = cast(Record, iface_endpoint.create(**payload))
+            existing_ifaces[name] = cast(Record, iface_endpoint.create(**payload))
     except Exception:
         log.exception("Error procesando interfaz %s", name)
         return False
 
     if cidr:
-        iface_obj = existing[name]
+        iface_obj = existing_ifaces[name]
         return _assign_ip(ip_addresses_endpoint, cidr, iface_obj, dry_run)
 
     return True
@@ -2508,7 +2528,9 @@ def sync_interfaces_for_object(
         iface_filter = {"virtual_machine_id": obj_id}
 
     filtered_ifaces: list[Record] = list(iface_endpoint.filter(**iface_filter))
-    existing: dict[str, Record] = {str(iface.name): iface for iface in filtered_ifaces}
+    existing_ifaces: dict[str, Record] = {
+        str(iface.name): iface for iface in filtered_ifaces
+    }
 
     errors = 0
     for iface_data in interfaces:
@@ -2516,7 +2538,7 @@ def sync_interfaces_for_object(
             iface_data,
             obj_id,
             iface_endpoint,
-            existing,
+            existing_ifaces,
             endpoints.ip_addresses,
             dry_run,
         )
