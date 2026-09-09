@@ -173,53 +173,6 @@ device_roles:
     slug: "others"
     color: "9e9e9e"
 
-# ── Special Custom Fields (Lógica Core) ──────────────────────
-# NOTA: 'machine_type' y 'environment' se declaran aquí en la raíz,
-# fuera del bloque 'custom_field_definitions' estándar, porque dictan el flujo
-# de enrutamiento principal del pipeline.
-
-# ── Tipo de máquina ──────────────────────────────────────────
-# Clasificación interna del inventario.
-# Se conserva exactamente como aparece en el CSV.
-# Se almacena en NetBox como Custom Field de tipo Selection.
-machine_type:
-  name: "machine_type"
-  label: "Tipo de maquina"
-  type: "selection"
-  required: true
-  object_types:
-    - "dcim.device"
-    - "virtualization.virtualmachine"
-  choice_set:
-    name: "Machine Type"
-    choices:
-      - value: "Dedicada"
-        label: "Dedicada"
-      - value: "Hipervisor"
-        label: "Hipervisor"
-      - value: "VM"
-        label: "VM"
-
-# ── Entorno ──────────────────────────────────────────────────
-# Representa el entorno lógico en el que opera el nodo.
-# Se almacena como Custom Field de tipo Selection.
-environment:
-  name: "environment"
-  label: "Entorno"
-  type: "selection"
-  required: false
-  object_types:
-    - "dcim.device"
-    - "virtualization.virtualmachine"
-  choice_set:
-    name: "Environment"
-    choices:
-      - value: "production"
-        label: "Producción"
-      - value: "certification"
-        label: "Certificación"
-      - value: "development"
-        label: "Desarrollo"
 
 # ── Mapeo de Entorno ─────────────────────────────────────────
 # Transforma los valores de entorno del CSV al slug/valor interno
@@ -307,6 +260,40 @@ status_defaults:
 #   multiobject    → Referencia múltiple a objetos NetBox
 
 custom_field_definitions:
+  - name: "machine_type"
+    label: "Tipo de maquina"
+    type: "select"
+    required: true
+    object_types:
+      - "dcim.device"
+      - "virtualization.virtualmachine"
+    choice_set:
+      name: "Machine Type"
+      choices:
+        - value: "Dedicada"
+          label: "Dedicada"
+        - value: "Hipervisor"
+          label: "Hipervisor"
+        - value: "VM"
+          label: "VM"
+
+  - name: "environment"
+    label: "Entorno"
+    type: "select"
+    required: false
+    object_types:
+      - "dcim.device"
+      - "virtualization.virtualmachine"
+    choice_set:
+      name: "Environment"
+      choices:
+        - value: "production"
+          label: "Producción"
+        - value: "certification"
+          label: "Certificación"
+        - value: "development"
+          label: "Desarrollo"
+
   - name: "inventory_uuid"
     label: "UUID de inventario"
     type: "text"

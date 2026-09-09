@@ -340,8 +340,6 @@ class NetBoxMappingConfig(BaseModel):
     site: SiteConfig
     cluster_type: ClusterTypeConfig
     device_roles: list[DeviceRoleConfig]
-    machine_type: CustomFieldConfig
-    environment: CustomFieldConfig | None = None
     environment_map: dict[str, str] = Field(default_factory=dict)
     machine_type_map: dict[str, Literal["device", "virtual_machine"]]
     status_map: dict[str, str]
@@ -375,12 +373,6 @@ class NetBoxMappingConfig(BaseModel):
         cf_map: dict[str, CustomFieldConfig] = {}
         for cf in self.custom_field_definitions:
             cf_map[cf.name] = cf
-
-        cf_map[self.machine_type.name] = self.machine_type
-
-        if self.environment:
-            cf_map[self.environment.name] = self.environment
-
         object.__setattr__(self, "_custom_field_defs_map", cf_map)
 
         maps: dict[str, dict[str, FieldValue]] = {
@@ -465,6 +457,13 @@ class NetBoxMappingConfig(BaseModel):
         # 4. Validar machine_type_map no vacío
         if not self.machine_type_map:
             raise ValueError("'machine_type_map' no puede estar vacío.")
+
+        # 5. Validar que el Custom Field 'machine_type' esté definido en custom_field_definitions
+        cf_names = {cf.name for cf in self.custom_field_definitions}
+        if "machine_type" not in cf_names:
+            raise ValueError(
+                "El Custom Field 'machine_type' es obligatorio dentro de custom_field_definitions."
+            )
 
         return self
 
