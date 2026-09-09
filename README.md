@@ -168,14 +168,19 @@ python export_to_netbox.py merged_inventory.csv --dry-run --verbose
 
 ## NetBox configuration
 
-The exporter requires these environment variables:
+The exporter requires these core environment variables:
 
 ```bash
 export NETBOX_URL="https://netbox.example.com"
 export NETBOX_TOKEN="<write-enabled-token>"
 export NETBOX_VERIFY_SSL="true"
+```
+
+Additionally, the default `netbox_mapping.yaml` expects the target site name to be provided via the environment:
+```bash
 export NETBOX_SITE_NAME="Datacenter Principal"
 ```
+*(If you hardcode the site name in the YAML, `NETBOX_SITE_NAME` is no longer required).*
 
 `NETBOX_VERIFY_SSL` defaults to `true`; set it to `false` only when the deployment explicitly requires disabling certificate verification. The token must have write permissions for the NetBox areas used by the exporter, including `dcim`, `virtualization`, `ipam`, `extras`, and `core`.
 

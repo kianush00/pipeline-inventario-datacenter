@@ -166,6 +166,15 @@ class SiteConfig(BaseModel):
     name: str = Field(min_length=1)
     slug: str | None = None
 
+    @field_validator("name", "slug")
+    @classmethod
+    def validate_no_unresolved_vars(cls, v: str | None) -> str | None:
+        if v is not None and "$" in v and re.search(r"\$\{?\w+\}?", v):
+            raise ValueError(
+                f"El valor contiene variables de entorno no resueltas: '{v}'"
+            )
+        return v
+
 
 class ClusterTypeConfig(BaseModel):
     """Configuración del ClusterType en NetBox."""
@@ -664,13 +673,11 @@ def load_config(mapping_path: Path) -> NetBoxMappingConfig:
 def load_env() -> tuple[str, str, bool]:
     url = os.environ.get("NETBOX_URL", "").rstrip("/")
     token = os.environ.get("NETBOX_TOKEN", "")
-    site_name = os.environ.get("NETBOX_SITE_NAME", "").strip()
     verify_ssl = os.environ.get("NETBOX_VERIFY_SSL", "true").lower() != "false"
 
     required_vars = {
         "NETBOX_URL": url,
         "NETBOX_TOKEN": token,
-        "NETBOX_SITE_NAME": site_name,
     }
 
     missing = [name for name, val in required_vars.items() if not val]
