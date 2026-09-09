@@ -1511,131 +1511,6 @@ def ensure_custom_fields(
 
 
 # ============================================================
-# PARSEO DE INTERFACES y IPs
-# ============================================================
-
-
-def _validate_interface_ip(ip_raw: str, name: str) -> str | None:
-    """Valida que un string sea una dirección IP correcta."""
-    try:
-        ipaddress.ip_address(ip_raw)
-        return ip_raw
-    except ValueError:
-        log.warning(
-            "IP '%s' en interfaz '%s' no es una dirección IP válida; "
-            "se omitirá la asignación de IP.",
-            ip_raw,
-            name,
-        )
-        return None
-
-
-def _build_interface_cidr(ip_val: str, pfx_val: str, name: str) -> str | None:
-    """Valida IP y prefijo construyendo una dirección CIDR válida."""
-    try:
-        mask_or_prefix = (
-            pfx_val.split("/")[1].strip() if "/" in pfx_val else pfx_val.strip()
-        )
-        return str(ipaddress.ip_interface(f"{ip_val}/{mask_or_prefix}"))
-    except ValueError:
-        log.warning(
-            "Prefijo o CIDR inválido '%s' para IP '%s' en interfaz '%s'.",
-            pfx_val,
-            ip_val,
-            name,
-        )
-        return None
-
-
-def _parse_single_network_interface(
-    name: str,
-    status_raw: str,
-    ip_raw: str,
-    pfx_raw: str,
-    mac_raw: str,
-    status_map: dict[str, bool],
-    config: NetBoxMappingConfig,
-) -> NetworkInterfaceData | None:
-    """Parsea una única interfaz aislando la lógica de validación de IPs."""
-    if config.is_empty(name):
-        return None
-
-    enabled = status_map.get(status_raw.lower().strip(), True)
-    ip_val = ip_raw if not config.is_empty(ip_raw) else None
-    pfx_val = pfx_raw if not config.is_empty(pfx_raw) else None
-    mac_val = mac_raw if not config.is_empty(mac_raw) else None
-
-    cidr = None
-    if ip_val:
-        ip_val = _validate_interface_ip(ip_val, name)
-        if ip_val and pfx_val:
-            cidr = _build_interface_cidr(ip_val, pfx_val, name)
-
-    return {
-        "name": name,
-        "enabled": enabled,
-        "mac": mac_val,
-        "ip": ip_val,
-        "prefix": pfx_val,
-        "cidr": cidr,
-    }
-
-
-def parse_network_interfaces(
-    row: CsvRow,
-    config: NetBoxMappingConfig,
-) -> list[NetworkInterfaceData] | None:
-    """
-    Parsea las columnas de red del CSV y devuelve una lista de interfaces.
-    Retorna None si los arrays (listas tras el split) tienen longitudes distintas.
-    """
-    net_cfg = config.network
-    cols = net_cfg.columns
-
-    def split_col(col_name: str) -> list[str]:
-        raw = row.get(col_name, "")
-        return [v.strip() for v in raw.split(",")] if not config.is_empty(raw) else []
-
-    names = split_col(cols.names)
-    if not names:
-        return []
-
-    statuses = split_col(cols.status)
-    ips = split_col(cols.ip)
-    prefixes = split_col(cols.prefix)
-    macs = split_col(cols.mac)
-
-    max_len = len(names)
-    for lst in (statuses, ips, prefixes, macs):
-        if lst and len(lst) != max_len:
-            return None  # Longitudes incompatibles
-
-    def fill_if_empty(lst: list[str], length: int) -> list[str]:
-        return lst if lst else [""] * length
-
-    statuses = fill_if_empty(statuses, max_len)
-    ips = fill_if_empty(ips, max_len)
-    prefixes = fill_if_empty(prefixes, max_len)
-    macs = fill_if_empty(macs, max_len)
-
-    interfaces: list[NetworkInterfaceData] = []
-    for i, name in enumerate(names):
-        parsed = _parse_single_network_interface(
-            name=name,
-            status_raw=statuses[i],
-            ip_raw=ips[i],
-            pfx_raw=prefixes[i],
-            mac_raw=macs[i],
-            status_map=net_cfg.interface_status_map,
-            config=config,
-        )
-        if parsed:
-            interfaces.append(parsed)
-
-    return interfaces
-
-
-# ============================================================
 # CONSTRUCCIÓN DE PAYLOAD
 # ============================================================
 
@@ -2375,6 +2250,131 @@ def sync_vm(
 
 
 # ============================================================
+# PARSEO DE INTERFACES y IPs
+# ============================================================
+
+
+def _validate_interface_ip(ip_raw: str, name: str) -> str | None:
+    """Valida que un string sea una dirección IP correcta."""
+    try:
+        ipaddress.ip_address(ip_raw)
+        return ip_raw
+    except ValueError:
+        log.warning(
+            "IP '%s' en interfaz '%s' no es una dirección IP válida; "
+            "se omitirá la asignación de IP.",
+            ip_raw,
+            name,
+        )
+        return None
+
+
+def _build_interface_cidr(ip_val: str, pfx_val: str, name: str) -> str | None:
+    """Valida IP y prefijo construyendo una dirección CIDR válida."""
+    try:
+        mask_or_prefix = (
+            pfx_val.split("/")[1].strip() if "/" in pfx_val else pfx_val.strip()
+        )
+        return str(ipaddress.ip_interface(f"{ip_val}/{mask_or_prefix}"))
+    except ValueError:
+        log.warning(
+            "Prefijo o CIDR inválido '%s' para IP '%s' en interfaz '%s'.",
+            pfx_val,
+            ip_val,
+            name,
+        )
+        return None
+
+
+def _parse_single_network_interface(
+    name: str,
+    status_raw: str,
+    ip_raw: str,
+    pfx_raw: str,
+    mac_raw: str,
+    status_map: dict[str, bool],
+    config: NetBoxMappingConfig,
+) -> NetworkInterfaceData | None:
+    """Parsea una única interfaz aislando la lógica de validación de IPs."""
+    if config.is_empty(name):
+        return None
+
+    enabled = status_map.get(status_raw.lower().strip(), True)
+    ip_val = ip_raw if not config.is_empty(ip_raw) else None
+    pfx_val = pfx_raw if not config.is_empty(pfx_raw) else None
+    mac_val = mac_raw if not config.is_empty(mac_raw) else None
+
+    cidr = None
+    if ip_val:
+        ip_val = _validate_interface_ip(ip_val, name)
+        if ip_val and pfx_val:
+            cidr = _build_interface_cidr(ip_val, pfx_val, name)
+
+    return {
+        "name": name,
+        "enabled": enabled,
+        "mac": mac_val,
+        "ip": ip_val,
+        "prefix": pfx_val,
+        "cidr": cidr,
+    }
+
+
+def parse_network_interfaces(
+    row: CsvRow,
+    config: NetBoxMappingConfig,
+) -> list[NetworkInterfaceData] | None:
+    """
+    Parsea las columnas de red del CSV y devuelve una lista de interfaces.
+    Retorna None si los arrays (listas tras el split) tienen longitudes distintas.
+    """
+    net_cfg = config.network
+    cols = net_cfg.columns
+
+    def split_col(col_name: str) -> list[str]:
+        raw = row.get(col_name, "")
+        return [v.strip() for v in raw.split(",")] if not config.is_empty(raw) else []
+
+    names = split_col(cols.names)
+    if not names:
+        return []
+
+    statuses = split_col(cols.status)
+    ips = split_col(cols.ip)
+    prefixes = split_col(cols.prefix)
+    macs = split_col(cols.mac)
+
+    max_len = len(names)
+    for lst in (statuses, ips, prefixes, macs):
+        if lst and len(lst) != max_len:
+            return None  # Longitudes incompatibles
+
+    def fill_if_empty(lst: list[str], length: int) -> list[str]:
+        return lst if lst else [""] * length
+
+    statuses = fill_if_empty(statuses, max_len)
+    ips = fill_if_empty(ips, max_len)
+    prefixes = fill_if_empty(prefixes, max_len)
+    macs = fill_if_empty(macs, max_len)
+
+    interfaces: list[NetworkInterfaceData] = []
+    for i, name in enumerate(names):
+        parsed = _parse_single_network_interface(
+            name=name,
+            status_raw=statuses[i],
+            ip_raw=ips[i],
+            pfx_raw=prefixes[i],
+            mac_raw=macs[i],
+            status_map=net_cfg.interface_status_map,
+            config=config,
+        )
+        if parsed:
+            interfaces.append(parsed)
+
+    return interfaces
+
+
+# ============================================================
 # SINCRONIZACIÓN DE INTERFACES
 # ============================================================
 
@@ -2629,29 +2629,21 @@ def main() -> None:
 
     # ── Procesar filas ───────────────────────────────────────
     for row_num, row in enumerate(rows, start=2):
-        type_csv = row.get(columns["machine_type"], "").strip()
-        node_type: NodeType | None = config.machine_type_map.get(type_csv)
+        machine_name_raw = row.get(columns["machine_name"], "").strip()
+        machine_name = machine_name_raw or f"fila {row_num}"
+
+        machine_type = row.get(columns["machine_type"], "").strip()
+        node_type: NodeType | None = config.machine_type_map.get(machine_type)
 
         if node_type is None:
             log.warning(
                 "Fila %d SKIP: %s '%s' no está en machine_type_map.",
                 row_num,
                 columns["machine_type"],
-                type_csv,
+                machine_type,
             )
             counts["SKIPPED"] += 1
             continue
-
-        # ── Parsear interfaces ────────────────────────────────
-        interfaces = parse_network_interfaces(row, config)
-        if interfaces is None:
-            machine_name = row.get(columns["machine_name"], f"fila {row_num}")
-            log.warning(
-                "Interfaces de '%s' tienen longitudes inconsistentes; "
-                "se omitirán para esta fila.",
-                machine_name,
-            )
-            interfaces = []
 
         # ── Sincronizar Device o VM ───────────────────────────
         try:
@@ -2682,7 +2674,6 @@ def main() -> None:
             counts["SKIPPED"] += 1
             continue
         except Exception:
-            machine_name = row.get(columns["machine_name"], "N/A")
             log.exception(
                 "ERROR inesperado al procesar fila %d ('%s')",
                 row_num,
@@ -2692,13 +2683,21 @@ def main() -> None:
             continue
 
         counts[result] += 1
+        if result not in ("CREATED", "UPDATED", "UNCHANGED"):
+            continue
 
-        if result not in ("CREATED", "UPDATED", "UNCHANGED") or not interfaces:
+        # ── Parsear interfaces ────────────────────────────────
+        interfaces = parse_network_interfaces(row, config)
+        if interfaces is None:
+            log.warning(
+                "Interfaces de '%s' tienen longitudes inconsistentes; "
+                "se omitirán para esta fila.",
+                machine_name,
+            )
             continue
 
         # ── Sincronizar interfaces del objeto ─────────────────
         if not obj_id:
-            machine_name = row.get(columns["machine_name"], f"fila {row_num}")
             log.warning(
                 "SKIP interfaces de '%s': el objeto no tiene ID.",
                 machine_name,
@@ -2716,7 +2715,6 @@ def main() -> None:
             if iface_errors > 0:
                 counts["ERROR"] += iface_errors
         except Exception:
-            machine_name = row.get(columns["machine_name"], "N/A")
             log.exception(
                 "ERROR inesperado al sincronizar interfaces de '%s'", machine_name
             )
