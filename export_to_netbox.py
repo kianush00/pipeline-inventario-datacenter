@@ -44,6 +44,7 @@ Códigos de salida:
 
 import argparse
 import csv
+import hashlib
 import ipaddress
 import logging
 import os
@@ -563,6 +564,12 @@ def slugify(name: str) -> str:
     return slug[:100]
 
 
+def _generate_fallback_slug(base_slug: str, original_name: str) -> str:
+    """Genera un slug de respaldo determinista usando un hash md5 corto."""
+    hash_suffix = hashlib.md5(original_name.encode("utf-8")).hexdigest()[:4]
+    return f"{base_slug}-{hash_suffix}"
+
+
 def safe_int(value: Any) -> int | None:
     """Convierte un valor a int, retornando None si no es convertible."""
     try:
@@ -981,17 +988,23 @@ def ensure_manufacturer(
         )
     except RequestError:
         # Fallback: colisión de slug por race condition o datos no previstos.
-        slug_fallback = f"{slug}-{hash(name) % 10000:04d}"
+        slug_fallback = _generate_fallback_slug(slug, name)
         log.warning(
             "Slug '%s' colisionó al crear Manufacturer '%s'; reintentando con '%s'.",
             slug,
             name,
             slug_fallback,
         )
-        obj = cast(
-            Record,
-            manufacturers_endpoint.create(name=name, slug=slug_fallback),
-        )
+        try:
+            obj = cast(
+                Record,
+                manufacturers_endpoint.create(name=name, slug=slug_fallback),
+            )
+        except RequestError as e:
+            raise RuntimeError(
+                f"Imposible crear Manufacturer '{name}' debido a colisión persistente "
+                f"de slug o rechazo de NetBox: {e}"
+            ) from e
     log.info("Manufacturer creado: %s", name)
     cache[name] = obj
     return obj
@@ -1051,7 +1064,7 @@ def _create_device_type(
             ),
         )
     except RequestError:
-        slug_fallback = f"{slug}-{hash(model) % 10000:04d}"
+        slug_fallback = _generate_fallback_slug(slug, model)
         log.warning(
             "Slug '%s' colisionó al crear DeviceType '%s/%s'; reintentando con '%s'.",
             slug,
@@ -1059,15 +1072,21 @@ def _create_device_type(
             model,
             slug_fallback,
         )
-        return cast(
-            Record,
-            endpoint.create(
-                model=model,
-                slug=slug_fallback,
-                manufacturer=manufacturer_id,
-                u_height=u_height_val,
-            ),
-        )
+        try:
+            return cast(
+                Record,
+                endpoint.create(
+                    model=model,
+                    slug=slug_fallback,
+                    manufacturer=manufacturer_id,
+                    u_height=u_height_val,
+                ),
+            )
+        except RequestError as e:
+            raise RuntimeError(
+                f"Imposible crear DeviceType '{manufacturer_name}/{model}' debido "
+                f"a colisión persistente de slug o rechazo de NetBox: {e}"
+            ) from e
 
 
 def ensure_device_type(
@@ -1170,17 +1189,23 @@ def ensure_platform(
     try:
         obj = cast(Record, platforms_endpoint.create(name=name, slug=slug))
     except RequestError:
-        slug_fallback = f"{slug}-{hash(name) % 10000:04d}"
+        slug_fallback = _generate_fallback_slug(slug, name)
         log.warning(
             "Slug '%s' colisionó al crear Platform '%s'; reintentando con '%s'.",
             slug,
             name,
             slug_fallback,
         )
-        obj = cast(
-            Record,
-            platforms_endpoint.create(name=name, slug=slug_fallback),
-        )
+        try:
+            obj = cast(
+                Record,
+                platforms_endpoint.create(name=name, slug=slug_fallback),
+            )
+        except RequestError as e:
+            raise RuntimeError(
+                f"Imposible crear Platform '{name}' debido a colisión persistente "
+                f"de slug o rechazo de NetBox: {e}"
+            ) from e
     log.info("Platform creado: %s", name)
     cache[name] = obj
     return obj
@@ -1401,7 +1426,10 @@ def _ensure_choice_set(
     """Crea un choice set si no existe en NetBox."""
     choice_set_name: str = choice_set_cfg.name
     choices: list[list[str]] = _get_choice_set_choices(choice_set_cfg.choices)
-    choice_set: Record | None = existing_choice_sets.get(choice_set_name)
+    choice_set = existing_choice_sets.get(choice_set_name)
+
+    def _get_choice_set_id(choice_set: Record) -> int:
+        return cast(int, getattr(choice_set, "id", 0))
 
     if choice_set is None:
         if dry_run:
@@ -1432,17 +1460,17 @@ def _ensure_choice_set(
             "Choice Set creado: %s",
             choice_set_name,
         )
-        return cast(int, choice_set.id)
+        return _get_choice_set_id(choice_set)
 
     extra_choices: Any = getattr(choice_set, "extra_choices", None)
     current_choices: list[list[str]] = _normalize_choices(extra_choices)
 
     if current_choices == choices:
-        return cast(int, choice_set.id)
+        return _get_choice_set_id(choice_set)
 
     if dry_run:
         log.info("[DRY-RUN] Actualizaría Choice Set: %s", choice_set_name)
-        return cast(int, choice_set.id)
+        return _get_choice_set_id(choice_set)
 
     try:
         choice_set.update(
@@ -1456,7 +1484,7 @@ def _ensure_choice_set(
         log.exception("Error al actualizar Choice Set '%s'", choice_set_name)
         return None
 
-    return cast(int, choice_set.id)
+    return _get_choice_set_id(choice_set)
 
 
 def _ensure_custom_field(
