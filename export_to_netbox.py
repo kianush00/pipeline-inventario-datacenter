@@ -587,6 +587,19 @@ def concat_dot(parts: list[str], config: NetBoxMappingConfig) -> str:
     return ". ".join(clean)
 
 
+def extract_csv_value(row: CsvRow, col_alias: str, config: NetBoxMappingConfig) -> str:
+    """
+    Extrae y sanitiza un valor del CSV usando su alias definido en el YAML.
+    Si la celda está vacía (según config.is_empty) o la columna no existe,
+    retorna un string vacío (""), permitiendo validaciones directas tipo `if valor:`.
+    """
+    col_name = config.columns.get(col_alias)
+    if not col_name:
+        return ""
+    val = row.get(col_name, "").strip()
+    return "" if config.is_empty(val) else val
+
+
 def get_netbox_object_id(obj: NetBoxObject) -> int:
     """Retorna el ID de un objeto NetBox. Si el objeto es None, retorna 0."""
     obj_id = getattr(obj, "id", None)
@@ -596,7 +609,7 @@ def get_netbox_object_id(obj: NetBoxObject) -> int:
 
 
 def get_node_type_from_object(obj: Endpoint | Record) -> NodeType:
-    """Returns the node type (virtual_machine or device) from an endpoint or record."""
+    """Retorna el tipo de nodo (virtual_machine o device) a partir de un Endpoint o Record."""
     url = getattr(obj, "url", "")
     if "virtualization" in url or getattr(obj, "name", "") == "virtual-machines":
         return "virtual_machine"
@@ -604,8 +617,8 @@ def get_node_type_from_object(obj: Endpoint | Record) -> NodeType:
 
 
 def get_node_type_from_row(row: CsvRow, config: NetBoxMappingConfig) -> NodeType | None:
-    """Returns the node type (virtual_machine or device) from a CSV row."""
-    machine_type = row.get(config.columns["machine_type"], "").strip()
+    """Extrae el tipo de máquina y lo mapea al tipo de nodo NetBox."""
+    machine_type = extract_csv_value(row, "machine_type", config)
     return config.machine_type_map.get(machine_type)
 
 
@@ -1723,11 +1736,7 @@ def build_payload(
 # ============================================================
 
 
-def _resolve_netbox_status(
-    row: CsvRow,
-    config: NetBoxMappingConfig,
-    columns: CsvColumnAliases,
-) -> str:
+def _resolve_netbox_status(row: CsvRow, config: NetBoxMappingConfig) -> str:
     """
     Resuelve el status NetBox a partir de la columna 'Estado'.
 
@@ -1736,14 +1745,14 @@ def _resolve_netbox_status(
         virtual_machine -> staged
     """
     node_type: NodeType | None = get_node_type_from_row(row, config)
-    estado = row.get(columns["status"], "").strip()
+    estado = extract_csv_value(row, "status", config)
     status_mapped = config.status_map.get(estado)
 
     if node_type is None:
         log.error(
             "No se pudo determinar el tipo de nodo. Máquina: '%s', Tipo: '%s'",
-            row.get(config.columns["machine_name"], "?"),
-            row.get(config.columns["machine_type"], "?"),
+            extract_csv_value(row, "machine_name", config) or "?",
+            extract_csv_value(row, "machine_type", config) or "?",
         )
         raise ValueError("No se pudo determinar el tipo de nodo.")
 
@@ -1762,8 +1771,8 @@ def _resolve_platform(
     config: NetBoxMappingConfig,
 ) -> int | None:
     """Resuelve el Platform desde la columna OS y retorna su ID (si existe)."""
-    plt_name = row.get(config.columns["os"], "").strip()
-    if config.is_empty(plt_name):
+    plt_name = extract_csv_value(row, "os", config)
+    if not plt_name:
         return None
 
     platform = ensure_platform(
@@ -1844,19 +1853,15 @@ def _resolve_device_role(
 def _check_missing_core_fields(
     machine_name: str,
     machine_type: str,
-    columns: dict[str, str],
     config: NetBoxMappingConfig,
 ) -> bool:
     """
     Verifica si faltan campos principales requeridos (nombre o tipo).
     Retorna True si falta alguno y registra la advertencia (SKIP).
     """
-    if config.is_empty(machine_name) or config.is_empty(machine_type):
-        empty_field = (
-            columns["machine_name"]
-            if config.is_empty(machine_name)
-            else columns["machine_type"]
-        )
+    if not machine_name or not machine_type:
+        empty_alias = "machine_name" if not machine_name else "machine_type"
+        empty_field = config.columns.get(empty_alias, empty_alias)
         log.warning(
             "SKIP (%s): campo requerido '%s' vacío.",
             machine_name or "N/A",
@@ -2094,12 +2099,11 @@ def sync_device(
     Sincroniza una fila de tipo "device" o "hipervisor" con NetBox.
     Retorna: (SyncStatus, obj_id | None)
     """
-    columns = config.columns
-    machine_name: str = row.get(columns["machine_name"], "").strip()
-    uuid: str = row.get(columns["uuid"], "").strip()
-    machine_type: str = row.get(columns["machine_type"], "").strip()
+    machine_name = extract_csv_value(row, "machine_name", config)
+    uuid = extract_csv_value(row, "uuid", config)
+    machine_type = extract_csv_value(row, "machine_type", config)
 
-    if _check_missing_core_fields(machine_name, machine_type, columns, config):
+    if _check_missing_core_fields(machine_name, machine_type, config):
         return "SKIPPED", None
 
     # Construcción dinámica del payload.
@@ -2113,7 +2117,7 @@ def sync_device(
 
     # ── Resolución de objetos relacionados ──────────────────
     # Role.
-    role_csv: str = row.get(columns["role"], "").strip()
+    role_csv = extract_csv_value(row, "role", config)
     role_obj = _resolve_device_role(role_csv, caches.device_roles, config)
     if role_obj is None:
         log.error(
@@ -2131,15 +2135,15 @@ def sync_device(
         payload["platform"] = platform_id
 
     # Estado.
-    payload["status"] = _resolve_netbox_status(row, config, columns)
+    payload["status"] = _resolve_netbox_status(row, config)
 
     # Site.
     payload["site"] = get_netbox_object_id(site)
 
     # Cluster para hipervisores.
     if machine_type == "Hipervisor":
-        cluster_name_csv = row.get(columns.get("cluster_name", ""), "").strip()
-        if not config.is_empty(cluster_name_csv):
+        cluster_name_csv = extract_csv_value(row, "cluster_name", config)
+        if cluster_name_csv:
             cluster = ensure_cluster(
                 endpoints.clusters,
                 cluster_name_csv,
@@ -2153,9 +2157,9 @@ def sync_device(
             log.info("INFO (%s): Hipervisor sin cluster asignado.", machine_name)
 
     # Manufacturer.
-    manufacturer: str = row.get(columns["manufacturer"], "").strip()
-    model: str = row.get(columns["model"], "").strip()
-    if config.is_empty(manufacturer) or config.is_empty(model):
+    manufacturer = extract_csv_value(row, "manufacturer", config)
+    model = extract_csv_value(row, "model", config)
+    if not manufacturer or not model:
         log.warning("SKIP (%s): sin Marca o Modelo.", machine_name)
         return "SKIPPED", None
 
@@ -2167,12 +2171,12 @@ def sync_device(
     )
 
     # Altura de unidad. Si no se proporciona, se asume 1.
-    raw_u_height = row.get(columns["alt_u"], "").strip()
+    raw_u_height = extract_csv_value(row, "alt_u", config)
     u_height = safe_int(raw_u_height) or 1
 
     # Rack.
-    rack_name: str = row.get(columns["rack"], "").strip()
-    if not config.is_empty(rack_name):
+    rack_name = extract_csv_value(row, "rack", config)
+    if rack_name:
         rack = ensure_rack(
             endpoints.racks,
             rack_name,
@@ -2219,12 +2223,11 @@ def sync_vm(
     Sincroniza una fila de tipo "virtual_machine" con NetBox.
     Retorna: (SyncStatus, obj_id | None)
     """
-    columns = config.columns
-    machine_name: str = row.get(columns["machine_name"], "").strip()
-    uuid: str = row.get(columns["uuid"], "").strip()
-    machine_type: str = row.get(columns["machine_type"], "").strip()
+    machine_name = extract_csv_value(row, "machine_name", config)
+    uuid = extract_csv_value(row, "uuid", config)
+    machine_type = extract_csv_value(row, "machine_type", config)
 
-    if _check_missing_core_fields(machine_name, machine_type, columns, config):
+    if _check_missing_core_fields(machine_name, machine_type, config):
         return "SKIPPED", None
 
     # Construcción dinámica del payload.
@@ -2239,7 +2242,7 @@ def sync_vm(
 
     # ── Resolución de objetos relacionados ──────────────────
     # Role.
-    rol_csv: str = row.get(columns["role"], "").strip()
+    rol_csv = extract_csv_value(row, "role", config)
     role_obj = _resolve_device_role(rol_csv, caches.device_roles, config)
     if role_obj is None:
         log.error(
@@ -2258,19 +2261,19 @@ def sync_vm(
         payload["platform"] = platform_id
 
     # Estado.
-    payload["status"] = _resolve_netbox_status(row, config, columns)
+    payload["status"] = _resolve_netbox_status(row, config)
 
     # Site.
     site_id = get_netbox_object_id(site)
     payload["site"] = site_id
 
     # Cluster.
-    cluster_name_csv: str = row.get(columns.get("cluster_name", ""), "").strip()
-    if config.is_empty(cluster_name_csv):
+    cluster_name_csv = extract_csv_value(row, "cluster_name", config)
+    if not cluster_name_csv:
         log.warning(
             "SKIP (%s): VM sin %s.",
             machine_name,
-            columns.get("cluster_name", "Cluster"),
+            config.columns.get("cluster_name", "Cluster"),
         )
         return "SKIPPED", None
     cluster = ensure_cluster(
@@ -2284,8 +2287,8 @@ def sync_vm(
     payload["cluster"] = get_netbox_object_id(cluster)
 
     # Device del hipervisor host (acotado a site y cacheado).
-    host_name: str = row.get(columns.get("host_device", ""), "").strip()
-    if not config.is_empty(host_name):
+    host_name = extract_csv_value(row, "host_device", config)
+    if host_name:
         host_dev_id = _resolve_host_device(
             endpoints.devices,
             host_name,
@@ -2301,7 +2304,7 @@ def sync_vm(
                 host_name,
             )
     # vcpus.
-    cores: str = row.get(columns["cores"], "").strip()
+    cores = extract_csv_value(row, "cores", config)
     cores_int = safe_int(cores)
     if cores_int is not None:
         payload["vcpus"] = float(cores_int)
@@ -2722,12 +2725,12 @@ def main() -> None:
     # Usado para validar unicidad antes de permitir
     # actualizaciones por nombre (sin UUID).
     csv_name_counts: Counter[str] = Counter(
-        row.get(columns["machine_name"], "").strip() for row in rows
+        extract_csv_value(row, "machine_name", config) for row in rows
     )
 
     # ── Procesar filas ───────────────────────────────────────
     for row_num, row in enumerate(rows, start=2):
-        machine_name_raw = row.get(columns["machine_name"], "").strip()
+        machine_name_raw = extract_csv_value(row, "machine_name", config)
         machine_name = machine_name_raw or f"fila {row_num}"
 
         node_type: NodeType | None = get_node_type_from_row(row, config)
@@ -2737,7 +2740,7 @@ def main() -> None:
                 "Fila %d SKIP: %s '%s' no está en machine_type_map.",
                 row_num,
                 columns["machine_type"],
-                row.get(columns["machine_type"], "").strip(),
+                extract_csv_value(row, "machine_type", config),
             )
             counts["SKIPPED"] += 1
             continue
