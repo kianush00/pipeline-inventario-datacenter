@@ -671,6 +671,15 @@ def load_config(mapping_path: Path) -> NetBoxMappingConfig:
 
 
 def load_env() -> tuple[str, str, bool]:
+    """
+    Carga las variables de entorno requeridas para la conexión con NetBox.
+
+    - NETBOX_URL: URL de la API de NetBox (ej. http://netbox.empresa.com).
+    - NETBOX_TOKEN: Token de autenticación con permisos write sobre dcim,
+      virtualization, ipam, extras, core.
+    - NETBOX_VERIFY_SSL: 'true' si se debe verificar el certificado SSL
+      (por defecto), 'false' para saltar la verificación.
+    """
     url = os.environ.get("NETBOX_URL", "").rstrip("/")
     token = os.environ.get("NETBOX_TOKEN", "")
     verify_ssl = os.environ.get("NETBOX_VERIFY_SSL", "true").lower() != "false"
@@ -695,6 +704,13 @@ def load_env() -> tuple[str, str, bool]:
 
 
 def build_nb_client(url: str, token: str, verify_ssl: bool) -> Api:
+    """
+    Construye y retorna un cliente API de NetBox completamente configurado.
+
+    La inicialización incluye: configuración de sesión HTTP (incluyendo
+    deshabilitar SSL si se especifica), autenticación con el token, y una
+    verificación inicial de conectividad contra el endpoint de sites.
+    """
     if not verify_ssl:
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -1665,8 +1681,18 @@ def build_payload(
     config: NetBoxMappingConfig,
 ) -> NetBoxPayload:
     """
-    Construye el payload nativo (y custom fields anidados) para una fila del CSV.
-    Los campos con valor None (vacíos + is_optional) se excluyen.
+    Construye de forma dinámica el payload para enviar a la API de NetBox,
+    basándose estrictamente en las reglas de mapeo (DML) definidas en el archivo YAML.
+
+    Esta función es el núcleo del dinamismo del script, ya que abstrae la lógica de
+    extracción, mapeo de valores, casteos y validaciones, aislando el código Python
+    de las reglas de negocio específicas del CSV.
+
+    - Los `native_maps` se inyectan en el primer nivel (raíz) del diccionario payload.
+    - Los `custom_maps` se agrupan y empaquetan dentro de la clave "custom_fields".
+    - Los campos resultantes con valor `None` (ej. celdas vacías donde `is_optional=True`)
+      se excluyen proactivamente del payload para evitar borrar datos preexistentes
+      o violar constraints en NetBox.
     """
     payload: NetBoxPayload = {}
     cf_payload: CustomFieldsPayload = {}
@@ -2076,9 +2102,14 @@ def sync_device(
     if _check_missing_core_fields(machine_name, machine_type, columns, config):
         return "SKIPPED", None
 
+    # Construcción dinámica del payload.
     device_native_maps = config.device_native_mappings
     device_custom_maps = config.device_custom_mappings
     payload = build_payload(row, device_native_maps, device_custom_maps, config)
+
+    # Compensación de API NetBox: 'face' es obligatorio si 'position' existe.
+    if payload.get("position") is not None and "face" not in payload:
+        payload["face"] = "front"
 
     # ── Resolución de objetos relacionados ──────────────────
     # Role.
@@ -2134,6 +2165,8 @@ def sync_device(
         caches.manufacturers,
         dry_run,
     )
+
+    # Altura de unidad. Si no se proporciona, se asume 1.
     raw_u_height = row.get(columns["alt_u"], "").strip()
     u_height = safe_int(raw_u_height) or 1
 
@@ -2194,6 +2227,7 @@ def sync_vm(
     if _check_missing_core_fields(machine_name, machine_type, columns, config):
         return "SKIPPED", None
 
+    # Construcción dinámica del payload.
     vm_native_maps = config.vm_native_mappings
     vm_custom_maps = config.vm_custom_mappings
     payload = build_payload(
