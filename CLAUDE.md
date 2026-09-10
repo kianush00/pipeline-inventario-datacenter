@@ -15,23 +15,21 @@ El flujo consta de:
 4. Mezcla/Consolidación usando un UUID único como llave (`merge_inventories.py`).
 5. Exportación idempotente hacia NetBox mediante la API REST (`export_to_netbox.py` y `netbox_mapping.yaml`).
 
-# Estándares de Ingeniería de Software
-
 Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes principios de ingeniería de software a nivel profesional:
 
 ## 1. Tipado Fuerte y Estático (Python)
 
 - Todo el código Python debe estar fuertemente tipado utilizando las anotaciones del módulo `typing` nativo.
 - Evita a toda costa el uso injustificado de `Any`.
-- Utiliza elementos como `TypeAlias`, `TypedDict`, `dataclasses` y Modelos Pydantic (`BaseModel`) para definir estructuras de datos complejas o payloads de APIs, garantizando una semántica clara.
+- Utiliza (y reutiliza si se encuentran) elementos como `TypeAlias`, `TypedDict`, `dataclasses` y Modelos Pydantic (`BaseModel`) para definir estructuras de datos complejas o payloads de APIs, garantizando una semántica clara.
 - Asegúrate de que el código base esté diseñado para pasar verificadores de tipo estáticos sin advertencias (Pylance/MyPy).
 
 ## 2. Calidad de Código, Semántica y Consistencia Arquitectónica (Clean Code)
 
 - Prioriza la legibilidad, la intención y la robustez profesional sobre la brevedad o soluciones rápidas.
 - **Cero atajos o parches forzados:** Toda modificación debe ser limpia, cuidadosa y respetar estrictamente los patrones de diseño y convenciones ya establecidas en el código base.
-- **Reutilización y creación de utilidades:** Prohibido duplicar lógica ad-hoc. Aprovecha siempre las funciones auxiliares existentes en el proyecto (ej. `get_netbox_object_id`, `safe_int`, `apply_cast`, helpers de configuración y cache). Si introduces código nuevo que resuelva transformaciones, parseos o validaciones comunes no cubiertas actualmente, abstáelo en una nueva función auxiliar reutilizable siguiendo el diseño de los módulos de soporte existentes.
-- Nombra variables, funciones y clases de forma descriptiva, revelando su intención en el modelo de dominio (ej. `SyncStatus`, `NetBoxPayload`).
+- **Reutilización y creación de utilidades:** Prohibido duplicar lógica ad-hoc. Aprovecha siempre las funciones auxiliares (utilidades) existentes en el proyecto. Si introduces código nuevo que resuelva transformaciones, parseos o validaciones comunes no cubiertas actualmente, abstáelo en una nueva función auxiliar reutilizable siguiendo el diseño de los módulos de soporte existentes.
+- Nombra variables, funciones y clases de forma descriptiva, revelando su intención en el modelo de dominio.
 - **Principio de Responsabilidad Única (SRP)**: las funciones deben hacer una sola cosa y hacerla bien.
 - Mantén un manejo de errores robusto. Nunca falles silenciosamente; utiliza logs (`logging`) detallados con contexto y niveles adecuados (INFO, WARNING, ERROR).
 
@@ -58,10 +56,27 @@ Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes prin
 - **Enfoque en la solución técnica:** Proporciona explicaciones técnicas concisas, fundamentadas, precisas y profesionales.
 - **Diffs limpios y contextualizados:** Entrega los bloques de código modificados listos para integrarse sin placeholders ambiguos, asegurando total coherencia con el resto del script.
 
-## 7. Verificación de Tipos Estáticos Continua
+## 7. Verificación de Calidad, Tipos y Linting Continuo
 
-- Dado que el proyecto usa tipado fuerte (validado localmente mediante Pyrefly/Pyright), **como agente DEBES comprobar los tipos estáticos** después de implementar o modificar lógica compleja.
-- **Comandos a ejecutar:** Ejecuta directamente el binario de Pyright sin intentar activar shells interactivas (la configuración del entorno virtual se resuelve automáticamente vía `pyrightconfig.json`):
-  - En Linux/macOS: `.venv/bin/pyright <archivo_modificado>`
-  - En Windows: `.\.venv\Scripts\pyright <archivo_modificado>`
-- Lee los resultados del comando y corrige autónomamente cualquier error de tipo que hayas introducido antes de dar la tarea por concluida.
+Antes de dar cualquier modificación por concluida, **como agente DEBES verificar y corregir autónomamente** el código modificado ejecutando las siguientes herramientas desde el entorno virtual:
+
+1. **Tipado Estático (Pyright / Pyrefly):**
+   - Linux/macOS: `.venv/bin/pyright <archivo_modificado>`
+   - Windows: `.\.venv\Scripts\pyright <archivo_modificado>`
+   - Corrige cualquier discrepancia de tipos (`reportGeneralTypeIssues`, argumentos faltantes o `Any` injustificado).
+
+2. **Linting y Estándares de Código (Ruff):**
+   - Ejecuta el linter para detectar errores semánticos, imports en desuso o violaciones de reglas alineadas con SonarQube:
+     - Linux/macOS: `.venv/bin/ruff check <archivo_modificado> --fix`
+     - Windows: `.\.venv\Scripts\ruff check <archivo_modificado> --fix`
+
+3. **Formateo y Consistencia (Ruff Format):**
+   - Garantiza que la indentación, saltos de línea y longitud cumplan con el estándar PEP 8:
+     - Linux/macOS: `.venv/bin/ruff format <archivo_modificado>`
+     - Windows: `.\.venv\Scripts\ruff format <archivo_modificado>`
+
+4. **Validación en Seco (Dry-Run / Syntax Check):**
+   - Para cambios en `export_to_netbox.py` o scripts del pipeline, ejecuta un chequeo de sintaxis rápida:
+     - Linux/macOS: `.venv/bin/python3 -m py_compile <archivo_modificado>`
+     - Windows: `.\.venv\Scripts\python -m py_compile <archivo_modificado>`
+   - Si se cuenta con datos de prueba o fixtures, verifica la consistencia con el flag `--dry-run` antes de confirmar la solución.

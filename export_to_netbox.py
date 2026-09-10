@@ -99,6 +99,10 @@ CsvColumnAliases: TypeAlias = dict[str, str]
 NetBoxObject: TypeAlias = "Record | MockNetBoxRecord"
 
 
+class RowValidationError(ValueError):
+    """Excepción lanzada cuando los datos de una fila son explícitamente inválidos."""
+
+
 class SyncCounts(TypedDict):
     """Contadores de resultados de la sincronización con NetBox."""
 
@@ -1668,7 +1672,9 @@ def _validate_select_choice(
     )
     if is_optional:
         return None
-    raise ValueError(f"Valor inválido '{value}' para el campo requerido '{target}'.")
+    raise RowValidationError(
+        f"Valor inválido '{value}' para el campo requerido '{target}'."
+    )
 
 
 def _resolve_field_value(
@@ -1783,7 +1789,7 @@ def _resolve_netbox_status(row: CsvRow, config: NetBoxMappingConfig) -> str:
             extract_csv_value(row, "machine_name", config) or "?",
             extract_csv_value(row, "machine_type", config) or "?",
         )
-        raise ValueError("No se pudo determinar el tipo de nodo.")
+        raise RowValidationError("No se pudo determinar el tipo de nodo.")
 
     if status_mapped:
         return status_mapped
@@ -2799,9 +2805,9 @@ def main() -> None:
                     csv_name_counts,
                     args.dry_run,
                 )
-        except ValueError as e:
-            log.warning("SKIP fila %d: %s", row_num, e)
-            counts["SKIPPED"] += 1
+        except RowValidationError:
+            log.exception("ERROR fila %d", row_num)
+            counts["ERROR"] += 1
             continue
         except Exception:
             log.exception(
