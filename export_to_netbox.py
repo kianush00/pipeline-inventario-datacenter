@@ -166,6 +166,15 @@ class SiteConfig(BaseModel):
     name: str = Field(min_length=1)
     slug: str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def generate_slug_if_missing(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            raw_slug = data.get("slug") or data.get("name")
+            if raw_slug:
+                data["slug"] = slugify(str(raw_slug))
+        return data
+
     @field_validator("name", "slug")
     @classmethod
     def validate_no_unresolved_vars(cls, v: str | None) -> str | None:
@@ -184,6 +193,15 @@ class ClusterTypeConfig(BaseModel):
     name: str = Field(min_length=1)
     slug: str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def generate_slug_if_missing(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            raw_slug = data.get("slug") or data.get("name")
+            if raw_slug:
+                data["slug"] = slugify(str(raw_slug))
+        return data
+
 
 class DeviceRoleConfig(BaseModel):
     """Configuración de un DeviceRole."""
@@ -193,6 +211,15 @@ class DeviceRoleConfig(BaseModel):
     name: str = Field(min_length=1)
     slug: str | None = None
     color: str = Field(default="9e9e9e", pattern=r"^[0-9a-fA-F]{6}$")
+
+    @model_validator(mode="before")
+    @classmethod
+    def generate_slug_if_missing(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            raw_slug = data.get("slug") or data.get("name")
+            if raw_slug:
+                data["slug"] = slugify(str(raw_slug))
+        return data
 
 
 class ChoiceItemConfig(BaseModel):
@@ -627,15 +654,6 @@ def get_node_type_from_row(row: CsvRow, config: NetBoxMappingConfig) -> NodeType
 # ============================================================
 
 
-def _pre_process_site_slug(raw_config: dict[str, Any]) -> None:
-    """Asegura que el site tenga un slug válido antes de la validación de Pydantic."""
-    site_data = raw_config.get("site")
-    if isinstance(site_data, dict):
-        raw_slug = site_data.get("slug") or site_data.get("name")
-        if raw_slug:
-            site_data["slug"] = slugify(str(raw_slug))
-
-
 def load_config(mapping_path: Path) -> NetBoxMappingConfig:
     """
     Carga y valida el archivo de mapping YAML utilizando Pydantic.
@@ -663,9 +681,6 @@ def load_config(mapping_path: Path) -> NetBoxMappingConfig:
             mapping_path,
         )
         sys.exit(1)
-
-    # El slug del site debe ser único, por lo que se pre-procesa a partir del nombre
-    _pre_process_site_slug(raw)
 
     # Validar el esquema Pydantic para el archivo de mapping
     try:
@@ -859,7 +874,7 @@ def ensure_site(
 ) -> NetBoxObject:
     """Garantiza que el Site definido en el YAML exista en NetBox."""
     name = site_cfg.name
-    slug = site_cfg.slug or slugify(name)
+    slug = cast(str, site_cfg.slug)
 
     results: list[Record] = list(endpoints.sites.filter(name=name))
     if results:
@@ -890,7 +905,7 @@ def ensure_cluster_type(
 ) -> NetBoxObject:
     """Garantiza que el ClusterType definido en el YAML exista en NetBox."""
     name = cluster_type_cfg.name
-    slug = cluster_type_cfg.slug or slugify(name)
+    slug = cast(str, cluster_type_cfg.slug)
 
     results: list[Record] = list(endpoints.cluster_types.filter(name=name))
     if results:
@@ -1270,7 +1285,7 @@ def _sync_single_device_role(
         return
 
     try:
-        slug = role_def.slug or slugify(name)
+        slug = cast(str, role_def.slug)
         obj = cast(
             Record,
             endpoints.device_roles.create(
