@@ -39,7 +39,8 @@ csv_column_aliases:
   manufacturer: &col_marca "Marca"
   model: &col_modelo "Modelo"
   rack: "Rack"
-  cluster: &col_cluster "Host/Cluster/Chassis"
+  host_device: "Dispositivo Host"
+  cluster_name: &col_cluster_name "Cluster"
   cores: &col_cores "Cores"
   uuid: &col_uuid "UUID"
   os_ver: &col_so_ver "Version SO Host"
@@ -81,7 +82,7 @@ required_columns:
   - *col_estado
   - *col_marca
   - *col_modelo
-  - *col_cluster
+  - *col_cluster_name
 
 # ── Site único ───────────────────────────────────────────────
 # Todos los objetos se asignan a este site.
@@ -94,7 +95,7 @@ site:
 
 # ── ClusterType ──────────────────────────────────────────────
 # Las VMs se agrupan en un Cluster cuyo nombre coincide con el
-# valor del campo 'cluster' en el CSV.
+# valor del campo 'Cluster' en el CSV.
 # El cluster_type se crea automáticamente si no existe.
 cluster_type:
   name: "Hipervisor"
@@ -172,7 +173,6 @@ device_roles:
   - name: "Others"
     slug: "others"
     color: "9e9e9e"
-
 
 # ── Mapeo de Entorno ─────────────────────────────────────────
 # Transforma los valores de entorno del CSV al slug/valor interno

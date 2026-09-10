@@ -2107,15 +2107,19 @@ def sync_device(
 
     # Cluster para hipervisores.
     if machine_type == "Hipervisor":
-        cluster = ensure_cluster(
-            endpoints.clusters,
-            machine_name,
-            cluster_type,
-            site,
-            caches.clusters,
-            dry_run,
-        )
-        payload["cluster"] = get_netbox_object_id(cluster)
+        cluster_name_csv = row.get(columns.get("cluster_name", ""), "").strip()
+        if not config.is_empty(cluster_name_csv):
+            cluster = ensure_cluster(
+                endpoints.clusters,
+                cluster_name_csv,
+                cluster_type,
+                site,
+                caches.clusters,
+                dry_run,
+            )
+            payload["cluster"] = get_netbox_object_id(cluster)
+        else:
+            log.info("INFO (%s): Hipervisor sin cluster asignado.", machine_name)
 
     # Manufacturer.
     manufacturer: str = row.get(columns["manufacturer"], "").strip()
@@ -2227,13 +2231,17 @@ def sync_vm(
     payload["site"] = site_id
 
     # Cluster.
-    host_name: str = row.get(columns["cluster"], "").strip()
-    if config.is_empty(host_name):
-        log.warning("SKIP (%s): VM sin %s.", machine_name, columns["cluster"])
+    cluster_name_csv: str = row.get(columns.get("cluster_name", ""), "").strip()
+    if config.is_empty(cluster_name_csv):
+        log.warning(
+            "SKIP (%s): VM sin %s.",
+            machine_name,
+            columns.get("cluster_name", "Cluster"),
+        )
         return "SKIPPED", None
     cluster = ensure_cluster(
         endpoints.clusters,
-        host_name,
+        cluster_name_csv,
         cluster_type,
         site,
         caches.clusters,
@@ -2242,15 +2250,22 @@ def sync_vm(
     payload["cluster"] = get_netbox_object_id(cluster)
 
     # Device del hipervisor host (acotado a site y cacheado).
-    host_dev_id = _resolve_host_device(
-        endpoints.devices,
-        host_name,
-        site_id,
-        caches.host_devices,
-    )
-    if host_dev_id is not None:
-        payload["device"] = host_dev_id
-
+    host_name: str = row.get(columns.get("host_device", ""), "").strip()
+    if not config.is_empty(host_name):
+        host_dev_id = _resolve_host_device(
+            endpoints.devices,
+            host_name,
+            site_id,
+            caches.host_devices,
+        )
+        if host_dev_id:
+            payload["device"] = host_dev_id
+        else:
+            log.warning(
+                "ADVERTENCIA (%s): El dispositivo host '%s' no se encontró en el site. La VM se creará sin asignación de host.",
+                machine_name,
+                host_name,
+            )
     # vcpus.
     cores: str = row.get(columns["cores"], "").strip()
     cores_int = safe_int(cores)
