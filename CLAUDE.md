@@ -61,5 +61,7 @@ Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes prin
 ## 7. Verificación de Tipos Estáticos Continua
 
 - Dado que el proyecto usa tipado fuerte (validado localmente mediante Pyrefly/Pyright), **como agente DEBES comprobar los tipos estáticos** después de implementar o modificar lógica compleja.
-- **Comandos a ejecutar:** Primero, debes ejecutar el entorno virtual de python (`source .venv/bin/activate` o `.\.venv\Scripts\activate`), luego, intenta ejecutar `pyright <archivo_modificado>` (ej. `pyright export_to_netbox.py`).
+- **Comandos a ejecutar:** Ejecuta directamente el binario de Pyright sin intentar activar shells interactivas (la configuración del entorno virtual se resuelve automáticamente vía `pyrightconfig.json`):
+  - En Linux/macOS: `.venv/bin/pyright <archivo_modificado>`
+  - En Windows: `.\.venv\Scripts\pyright <archivo_modificado>`
 - Lee los resultados del comando y corrige autónomamente cualquier error de tipo que hayas introducido antes de dar la tarea por concluida.

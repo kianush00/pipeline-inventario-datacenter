@@ -570,6 +570,38 @@ def _generate_fallback_slug(base_slug: str, original_name: str) -> str:
     return f"{base_slug}-{hash_suffix}"
 
 
+def create_with_fallback_slug(
+    endpoint: Endpoint,
+    object_type_name: str,
+    original_name: str,
+    **kwargs: Any,
+) -> Record:
+    """
+    Intenta crear un objeto en NetBox. Si ocurre colisión de slug (RequestError),
+    genera un slug determinista de respaldo y reintenta la creación.
+    """
+    slug: str = kwargs.get("slug", "")
+    try:
+        return cast(Record, endpoint.create(**kwargs))
+    except RequestError:
+        slug_fallback = _generate_fallback_slug(slug, original_name)
+        log.warning(
+            "Slug '%s' colisionó al crear %s '%s'; reintentando con '%s'.",
+            slug,
+            object_type_name,
+            original_name,
+            slug_fallback,
+        )
+        kwargs["slug"] = slug_fallback
+        try:
+            return cast(Record, endpoint.create(**kwargs))
+        except RequestError as e:
+            raise RuntimeError(
+                f"Imposible crear {object_type_name} '{original_name}' debido a colisión persistente "
+                f"de slug o rechazo de NetBox: {e}"
+            ) from e
+
+
 def safe_int(value: Any) -> int | None:
     """Convierte un valor a int, retornando None si no es convertible."""
     try:
@@ -981,30 +1013,13 @@ def ensure_manufacturer(
         cache[name] = obj
         return obj
 
-    try:
-        obj = cast(
-            Record,
-            manufacturers_endpoint.create(name=name, slug=slug),
-        )
-    except RequestError:
-        # Fallback: colisión de slug por race condition o datos no previstos.
-        slug_fallback = _generate_fallback_slug(slug, name)
-        log.warning(
-            "Slug '%s' colisionó al crear Manufacturer '%s'; reintentando con '%s'.",
-            slug,
-            name,
-            slug_fallback,
-        )
-        try:
-            obj = cast(
-                Record,
-                manufacturers_endpoint.create(name=name, slug=slug_fallback),
-            )
-        except RequestError as e:
-            raise RuntimeError(
-                f"Imposible crear Manufacturer '{name}' debido a colisión persistente "
-                f"de slug o rechazo de NetBox: {e}"
-            ) from e
+    obj = create_with_fallback_slug(
+        manufacturers_endpoint,
+        "Manufacturer",
+        name,
+        name=name,
+        slug=slug,
+    )
     log.info("Manufacturer creado: %s", name)
     cache[name] = obj
     return obj
@@ -1053,40 +1068,15 @@ def _create_device_type(
 ) -> Record:
     """Intenta crear el DeviceType, manejando colisiones de slug."""
     u_height_val = u_height or 1
-    try:
-        return cast(
-            Record,
-            endpoint.create(
-                model=model,
-                slug=slug,
-                manufacturer=manufacturer_id,
-                u_height=u_height_val,
-            ),
-        )
-    except RequestError:
-        slug_fallback = _generate_fallback_slug(slug, model)
-        log.warning(
-            "Slug '%s' colisionó al crear DeviceType '%s/%s'; reintentando con '%s'.",
-            slug,
-            manufacturer_name,
-            model,
-            slug_fallback,
-        )
-        try:
-            return cast(
-                Record,
-                endpoint.create(
-                    model=model,
-                    slug=slug_fallback,
-                    manufacturer=manufacturer_id,
-                    u_height=u_height_val,
-                ),
-            )
-        except RequestError as e:
-            raise RuntimeError(
-                f"Imposible crear DeviceType '{manufacturer_name}/{model}' debido "
-                f"a colisión persistente de slug o rechazo de NetBox: {e}"
-            ) from e
+    return create_with_fallback_slug(
+        endpoint,
+        "DeviceType",
+        f"{manufacturer_name}/{model}",
+        model=model,
+        slug=slug,
+        manufacturer=manufacturer_id,
+        u_height=u_height_val,
+    )
 
 
 def ensure_device_type(
@@ -1186,26 +1176,13 @@ def ensure_platform(
         cache[name] = slug_results[0]
         return slug_results[0]
 
-    try:
-        obj = cast(Record, platforms_endpoint.create(name=name, slug=slug))
-    except RequestError:
-        slug_fallback = _generate_fallback_slug(slug, name)
-        log.warning(
-            "Slug '%s' colisionó al crear Platform '%s'; reintentando con '%s'.",
-            slug,
-            name,
-            slug_fallback,
-        )
-        try:
-            obj = cast(
-                Record,
-                platforms_endpoint.create(name=name, slug=slug_fallback),
-            )
-        except RequestError as e:
-            raise RuntimeError(
-                f"Imposible crear Platform '{name}' debido a colisión persistente "
-                f"de slug o rechazo de NetBox: {e}"
-            ) from e
+    obj = create_with_fallback_slug(
+        platforms_endpoint,
+        "Platform",
+        name,
+        name=name,
+        slug=slug,
+    )
     log.info("Platform creado: %s", name)
     cache[name] = obj
     return obj
