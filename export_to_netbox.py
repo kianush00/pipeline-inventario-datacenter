@@ -95,6 +95,7 @@ FieldValue: TypeAlias = str | int | float | bool | None
 CustomFieldsPayload: TypeAlias = dict[str, FieldValue]
 NetBoxPayload: TypeAlias = dict[str, Any]
 CsvColumnAliases: TypeAlias = dict[str, str]
+NetBoxObject: TypeAlias = "Record | MockNetBoxRecord"
 
 
 class SyncCounts(TypedDict):
@@ -522,9 +523,6 @@ class MockNetBoxRecord(BaseModel):
     custom_fields: dict[str, Any] = Field(default_factory=dict)
 
 
-NetBoxObject: TypeAlias = Record | MockNetBoxRecord
-
-
 class CacheStore(BaseModel):
     """
     Representa el cache de objetos de NetBox que se mantiene
@@ -635,11 +633,22 @@ def get_netbox_object_id(obj: NetBoxObject) -> int:
     return int(obj_id)
 
 
-def get_node_type_from_object(obj: Endpoint | Record) -> NodeType:
-    """Retorna el tipo de nodo (virtual_machine o device) a partir de un Endpoint o Record."""
+def get_node_type_from_object(obj: Endpoint | NetBoxObject) -> NodeType:
+    """
+    Retorna el tipo de nodo (virtual_machine o device) a partir de
+    un Endpoint o NetBoxObject.
+    """
     url = getattr(obj, "url", "")
-    if "virtualization" in url or getattr(obj, "name", "") == "virtual-machines":
+    name = getattr(obj, "name", "")
+
+    # Útil para Endpoints de pynetbox
+    if "virtualization" in url or name == "virtual-machines":
         return "virtual_machine"
+
+    # Si es un NetBoxObject tendrá el atributo del padre
+    if hasattr(obj, "virtual_machine"):
+        return "virtual_machine"
+
     return "device"
 
 
@@ -2469,7 +2478,7 @@ def parse_network_interfaces(
 def _assign_ip(
     ip_addresses_endpoint: Endpoint,
     cidr: str,
-    iface_obj: Record,
+    iface_obj: NetBoxObject,
     dry_run: bool,
 ) -> bool:
     """Crea o actualiza una IP address en NetBox y la asigna a la interfaz.
@@ -2538,7 +2547,7 @@ def _sync_single_interface(
     iface_data: NetworkInterfaceData,
     obj_id: int,
     iface_endpoint: Endpoint,
-    existing_ifaces: dict[str, Record],
+    existing_ifaces: dict[str, NetBoxObject],
     ip_addresses_endpoint: Endpoint,
     dry_run: bool,
 ) -> bool:
@@ -2562,21 +2571,22 @@ def _sync_single_interface(
     else:
         payload["virtual_machine"] = obj_id
 
-    if dry_run:
-        action = "Actualizaría" if name in existing_ifaces else "Crearía"
-        log.info("[DRY-RUN] %s interfaz %s en objeto %s", action, name, obj_id)
-        if cidr:
-            log.info("[DRY-RUN] Asignaría IP %s a interfaz %s", cidr, name)
-        return True
+    is_existing = name in existing_ifaces
 
-    try:
-        if name in existing_ifaces:
-            existing_ifaces[name].update(payload)
-        else:
-            existing_ifaces[name] = cast(Record, iface_endpoint.create(**payload))
-    except Exception:
-        log.exception("Error procesando interfaz %s", name)
-        return False
+    if dry_run:
+        action = "Actualizaría" if is_existing else "Crearía"
+        log.info("[DRY-RUN] %s interfaz %s en objeto %s", action, name, obj_id)
+        if not is_existing:
+            existing_ifaces[name] = MockNetBoxRecord(id=0, name=name, **payload)
+    else:
+        try:
+            if is_existing:
+                cast(Record, existing_ifaces[name]).update(payload)
+            else:
+                existing_ifaces[name] = cast(Record, iface_endpoint.create(**payload))
+        except Exception:
+            log.exception("Error procesando interfaz %s", name)
+            return False
 
     if cidr:
         iface_obj = existing_ifaces[name]
@@ -2602,7 +2612,7 @@ def sync_interfaces_for_object(
         iface_filter = {"virtual_machine_id": obj_id}
 
     filtered_ifaces: list[Record] = list(iface_endpoint.filter(**iface_filter))
-    existing_ifaces: dict[str, Record] = {
+    existing_ifaces: dict[str, NetBoxObject] = {
         str(iface.name): iface for iface in filtered_ifaces
     }
 

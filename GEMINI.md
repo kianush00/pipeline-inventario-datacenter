@@ -57,3 +57,9 @@ Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes prin
 - **Tono directo y profesional:** Ve directo al grano sin preámbulos, saludos, cortesías innecesarias ni felicitaciones (ej. "¡Buena pregunta!", "Excelente código", "Buena intuición", "Excelente observación", etc.).
 - **Enfoque en la solución técnica:** Proporciona explicaciones técnicas concisas, fundamentadas, precisas y profesionales.
 - **Diffs limpios y contextualizados:** Entrega los bloques de código modificados listos para integrarse sin placeholders ambiguos, asegurando total coherencia con el resto del script.
+
+## 7. Verificación de Tipos Estáticos Continua
+
+- Dado que el proyecto usa tipado fuerte (validado localmente mediante Pyrefly/Pyright), **como agente DEBES comprobar los tipos estáticos** después de implementar o modificar lógica compleja.
+- **Comando a ejecutar:** Una vez que actives el entorno virtual de python, intenta ejecutar `pyright <archivo_modificado>` (ej. `pyright export_to_netbox.py`).
+- Lee los resultados del comando y corrige autónomamente cualquier error de tipo que hayas introducido antes de dar la tarea por concluida.
