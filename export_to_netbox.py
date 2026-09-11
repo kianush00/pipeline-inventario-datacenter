@@ -92,6 +92,10 @@ class RowValidationError(ValueError):
     """Excepción lanzada cuando los datos de una fila son explícitamente inválidos."""
 
 
+class ConfigValidationError(ValueError):
+    """Excepción lanzada cuando hay errores críticos de configuración en el script o YAML."""
+
+
 # ============================================================
 # TYPE ALIASES Y ESTRUCTURAS DE TIPOS
 # ============================================================
@@ -672,10 +676,17 @@ def concat_dot(parts: list[str], config: NetBoxMappingConfig) -> str:
 def extract_csv_value(row: CsvRow, col_alias: str, config: NetBoxMappingConfig) -> str:
     """
     Extrae y sanitiza un valor del CSV usando su alias definido en el YAML.
-    Si la celda está vacía (según config.is_empty) o la columna no existe,
-    retorna un string vacío (""), permitiendo validaciones directas tipo `if valor:`.
+    Si la celda está vacía (según config.is_empty) o la columna no existe o está
+    mapeada a None, retorna un string vacío ("").
+    Si el alias ni siquiera existe en la configuración, levanta ConfigValidationError.
     """
-    col_name = config.columns.get(col_alias)
+    if col_alias not in config.columns:
+        raise ConfigValidationError(
+            f"Error crítico de configuración: El alias '{col_alias}' solicitado "
+            "por el script no existe en `csv_column_aliases` del archivo YAML."
+        )
+
+    col_name = config.columns[col_alias]
     if not col_name:
         return ""
     val = row.get(col_name, "").strip()
@@ -2892,6 +2903,10 @@ def main() -> None:
                     csv_name_counts,
                     args.dry_run,
                 )
+        except ConfigValidationError as e:
+            # Error crítico de diseño/configuración. Abortar el pipeline de inmediato.
+            log.critical("ABORTANDO PIPELINE: %s", e)
+            sys.exit(1)
         except RowValidationError:
             log.exception("ERROR fila %d", row_num)
             counts["ERROR"] += 1
