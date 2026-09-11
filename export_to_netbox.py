@@ -1860,43 +1860,59 @@ def _resolve_cluster(
 
 def _resolve_host_device(
     devices_endpoint: Endpoint,
-    host_name: str,
-    site_id: int | None,
+    row: CsvRow,
+    site: NetBoxObject,
+    machine_name: str,
     cache: dict[tuple[int, str], int | None],
+    config: NetBoxMappingConfig,
 ) -> int | None:
     """
     Resuelve y cachea el ID del Device correspondiente al hipervisor host,
-    acotado estrictamente al site_id configurado.
+    acotado estrictamente al site configurado.
     """
-    if site_id is None:
+    host_name_csv = extract_csv_value(row, "host_device", config)
+    if not host_name_csv:
         return None
 
-    cache_key = (site_id, host_name)
+    site_id = get_netbox_object_id(site)
+
+    cache_key = (site_id, host_name_csv)
     if cache_key in cache:
-        return cache[cache_key]
+        dev_id = cache[cache_key]
+        if dev_id is None:
+            log.warning(
+                "ADVERTENCIA (%s): El dispositivo host '%s' no se encontró en el site. "
+                "La VM se creará sin asignación de host.",
+                machine_name,
+                host_name_csv,
+            )
+        return dev_id
 
     try:
         host_devices: list[Record] = list(
-            devices_endpoint.filter(name=host_name, site_id=site_id)
+            devices_endpoint.filter(name=host_name_csv, site_id=site_id)
         )
-        if host_devices:
-            dev_id: int = get_netbox_object_id(host_devices[0])
-            cache[cache_key] = dev_id
-            return dev_id
-        else:
+        if not host_devices:
             log.warning(
-                "No se encontró el Device host '%s' en el Site (ID: %s).",
-                host_name,
-                site_id,
+                "ADVERTENCIA (%s): El dispositivo host '%s' no se encontró en el site. "
+                "La VM se creará sin asignación de host.",
+                machine_name,
+                host_name_csv,
             )
             cache[cache_key] = None
             return None
+
+        dev_id = get_netbox_object_id(host_devices[0])
+        cache[cache_key] = dev_id
+        return dev_id
     except Exception:
         log.exception(
-            "Error consultando Device host '%s' en Site (ID: %s)",
-            host_name,
+            "ERROR (%s): falló la consulta del host_device '%s' en Site (ID: %s)",
+            machine_name,
+            host_name_csv,
             site_id,
         )
+        cache[cache_key] = None
         return None
 
 
@@ -2367,24 +2383,17 @@ def sync_vm(
         return "SKIPPED", None
 
     # Device del hipervisor host (acotado a site y cacheado).
-    site_id = get_netbox_object_id(site)
-    host_name = extract_csv_value(row, "host_device", config)
-    if host_name:
-        host_dev_id = _resolve_host_device(
-            endpoints.devices,
-            host_name,
-            site_id,
-            caches.host_devices,
-        )
-        if host_dev_id:
-            payload["device"] = host_dev_id
-        else:
-            log.warning(
-                "ADVERTENCIA (%s): El dispositivo host '%s' no se encontró en el site. "
-                "La VM se creará sin asignación de host.",
-                machine_name,
-                host_name,
-            )
+    host_dev_id = _resolve_host_device(
+        endpoints.devices,
+        row,
+        site,
+        machine_name,
+        caches.host_devices,
+        config,
+    )
+    if host_dev_id is not None:
+        payload["device"] = host_dev_id
+
     # vcpus.
     cores = extract_csv_value(row, "cores", config)
     cores_int = safe_int(cores)
