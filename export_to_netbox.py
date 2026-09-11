@@ -101,6 +101,11 @@ class RowSkipCondition(Exception):
     de una fila de forma silenciosa (SKIP)."""
 
 
+class NetBoxApiError(Exception):
+    """Excepción lanzada cuando ocurre un error de API persistente
+    al interactuar con Pynetbox (RequestError)."""
+
+
 # ============================================================
 # TYPE ALIASES Y ESTRUCTURAS DE TIPOS
 # ============================================================
@@ -623,7 +628,7 @@ def create_with_fallback_slug(
         try:
             return cast(Record, endpoint.create(**kwargs))
         except RequestError as e:
-            raise RuntimeError(
+            raise NetBoxApiError(
                 f"Imposible crear {object_type_name} '{original_name}' debido a colisión persistente "
                 f"de slug o rechazo de NetBox: {e}"
             ) from e
@@ -756,9 +761,11 @@ def load_config(mapping_path: Path) -> NetBoxMappingConfig:
     Si hay errores de validación de sintaxis o de esquema, los reporta
     con detalle y termina la ejecución de manera controlada.
     """
+    log.debug("Cargando configuración desde: %s", mapping_path)
     if not mapping_path.is_file():
-        log.error("No se encontró el archivo de mapping: %s", mapping_path)
-        sys.exit(1)
+        raise ConfigValidationError(
+            f"No se encontró el archivo de mapping: {mapping_path}"
+        )
 
     # Cargar el YAML
     try:
@@ -768,20 +775,18 @@ def load_config(mapping_path: Path) -> NetBoxMappingConfig:
         expanded_yaml = os.path.expandvars(raw_yaml)
         raw = yaml.safe_load(expanded_yaml)
     except yaml.YAMLError:
-        log.exception("Error sintáctico de YAML al leer %s", mapping_path)
-        sys.exit(1)
+        raise ConfigValidationError(f"Error sintáctico de YAML al leer {mapping_path}")
 
     if not isinstance(raw, dict):
-        log.error(
-            "El archivo de mapping %s no contiene un diccionario YAML válido.",
-            mapping_path,
+        raise ConfigValidationError(
+            f"El archivo de mapping {mapping_path} no contiene un diccionario YAML válido.",
         )
-        sys.exit(1)
 
     # Validar el esquema Pydantic para el archivo de mapping
     try:
         return NetBoxMappingConfig.model_validate(raw)
     except ValidationError as exc:
+        # TODO: reemplazar este bloque de log por un raise ConfigValidationError. Luego, reemplazar todos los sys.exit(1) del script
         log.error(
             "Error de validación en el archivo de mapping YAML (%s):",
             mapping_path,
@@ -847,9 +852,8 @@ def build_nb_client(url: str, token: str, verify_ssl: bool) -> Api:
     # Verificar conectividad con una llamada liviana.
     try:
         nb.dcim.sites.filter(limit=1)
-    except Exception:
-        log.exception("No se pudo conectar con NetBox (%s)", url)
-        sys.exit(1)
+    except Exception as e:
+        raise NetBoxApiError(f"No se pudo conectar con NetBox ({url})") from e
 
     log.info("Conectado a NetBox %s", url)
     return nb
@@ -885,12 +889,11 @@ def build_netbox_endpoints(nb: Api) -> NetBoxEndpoints:
             vm_interfaces=nb.virtualization.interfaces,
             ip_addresses=nb.ipam.ip_addresses,
         )
-    except AttributeError:
-        log.exception(
+    except AttributeError as e:
+        raise NetBoxApiError(
             "La instancia de pynetbox no expone uno de los endpoints "
             "requeridos por el script"
-        )
-        sys.exit(1)
+        ) from e
 
 
 # ============================================================
@@ -904,8 +907,7 @@ def read_csv(path: Path) -> tuple[list[str], list[CsvRow]]:
     Devuelve (headers, rows) donde cada row es {header: value}.
     """
     if not path.is_file():
-        log.error("No se encontró el CSV de entrada: %s", path)
-        sys.exit(1)
+        raise ConfigValidationError(f"No se encontró el CSV de entrada: {path}")
 
     rows: list[CsvRow] = []
     with path.open("r", encoding="utf-8-sig", newline="") as f:
@@ -980,12 +982,7 @@ def ensure_site(
     try:
         obj = cast(Record, endpoints.sites.create(name=name, slug=slug))
     except RequestError:
-        log.exception(
-            "Fallo crítico al inicializar el entorno base: NetBox rechazó la "
-            "creación del Site '%s'.",
-            name,
-        )
-        sys.exit(1)
+        raise NetBoxApiError(f"No se pudo crear el Site: {name}")
 
     log.info("Site creado: %s", name)
     return obj
@@ -1011,12 +1008,7 @@ def ensure_cluster_type(
     try:
         obj = cast(Record, endpoints.cluster_types.create(name=name, slug=slug))
     except RequestError:
-        log.exception(
-            "Fallo crítico al inicializar el entorno base: NetBox rechazó la "
-            "creación del ClusterType '%s'.",
-            name,
-        )
-        sys.exit(1)
+        raise NetBoxApiError(f"No se pudo crear el ClusterType: {name}")
 
     log.info("ClusterType creado: %s", name)
     return obj
@@ -1099,8 +1091,10 @@ def _sync_device_type_u_height(
             model,
             target_height_val,
         )
-    except Exception:
-        log.exception("Error actualizando u_height de DeviceType '%s'", model)
+    except Exception as e:
+        raise NetBoxApiError(
+            f"Error actualizando u_height de DeviceType '{model}': {e}"
+        ) from e
 
 
 def _create_device_type(
@@ -1328,9 +1322,10 @@ def _sync_single_device_role(
                 try:
                     role_obj.update({"vm_role": True})
                     log.info("DeviceRole actualizado para permitir VM: %s", name)
-                except Exception:
-                    log.exception("Error actualizando DeviceRole '%s'", name)
-                    return
+                except Exception as e:
+                    raise NetBoxApiError(
+                        f"Error actualizando DeviceRole '{name}': {e}"
+                    ) from e
 
         device_roles_cache[key] = role_obj
         return
@@ -1353,8 +1348,8 @@ def _sync_single_device_role(
         )
         log.info("DeviceRole creado: %s", name)
         device_roles_cache[key] = obj
-    except Exception:
-        log.exception("Error creando DeviceRole '%s'", name)
+    except Exception as e:
+        raise ConfigValidationError(f"Error creando DeviceRole '{name}': {e}") from e
 
 
 def ensure_all_device_roles(
@@ -1388,11 +1383,9 @@ def _get_object_type_id(
         return ot_cache[object_type]
 
     if "." not in object_type:
-        log.warning(
-            "Formato de Object Type inválido: %s. Se esperaba 'app_label.model'.",
-            object_type,
+        raise ConfigValidationError(
+            f"Formato de Object Type inválido: {object_type}. Se esperaba 'app_label.model'."
         )
-        return None
 
     app_label, model = object_type.split(".", 1)
 
@@ -1403,12 +1396,10 @@ def _get_object_type_id(
                 model=model,
             )
         )
-    except Exception:
-        log.exception(
-            "Error consultando Object Type '%s' en '/api/core/object-types/'",
-            object_type,
-        )
-        return None
+    except Exception as e:
+        raise ConfigValidationError(
+            f"Error consultando Object Type '{object_type}' en '/api/core/object-types/': {e}"
+        ) from e
 
     if not results:
         log.warning(
@@ -1470,12 +1461,10 @@ def _ensure_choice_set(
                     order_alphabetically=False,
                 ),
             )
-        except Exception:
-            log.exception(
-                "Error al crear Choice Set '%s'",
-                choice_set_name,
-            )
-            return None
+        except Exception as e:
+            raise ConfigValidationError(
+                f"Error al crear Choice Set '{choice_set_name}': {e}"
+            ) from e
 
         existing_choice_sets[choice_set_name] = choice_set
         log.info(
@@ -1502,9 +1491,10 @@ def _ensure_choice_set(
             }
         )
         log.info("Choice Set actualizado: %s", choice_set_name)
-    except Exception:
-        log.exception("Error al actualizar Choice Set '%s'", choice_set_name)
-        return None
+    except Exception as e:
+        raise ConfigValidationError(
+            f"Error al actualizar Choice Set '{choice_set_name}': {e}"
+        ) from e
 
     return _get_choice_set_id(choice_set)
 
@@ -1554,8 +1544,8 @@ def _ensure_custom_field(
         created_cf = cast(Record, custom_fields_endpoint.create(**create_kwargs))
         existing_cfs[name] = created_cf
         log.info("Custom field creado: %s", name)
-    except Exception:
-        log.exception("Error al crear custom field '%s'", name)
+    except Exception as e:
+        raise ConfigValidationError(f"Error al crear custom field '{name}': {e}") from e
 
 
 def ensure_custom_fields(
@@ -1969,6 +1959,7 @@ def _resolve_host_device(
         cache[cache_key] = dev_id
         return dev_id
     except Exception:
+        # TODO: revisar si es mejor arrojar un error a la superficie, o dejarlo como está.
         log.exception(
             "ERROR (%s): falló la consulta del host_device '%s' en Site (ID: %s)",
             machine_name,
@@ -2869,12 +2860,16 @@ def main() -> None:
                     args.dry_run,
                 )
         except ConfigValidationError as e:
-            # Error crítico de diseño/configuración. Abortar el pipeline de inmediato.
-            log.critical("ABORTANDO PIPELINE: %s", e)
-            sys.exit(1)
+            raise ConfigValidationError(
+                f"Error de configuración en fila {row_num}: {e}"
+            )
         except RowSkipCondition as e:
             log.warning("SKIP fila %d: %s", row_num, e)
             counts["SKIPPED"] += 1
+            continue
+        except NetBoxApiError:
+            log.exception("ERROR de API en fila %d", row_num)
+            counts["ERROR"] += 1
             continue
         except RowValidationError:
             log.exception("ERROR fila %d", row_num)
@@ -2935,5 +2930,8 @@ if __name__ == "__main__":
     try:
         main()
     except ConfigValidationError as e:
-        log.critical("ABORTANDO PIPELINE: %s", e)
+        log.critical("ERROR DE CONFIGURACIÓN. ABORTANDO PIPELINE: %s", e)
+        sys.exit(1)
+    except NetBoxApiError as e:
+        log.critical("ERROR DE API. ABORTANDO PIPELINE: %s", e)
         sys.exit(1)
