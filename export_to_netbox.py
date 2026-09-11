@@ -1833,6 +1833,31 @@ def _resolve_platform(
     return get_netbox_object_id(platform)
 
 
+def _resolve_cluster(
+    cluster_endpoint: Endpoint,
+    row: CsvRow,
+    cluster_type: NetBoxObject,
+    site: NetBoxObject,
+    cluster_cache: dict[tuple[int, str], NetBoxObject],
+    dry_run: bool,
+    config: NetBoxMappingConfig,
+) -> int | None:
+    """Resuelve el Cluster desde la columna correspondiente y retorna su ID (si existe)."""
+    cluster_name = extract_csv_value(row, "cluster_name", config)
+    if not cluster_name:
+        return None
+
+    cluster = ensure_cluster(
+        cluster_endpoint,
+        cluster_name,
+        cluster_type,
+        site,
+        cluster_cache,
+        dry_run,
+    )
+    return get_netbox_object_id(cluster)
+
+
 def _resolve_host_device(
     devices_endpoint: Endpoint,
     host_name: str,
@@ -2223,20 +2248,19 @@ def sync_device(
 
     # Cluster para hipervisores.
     if machine_type == "Hipervisor":
-        # TODO: encapsular la obtencion del cluster en una funcion, y retornar un booleano para la parte del log que es distinta en sync_vm y sync_device
-        cluster_name_csv = extract_csv_value(row, "cluster_name", config)
-        if not cluster_name_csv:
-            log.info("INFO (%s): Hipervisor sin cluster asignado.", machine_name)
+        cluster_id = _resolve_cluster(
+            endpoints.clusters,
+            row,
+            cluster_type,
+            site,
+            caches.clusters,
+            dry_run,
+            config,
+        )
+        if cluster_id is not None:
+            payload["cluster"] = cluster_id
         else:
-            cluster = ensure_cluster(
-                endpoints.clusters,
-                cluster_name_csv,
-                cluster_type,
-                site,
-                caches.clusters,
-                dry_run,
-            )
-            payload["cluster"] = get_netbox_object_id(cluster)
+            log.info("INFO (%s): Hipervisor sin cluster asignado.", machine_name)
 
     # Manufacturer.
     manufacturer = extract_csv_value(row, "manufacturer", config)
@@ -2322,28 +2346,28 @@ def sync_vm(
     uuid = base["uuid"]
     payload = base["payload"]
 
-    site_id = get_netbox_object_id(site)
-
     # Cluster.
-    cluster_name_csv = extract_csv_value(row, "cluster_name", config)
-    if not cluster_name_csv:
+    cluster_id = _resolve_cluster(
+        endpoints.clusters,
+        row,
+        cluster_type,
+        site,
+        caches.clusters,
+        dry_run,
+        config,
+    )
+    if cluster_id is not None:
+        payload["cluster"] = cluster_id
+    else:
         log.warning(
             "SKIP (%s): VM sin %s.",
             machine_name,
             config.columns.get("cluster_name", "Cluster"),
         )
         return "SKIPPED", None
-    cluster = ensure_cluster(
-        endpoints.clusters,
-        cluster_name_csv,
-        cluster_type,
-        site,
-        caches.clusters,
-        dry_run,
-    )
-    payload["cluster"] = get_netbox_object_id(cluster)
 
     # Device del hipervisor host (acotado a site y cacheado).
+    site_id = get_netbox_object_id(site)
     host_name = extract_csv_value(row, "host_device", config)
     if host_name:
         host_dev_id = _resolve_host_device(
