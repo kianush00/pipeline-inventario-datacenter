@@ -791,17 +791,17 @@ def load_config(mapping_path: Path) -> NetBoxMappingConfig:
     try:
         return NetBoxMappingConfig.model_validate(raw)
     except ValidationError as exc:
-        # TODO: reemplazar este bloque de log por un raise ConfigValidationError. Luego, reemplazar todos los sys.exit(1) del script
-        log.error(
-            "Error de validación en el archivo de mapping YAML (%s):",
-            mapping_path,
-        )
+        error_msgs = []
         for err in exc.errors():
             loc = " -> ".join(str(p) for p in err.get("loc", []))
             msg = err.get("msg", "")
             inp = err.get("input")
-            log.error("  • [%s]: %s (valor recibido: %r)", loc, msg, inp)
-        sys.exit(1)
+            error_msgs.append(f"[{loc}]: {msg} (valor recibido: {inp!r})")
+        
+        full_error = "\n".join(error_msgs)
+        raise ConfigValidationError(
+            f"Error de validación en el archivo de mapping YAML ({mapping_path}):\n{full_error}"
+        )
 
 
 def load_env() -> tuple[str, str, bool]:
@@ -825,9 +825,8 @@ def load_env() -> tuple[str, str, bool]:
 
     missing = [name for name, val in required_vars.items() if not val]
     if missing:
-        for var in missing:
-            log.error("Variable de entorno %s no definida.", var)
-        sys.exit(1)
+        missing_str = ", ".join(missing)
+        raise ConfigValidationError(f"Variables de entorno requeridas no definidas: {missing_str}")
 
     return url, token, verify_ssl
 
@@ -1963,16 +1962,11 @@ def _resolve_host_device(
         dev_id = get_netbox_object_id(host_devices[0])
         cache[cache_key] = dev_id
         return dev_id
-    except Exception:
-        # TODO: revisar si es mejor arrojar un error a la superficie, o dejarlo como está.
-        log.exception(
-            "ERROR (%s): falló la consulta del host_device '%s' en Site (ID: %s)",
-            machine_name,
-            host_name_csv,
-            site_id,
-        )
-        cache[cache_key] = None
-        return None
+    except Exception as e:
+        raise NetBoxApiError(
+            f"ERROR ({machine_name}): falló la consulta del host_device '{host_name_csv}' "
+            f"en Site (ID: {site_id}): {e}"
+        ) from e
 
 
 def _resolve_device_role(
