@@ -726,6 +726,20 @@ def get_node_type_from_row(row: CsvRow, config: NetBoxMappingConfig) -> NodeType
     return config.machine_type_map.get(machine_type)
 
 
+def resolve_mapping_path(args_mapping: str | None) -> Path:
+    """Resuelve la ruta del archivo de configuración YAML."""
+    if args_mapping:
+        return Path(args_mapping)
+    return Path(__file__).resolve().parent / "netbox_mapping.yaml"
+
+
+def count_machine_names(
+    rows: list[CsvRow], config: NetBoxMappingConfig
+) -> Counter[str]:
+    """Genera un conteo de las ocurrencias de nombres de máquinas en el CSV."""
+    return Counter(extract_csv_value(row, "machine_name", config) for row in rows)
+
+
 # ============================================================
 # CARGA DE CONFIGURACIÓN
 # ============================================================
@@ -902,13 +916,13 @@ def read_csv(path: Path) -> tuple[list[str], list[CsvRow]]:
 def validate_csv_headers(
     headers: list[str],
     config: NetBoxMappingConfig,
-) -> bool:
+) -> None:
     """
     Valida que los encabezados del CSV incluyan todas las columnas obligatorias
     configuradas en 'required_columns' dentro de netbox_mapping.yaml.
     Valida la *existencia de la columna en la cabecera*, no que cada fila
-    deba tener un valor no vacío. Retorna True si todas las columnas obligatorias
-    están presentes en headers.
+    deba tener un valor no vacío.
+    Levanta ConfigValidationError si faltan columnas obligatorias.
     """
     header_set = set(headers)
 
@@ -917,11 +931,10 @@ def validate_csv_headers(
         col for col in sorted(config.get_required_columns()) if col not in header_set
     ]
     if missing_required:
-        log.error(
-            "El CSV no contiene las siguientes columnas obligatorias: %s",
-            ", ".join(repr(c) for c in missing_required),
+        cols_str = ", ".join(repr(c) for c in missing_required)
+        raise ConfigValidationError(
+            f"El CSV no contiene las siguientes columnas obligatorias: {cols_str}"
         )
-        return False
 
     # 2. Chequeo informativo de columnas esperadas (WARNING informativo)
     all_expected = config.get_all_expected_columns()
@@ -935,8 +948,6 @@ def validate_csv_headers(
             "Columnas del mapping no encontradas en el CSV (se tratarán como vacías): %s",
             ", ".join(repr(c) for c in missing_optional),
         )
-
-    return True
 
 
 # ============================================================
@@ -2803,25 +2814,26 @@ def main() -> None:
     if args.verbose:
         log.setLevel(logging.DEBUG)
 
-    mapping_path = args.mapping or (
-        Path(__file__).resolve().parent / "netbox_mapping.yaml"
-    )
+    if args.dry_run:
+        log.info("Modo DRY-RUN activado. No se modificará NetBox.")
 
     # ── Cargar configuración ─────────────────────────────────
+    mapping_path = resolve_mapping_path(args.mapping)
     config: NetBoxMappingConfig = load_config(mapping_path)
-    columns: CsvColumnAliases = config.columns
 
     # ── Leer y Validar CSV (Fail-Fast) ───────────────────────
     headers, rows = read_csv(args.csv)
 
-    if not validate_csv_headers(headers, config):
-        sys.exit(1)
+    # ── Validar que el CSV tenga las columnas requeridas ────
+    validate_csv_headers(headers, config)
+
+    # ── Conteo global de nombres de máquina ───────────────
+    # Usado para validar unicidad antes de permitir
+    # actualizaciones por nombre (sin UUID).
+    csv_name_counts: Counter[str] = count_machine_names(rows, config)
 
     # ── Cargar credenciales ──────────────────────────────────
     url, token, verify_ssl = load_env()
-
-    if args.dry_run:
-        log.info("Modo DRY-RUN activado. No se modificará NetBox.")
 
     # ── Conectar ─────────────────────────────────────────────
     nb: Api = build_nb_client(url, token, verify_ssl)
@@ -2855,13 +2867,6 @@ def main() -> None:
         "ERROR": 0,
     }
 
-    # ── Conteo global de nombres de máquina ───────────────
-    # Usado para validar unicidad antes de permitir
-    # actualizaciones por nombre (sin UUID).
-    csv_name_counts: Counter[str] = Counter(
-        extract_csv_value(row, "machine_name", config) for row in rows
-    )
-
     # ── Procesar filas ───────────────────────────────────────
     for row_num, row in enumerate(rows, start=2):
         machine_name_raw = extract_csv_value(row, "machine_name", config)
@@ -2873,7 +2878,7 @@ def main() -> None:
             log.warning(
                 "Fila %d SKIP: %s '%s' no está en machine_type_map.",
                 row_num,
-                columns["machine_type"],
+                config.columns["machine_type"],
                 extract_csv_value(row, "machine_type", config),
             )
             counts["SKIPPED"] += 1
@@ -2965,4 +2970,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ConfigValidationError as e:
+        log.critical("ABORTANDO PIPELINE: %s", e)
+        sys.exit(1)
