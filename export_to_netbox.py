@@ -96,12 +96,17 @@ class ConfigValidationError(ValueError):
     """Excepción lanzada cuando hay errores críticos de configuración en el script o YAML."""
 
 
+class RowSkipCondition(Exception):
+    """Excepción lanzada para abortar tempranamente el procesamiento
+    de una fila de forma silenciosa (SKIP)."""
+
+
 # ============================================================
 # TYPE ALIASES Y ESTRUCTURAS DE TIPOS
 # ============================================================
 
-SyncStatus: TypeAlias = Literal["CREATED", "UPDATED", "UNCHANGED", "SKIPPED", "ERROR"]
-SyncResult: TypeAlias = tuple[SyncStatus, int | None]
+SyncStatus: TypeAlias = Literal["CREATED", "UPDATED", "UNCHANGED"]
+SyncResult: TypeAlias = tuple[SyncStatus, int]
 NodeType: TypeAlias = Literal["device", "virtual_machine"]
 CastType: TypeAlias = Literal["int", "int_gb_to_mb", "bool_si_no"]
 CsvRow: TypeAlias = dict[str, str]
@@ -2012,21 +2017,15 @@ def _check_missing_core_fields(
     machine_name: str,
     machine_type: str,
     config: NetBoxMappingConfig,
-) -> bool:
+) -> None:
     """
     Verifica si faltan campos principales requeridos (nombre o tipo).
-    Retorna True si falta alguno y registra la advertencia (SKIP).
+    Levanta RowSkipCondition si falta alguno.
     """
     if not machine_name or not machine_type:
         empty_alias = "machine_name" if not machine_name else "machine_type"
         empty_field = config.columns.get(empty_alias, empty_alias)
-        log.warning(
-            "SKIP (%s): campo requerido '%s' vacío.",
-            machine_name or "N/A",
-            empty_field,
-        )
-        return True
-    return False
+        raise RowSkipCondition(f"Campo requerido '{empty_field}' vacío.")
 
 
 def _find_existing_object(
@@ -2135,7 +2134,7 @@ def _execute_sync(
     la validación de unicidad previa, por lo que se actualiza con confianza.
 
     Retorna una tupla (SyncStatus, obj_id) donde obj_id es el ID del
-    objeto en NetBox (int), o None si hubo error o no aplica.
+    objeto en NetBox (int).
     En modo dry-run con objetos existentes se retorna su ID real;
     en creación dry-run se retorna 0 (mock).
     """
@@ -2173,31 +2172,19 @@ def _execute_sync(
         return "UNCHANGED", existing_id
 
     if not existing:
-        try:
-            obj = cast(Record, endpoint.create(**payload))
-            obj_id = get_netbox_object_id(obj)
-            log.info("CREATED %s: %s (ID=%d)", node_type, machine_name, obj_id)
-            return "CREATED", obj_id
-        except Exception:
-            log.exception("ERROR creando %s %s", node_type, machine_name)
-            return "ERROR", None
+        obj = cast(Record, endpoint.create(**payload))
+        obj_id = get_netbox_object_id(obj)
+        log.info("CREATED %s: %s (ID=%d)", node_type, machine_name, obj_id)
+        return "CREATED", obj_id
 
     existing_id = get_netbox_object_id(existing[0])
-    try:
-        updated = existing[0].update(payload)
-        if updated:
-            log.info("UPDATED %s: %s", node_type, machine_name)
-            return "UPDATED", existing_id
+    updated = existing[0].update(payload)
+    if updated:
+        log.info("UPDATED %s: %s", node_type, machine_name)
+        return "UPDATED", existing_id
 
-        log.info("UNCHANGED %s: %s", node_type, machine_name)
-        return "UNCHANGED", existing_id
-    except Exception:
-        log.exception(
-            "ERROR actualizando %s %s",
-            node_type,
-            machine_name,
-        )
-        return "ERROR", None
+    log.info("UNCHANGED %s: %s", node_type, machine_name)
+    return "UNCHANGED", existing_id
 
 
 def _validate_sync(
@@ -2210,28 +2197,18 @@ def _validate_sync(
     dry_run: bool,
 ) -> SyncResult:
     """Busca un objeto en NetBox, valida su unicidad si coincide por nombre y ejecuta la sincronización."""
-    try:
-        existing, found_by_uuid, found_by_name = _find_existing_object(
-            uuid,
-            machine_name,
-            endpoint,
-            config,
-        )
-    except Exception:
-        node_type = get_node_type_from_object(endpoint)
-        log.exception(
-            "ERROR buscando %s '%s' (UUID=%s)",
-            node_type,
-            machine_name,
-            uuid or "N/A",
-        )
-        return "ERROR", None
+    existing, found_by_uuid, found_by_name = _find_existing_object(
+        uuid,
+        machine_name,
+        endpoint,
+        config,
+    )
 
     matched_by_name_only = found_by_name and not found_by_uuid
     if matched_by_name_only and not _is_name_safely_unique(
         endpoint, existing, machine_name, csv_name_counts
     ):
-        return "SKIPPED", None
+        raise RowSkipCondition("No se puede asegurar unicidad por nombre.")
 
     return _execute_sync(
         endpoint,
@@ -2252,17 +2229,15 @@ def _resolve_base_node(
     native_maps: list[FieldMappingConfig],
     custom_maps: list[FieldMappingConfig],
     dry_run: bool,
-) -> BaseNodeData | SyncResult:
+) -> BaseNodeData:
     """
     Resuelve los campos comunes entre device y virtual_machine.
-    Retorna BaseNodeData o SyncResult si hay un error o debe ignorarse.
     """
     machine_name = extract_csv_value(row, "machine_name", config)
     uuid = extract_csv_value(row, "uuid", config)
     machine_type = extract_csv_value(row, "machine_type", config)
 
-    if _check_missing_core_fields(machine_name, machine_type, config):
-        return "SKIPPED", None
+    _check_missing_core_fields(machine_name, machine_type, config)
 
     payload = build_payload(row, native_maps, custom_maps, config)
 
@@ -2296,15 +2271,13 @@ def sync_device(
 ) -> SyncResult:
     """
     Sincroniza una fila de tipo "device" o "hipervisor" con NetBox.
-    Retorna: (SyncStatus, obj_id | None)
+    Retorna: (SyncStatus, obj_id)
     """
     # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
     manufacturer = extract_csv_value(row, "manufacturer", config)
     model = extract_csv_value(row, "model", config)
     if not manufacturer or not model:
-        machine_name_fallback = extract_csv_value(row, "machine_name", config) or "?"
-        log.warning("SKIP (%s): sin Marca o Modelo.", machine_name_fallback)
-        return "SKIPPED", None
+        raise RowSkipCondition("Sin Marca o Modelo definido.")
 
     base = _resolve_base_node(
         endpoints,
@@ -2316,8 +2289,6 @@ def sync_device(
         config.device_custom_mappings,
         dry_run,
     )
-    if isinstance(base, tuple):
-        return base
 
     machine_name = base["machine_name"]
     uuid = base["uuid"]
@@ -2389,18 +2360,13 @@ def sync_vm(
 ) -> SyncResult:
     """
     Sincroniza una fila de tipo "virtual_machine" con NetBox.
-    Retorna: (SyncStatus, obj_id | None)
+    Retorna: (SyncStatus, obj_id)
     """
     # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
     cluster_name = extract_csv_value(row, "cluster_name", config)
     if not cluster_name:
-        machine_name_fallback = extract_csv_value(row, "machine_name", config) or "?"
-        log.warning(
-            "SKIP (%s): VM sin %s.",
-            machine_name_fallback,
-            config.columns.get("cluster_name", "Cluster"),
-        )
-        return "SKIPPED", None
+        cluster_alias = config.columns.get("cluster_name", "Cluster")
+        raise RowSkipCondition(f"VM sin {cluster_alias}.")
 
     base = _resolve_base_node(
         endpoints,
@@ -2412,8 +2378,6 @@ def sync_vm(
         config.vm_custom_mappings,
         dry_run,
     )
-    if isinstance(base, tuple):
-        return base
 
     machine_name = base["machine_name"]
     uuid = base["uuid"]
@@ -2433,7 +2397,7 @@ def sync_vm(
     if cluster_id is not None:
         payload["cluster"] = cluster_id
     else:
-        return "SKIPPED", None
+        raise RowSkipCondition("Falló la resolución del cluster.")
 
     # Device del hipervisor host (acotado a site y cacheado).
     host_dev_id = _resolve_host_device(
@@ -2874,18 +2838,14 @@ def main() -> None:
 
         node_type: NodeType | None = get_node_type_from_row(row, config)
 
-        if node_type is None:
-            log.warning(
-                "Fila %d SKIP: %s '%s' no está en machine_type_map.",
-                row_num,
-                config.columns["machine_type"],
-                extract_csv_value(row, "machine_type", config),
-            )
-            counts["SKIPPED"] += 1
-            continue
-
         # ── Sincronizar Device o VM ───────────────────────────
         try:
+            if node_type is None:
+                machine_type_val = extract_csv_value(row, "machine_type", config)
+                raise RowSkipCondition(
+                    f"Tipo de máquina '{machine_type_val}' no está en machine_type_map."
+                )
+
             if node_type == "device":
                 result, obj_id = sync_device(
                     endpoints,
@@ -2912,6 +2872,10 @@ def main() -> None:
             # Error crítico de diseño/configuración. Abortar el pipeline de inmediato.
             log.critical("ABORTANDO PIPELINE: %s", e)
             sys.exit(1)
+        except RowSkipCondition as e:
+            log.warning("SKIP fila %d: %s", row_num, e)
+            counts["SKIPPED"] += 1
+            continue
         except RowValidationError:
             log.exception("ERROR fila %d", row_num)
             counts["ERROR"] += 1
@@ -2926,8 +2890,6 @@ def main() -> None:
             continue
 
         counts[result] += 1
-        if result not in ("CREATED", "UPDATED", "UNCHANGED"):
-            continue
 
         # ── Validar ID para interfaces (Fail-Fast) ────────────
         if not obj_id:
