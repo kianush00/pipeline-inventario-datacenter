@@ -1858,6 +1858,33 @@ def _resolve_cluster(
     return get_netbox_object_id(cluster)
 
 
+def _resolve_device_type(
+    device_types_endpoint: Endpoint,
+    row: CsvRow,
+    manufacturer_obj: NetBoxObject,
+    model: str,
+    cache: dict[tuple[str, str], NetBoxObject],
+    dry_run: bool,
+    config: NetBoxMappingConfig,
+) -> int:
+    """
+    Resuelve y retorna el ID del DeviceType utilizando el manufacturer y el modelo.
+    Si la altura ('alt_u') no se proporciona o es inválida, asume 1 por defecto.
+    """
+    raw_u_height = extract_csv_value(row, "alt_u", config)
+    u_height = safe_int(raw_u_height) or 1
+
+    device_type = ensure_device_type(
+        device_types_endpoint,
+        manufacturer_obj,
+        model,
+        u_height,
+        cache,
+        dry_run,
+    )
+    return get_netbox_object_id(device_type)
+
+
 def _resolve_host_device(
     devices_endpoint: Endpoint,
     row: CsvRow,
@@ -2292,10 +2319,6 @@ def sync_device(
         dry_run,
     )
 
-    # Altura de unidad. Si no se proporciona, se asume 1.
-    raw_u_height = extract_csv_value(row, "alt_u", config)
-    u_height = safe_int(raw_u_height) or 1
-
     # Rack.
     rack_name = extract_csv_value(row, "rack", config)
     if rack_name:
@@ -2308,16 +2331,16 @@ def sync_device(
         )
         payload["rack"] = get_netbox_object_id(rack)
 
-    # Resolver DeviceType.
-    device_type = ensure_device_type(
+    # DeviceType.
+    payload["device_type"] = _resolve_device_type(
         endpoints.device_types,
+        row,
         manufacturer_obj,
         model,
-        u_height,
         caches.device_types,
         dry_run,
+        config,
     )
-    payload["device_type"] = get_netbox_object_id(device_type)
 
     # ── GET o CREATE/UPDATE ──────────────────────────────────
     return _validate_sync(
