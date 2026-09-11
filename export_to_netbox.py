@@ -1859,27 +1859,36 @@ def _resolve_cluster(
 
 
 def _resolve_device_type(
-    device_types_endpoint: Endpoint,
+    endpoints: NetBoxEndpoints,
     row: CsvRow,
-    manufacturer_obj: NetBoxObject,
-    cache: dict[tuple[str, str], NetBoxObject],
-    dry_run: bool,
+    caches: CacheStore,
     config: NetBoxMappingConfig,
+    dry_run: bool,
 ) -> int:
     """
     Resuelve y retorna el ID del DeviceType utilizando el manufacturer y el modelo.
     Si la altura ('alt_u') no se proporciona o es inválida, asume 1 por defecto.
     """
+    manufacturer = extract_csv_value(row, "manufacturer", config)
     model = extract_csv_value(row, "model", config)
+
+    # Manufacturer.
+    manufacturer_obj = ensure_manufacturer(
+        endpoints.manufacturers,
+        manufacturer,
+        caches.manufacturers,
+        dry_run,
+    )
+
     raw_u_height = extract_csv_value(row, "alt_u", config)
     u_height = safe_int(raw_u_height) or 1
 
     device_type = ensure_device_type(
-        device_types_endpoint,
+        endpoints.device_types,
         manufacturer_obj,
         model,
         u_height,
-        cache,
+        caches.device_types,
         dry_run,
     )
     return get_netbox_object_id(device_type)
@@ -2325,22 +2334,13 @@ def sync_device(
         )
         payload["rack"] = get_netbox_object_id(rack)
 
-    # Manufacturer.
-    manufacturer_obj = ensure_manufacturer(
-        endpoints.manufacturers,
-        manufacturer,
-        caches.manufacturers,
-        dry_run,
-    )
-
-    # DeviceType.
+    # DeviceType (busca el Manufacturer por dentro).
     payload["device_type"] = _resolve_device_type(
-        endpoints.device_types,
+        endpoints,
         row,
-        manufacturer_obj,
-        caches.device_types,
-        dry_run,
+        caches,
         config,
+        dry_run,
     )
 
     # ── GET o CREATE/UPDATE ──────────────────────────────────
