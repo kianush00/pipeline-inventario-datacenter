@@ -84,6 +84,15 @@ log = logging.getLogger("export_to_netbox")
 
 
 # ============================================================
+# ERRORES PERSONALIZADOS
+# ============================================================
+
+
+class RowValidationError(ValueError):
+    """Excepción lanzada cuando los datos de una fila son explícitamente inválidos."""
+
+
+# ============================================================
 # TYPE ALIASES Y ESTRUCTURAS DE TIPOS
 # ============================================================
 
@@ -97,10 +106,6 @@ CustomFieldsPayload: TypeAlias = dict[str, FieldValue]
 NetBoxPayload: TypeAlias = dict[str, Any]
 CsvColumnAliases: TypeAlias = dict[str, str]
 NetBoxObject: TypeAlias = "Record | MockNetBoxRecord"
-
-
-class RowValidationError(ValueError):
-    """Excepción lanzada cuando los datos de una fila son explícitamente inválidos."""
 
 
 class SyncCounts(TypedDict):
@@ -122,6 +127,15 @@ class NetworkInterfaceData(TypedDict):
     ip: str | None
     prefix: str | None
     cidr: str | None
+
+
+class BaseNodeData(TypedDict):
+    """Representa la estructura base resuelta de un nodo antes de sincronizar."""
+
+    machine_name: str
+    uuid: str
+    machine_type: str
+    payload: NetBoxPayload
 
 
 # ============================================================
@@ -1862,7 +1876,7 @@ def _resolve_host_device(
 
 
 def _resolve_device_role(
-    role_name: str,
+    row: CsvRow,
     roles_cache: dict[str, NetBoxObject],
     config: NetBoxMappingConfig,
 ) -> NetBoxObject | None:
@@ -1870,10 +1884,11 @@ def _resolve_device_role(
     Busca un DeviceRole por nombre (insensible a mayúsculas).
     Si el nombre está vacío o no existe, utiliza "Others" como fallback.
     """
-    if config.is_empty(role_name):
+    role_csv = extract_csv_value(row, "role", config)
+    if not role_csv:
         return roles_cache.get("others")
 
-    normalized = role_name.strip().lower()
+    normalized = role_csv.lower()
     if normalized not in roles_cache:
         return roles_cache.get("others")
 
@@ -2120,6 +2135,55 @@ def _validate_sync(
     )
 
 
+def _resolve_base_node(
+    endpoints: NetBoxEndpoints,
+    row: CsvRow,
+    config: NetBoxMappingConfig,
+    site: NetBoxObject,
+    caches: CacheStore,
+    native_maps: list[FieldMappingConfig],
+    custom_maps: list[FieldMappingConfig],
+    dry_run: bool,
+) -> BaseNodeData | SyncResult:
+    """
+    Resuelve los campos comunes entre device y virtual_machine.
+    Retorna BaseNodeData o SyncResult si hay un error o debe ignorarse.
+    """
+    machine_name = extract_csv_value(row, "machine_name", config)
+    uuid = extract_csv_value(row, "uuid", config)
+    machine_type = extract_csv_value(row, "machine_type", config)
+
+    if _check_missing_core_fields(machine_name, machine_type, config):
+        return "SKIPPED", None
+
+    payload = build_payload(row, native_maps, custom_maps, config)
+
+    platform_id = _resolve_platform(
+        endpoints.platforms, row, caches.platforms, dry_run, config
+    )
+    if platform_id is not None:
+        payload["platform"] = platform_id
+
+    role_obj = _resolve_device_role(row, caches.device_roles, config)
+    if role_obj is None:
+        log.error(
+            "ERROR (%s): no existe el DeviceRole 'Others' en la configuración.",
+            machine_name,
+        )
+        return "ERROR", None
+    # TODO: encapsular procedimiento de obtencion de rol en funcion resolve_device_role, y arrojar error RowValidationError desde ahi en vez de retornarlo
+    payload["role"] = get_netbox_object_id(role_obj)
+    payload["status"] = _resolve_netbox_status(row, config)
+    payload["site"] = get_netbox_object_id(site)
+
+    return {
+        "machine_name": machine_name,
+        "uuid": uuid,
+        "machine_type": machine_type,
+        "payload": payload,
+    }
+
+
 def sync_device(
     endpoints: NetBoxEndpoints,
     row: CsvRow,
@@ -2134,51 +2198,35 @@ def sync_device(
     Sincroniza una fila de tipo "device" o "hipervisor" con NetBox.
     Retorna: (SyncStatus, obj_id | None)
     """
-    machine_name = extract_csv_value(row, "machine_name", config)
-    uuid = extract_csv_value(row, "uuid", config)
-    machine_type = extract_csv_value(row, "machine_type", config)
+    base = _resolve_base_node(
+        endpoints,
+        row,
+        config,
+        site,
+        caches,
+        config.device_native_mappings,
+        config.device_custom_mappings,
+        dry_run,
+    )
+    if isinstance(base, tuple):
+        return base
 
-    if _check_missing_core_fields(machine_name, machine_type, config):
-        return "SKIPPED", None
-
-    # Construcción dinámica del payload.
-    device_native_maps = config.device_native_mappings
-    device_custom_maps = config.device_custom_mappings
-    payload = build_payload(row, device_native_maps, device_custom_maps, config)
+    machine_name = base["machine_name"]
+    uuid = base["uuid"]
+    machine_type = base["machine_type"]
+    payload = base["payload"]
 
     # Compensación de API NetBox: 'face' es obligatorio si 'position' existe.
     if payload.get("position") is not None and "face" not in payload:
         payload["face"] = "front"
 
-    # ── Resolución de objetos relacionados ──────────────────
-    # Role.
-    role_csv = extract_csv_value(row, "role", config)
-    role_obj = _resolve_device_role(role_csv, caches.device_roles, config)
-    if role_obj is None:
-        log.error(
-            "ERROR (%s): no existe el DeviceRole 'Others' en la configuración.",
-            machine_name,
-        )
-        return "ERROR", None
-    payload["role"] = get_netbox_object_id(role_obj)
-
-    # Platform.
-    platform_id = _resolve_platform(
-        endpoints.platforms, row, caches.platforms, dry_run, config
-    )
-    if platform_id is not None:
-        payload["platform"] = platform_id
-
-    # Estado.
-    payload["status"] = _resolve_netbox_status(row, config)
-
-    # Site.
-    payload["site"] = get_netbox_object_id(site)
-
     # Cluster para hipervisores.
     if machine_type == "Hipervisor":
+        # TODO: encapsular la obtencion del cluster en una funcion, y retornar un booleano para la parte del log que es distinta en sync_vm y sync_device
         cluster_name_csv = extract_csv_value(row, "cluster_name", config)
-        if cluster_name_csv:
+        if not cluster_name_csv:
+            log.info("INFO (%s): Hipervisor sin cluster asignado.", machine_name)
+        else:
             cluster = ensure_cluster(
                 endpoints.clusters,
                 cluster_name_csv,
@@ -2188,8 +2236,6 @@ def sync_device(
                 dry_run,
             )
             payload["cluster"] = get_netbox_object_id(cluster)
-        else:
-            log.info("INFO (%s): Hipervisor sin cluster asignado.", machine_name)
 
     # Manufacturer.
     manufacturer = extract_csv_value(row, "manufacturer", config)
@@ -2258,49 +2304,24 @@ def sync_vm(
     Sincroniza una fila de tipo "virtual_machine" con NetBox.
     Retorna: (SyncStatus, obj_id | None)
     """
-    machine_name = extract_csv_value(row, "machine_name", config)
-    uuid = extract_csv_value(row, "uuid", config)
-    machine_type = extract_csv_value(row, "machine_type", config)
-
-    if _check_missing_core_fields(machine_name, machine_type, config):
-        return "SKIPPED", None
-
-    # Construcción dinámica del payload.
-    vm_native_maps = config.vm_native_mappings
-    vm_custom_maps = config.vm_custom_mappings
-    payload = build_payload(
+    base = _resolve_base_node(
+        endpoints,
         row,
-        vm_native_maps,
-        vm_custom_maps,
         config,
+        site,
+        caches,
+        config.vm_native_mappings,
+        config.vm_custom_mappings,
+        dry_run,
     )
+    if isinstance(base, tuple):
+        return base
 
-    # ── Resolución de objetos relacionados ──────────────────
-    # Role.
-    rol_csv = extract_csv_value(row, "role", config)
-    role_obj = _resolve_device_role(rol_csv, caches.device_roles, config)
-    if role_obj is None:
-        log.error(
-            "ERROR (%s): no existe el DeviceRole 'Others' en la configuración.",
-            machine_name,
-        )
-        return "ERROR", None
+    machine_name = base["machine_name"]
+    uuid = base["uuid"]
+    payload = base["payload"]
 
-    payload["role"] = get_netbox_object_id(role_obj)
-
-    # Platform.
-    platform_id = _resolve_platform(
-        endpoints.platforms, row, caches.platforms, dry_run, config
-    )
-    if platform_id is not None:
-        payload["platform"] = platform_id
-
-    # Estado.
-    payload["status"] = _resolve_netbox_status(row, config)
-
-    # Site.
     site_id = get_netbox_object_id(site)
-    payload["site"] = site_id
 
     # Cluster.
     cluster_name_csv = extract_csv_value(row, "cluster_name", config)
@@ -2334,7 +2355,8 @@ def sync_vm(
             payload["device"] = host_dev_id
         else:
             log.warning(
-                "ADVERTENCIA (%s): El dispositivo host '%s' no se encontró en el site. La VM se creará sin asignación de host.",
+                "ADVERTENCIA (%s): El dispositivo host '%s' no se encontró en el site. "
+                "La VM se creará sin asignación de host.",
                 machine_name,
                 host_name,
             )

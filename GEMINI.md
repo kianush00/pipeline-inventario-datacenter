@@ -21,8 +21,9 @@ Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes prin
 
 - Todo el código Python debe estar fuertemente tipado utilizando las anotaciones del módulo `typing` nativo.
 - Evita a toda costa el uso injustificado de `Any`.
-- Utiliza (y reutiliza si se encuentran) elementos como `TypeAlias`, `TypedDict`, `dataclasses` y Modelos Pydantic (`BaseModel`) para definir estructuras de datos complejas o payloads de APIs, garantizando una semántica clara.
-- Asegúrate de que el código base esté diseñado para pasar verificadores de tipo estáticos sin advertencias (Pylance/MyPy).
+- Utiliza elementos como `TypeAlias`, `TypedDict`, `dataclasses` y Modelos Pydantic (`BaseModel`) para definir estructuras de datos complejas o payloads de APIs, garantizando una semántica clara.
+- **Reutilización de tipos existentes:** Antes de importar o definir nuevos tipos de datos, evalúa y prioriza siempre el uso de clases ya declaradas en el archivo de trabajo. No introduzcas tipos redundantes o alternativos provenientes de librerías externas de forma innecesaria.
+- Asegúrate de que el código base esté diseñado para pasar verificadores de tipo estáticos sin advertencias (Pylance/MyPy/Pyright).
 
 ## 2. Calidad de Código, Semántica y Consistencia Arquitectónica (Clean Code)
 
