@@ -106,6 +106,11 @@ class NetBoxApiError(Exception):
     al interactuar con Pynetbox (RequestError)."""
 
 
+class FieldParseError(ValueError):
+    """Excepción lanzada cuando un campo opcional contiene datos mal formados,
+    permitiendo a la capa superior decidir si ignorarlo o abortar la fila."""
+
+
 # ============================================================
 # TYPE ALIASES Y ESTRUCTURAS DE TIPOS
 # ============================================================
@@ -2425,36 +2430,28 @@ def sync_vm(
 # ============================================================
 
 
-def _validate_interface_ip(ip_raw: str, name: str) -> str | None:
+def _validate_interface_ip(ip_raw: str, name: str) -> str:
     """Valida que un string sea una dirección IP correcta."""
     try:
         ipaddress.ip_address(ip_raw)
         return ip_raw
-    except ValueError:
-        log.warning(
-            "IP '%s' en interfaz '%s' no es una dirección IP válida; "
-            "se omitirá la asignación de IP.",
-            ip_raw,
-            name,
-        )
-        return None
+    except ValueError as e:
+        raise FieldParseError(
+            f"IP '{ip_raw}' en interfaz '{name}' no es una dirección IP válida."
+        ) from e
 
 
-def _build_interface_cidr(ip_val: str, pfx_val: str, name: str) -> str | None:
+def _build_interface_cidr(ip_val: str, pfx_val: str, name: str) -> str:
     """Valida IP y prefijo construyendo una dirección CIDR válida."""
     try:
         mask_or_prefix = (
             pfx_val.split("/")[1].strip() if "/" in pfx_val else pfx_val.strip()
         )
         return str(ipaddress.ip_interface(f"{ip_val}/{mask_or_prefix}"))
-    except ValueError:
-        log.warning(
-            "Prefijo o CIDR inválido '%s' para IP '%s' en interfaz '%s'.",
-            pfx_val,
-            ip_val,
-            name,
-        )
-        return None
+    except ValueError as e:
+        raise FieldParseError(
+            f"Prefijo o CIDR inválido '{pfx_val}' para IP '{ip_val}' en interfaz '{name}'."
+        ) from e
 
 
 def _parse_single_network_interface(
@@ -2477,9 +2474,14 @@ def _parse_single_network_interface(
 
     cidr = None
     if ip_val:
-        ip_val = _validate_interface_ip(ip_val, name)
-        if ip_val and pfx_val:
-            cidr = _build_interface_cidr(ip_val, pfx_val, name)
+        try:
+            ip_val = _validate_interface_ip(ip_val, name)
+            if pfx_val:
+                cidr = _build_interface_cidr(ip_val, pfx_val, name)
+        except FieldParseError as e:
+            log.warning("Se omitirá la asignación de IP: %s", e)
+            ip_val = None
+            cidr = None
 
     return {
         "name": name,
@@ -2555,9 +2557,8 @@ def _assign_ip(
     cidr: str,
     iface_obj: NetBoxObject,
     dry_run: bool,
-) -> bool:
-    """Crea o actualiza una IP address en NetBox y la asigna a la interfaz.
-    Retorna True si fue exitoso, False en caso de error."""
+) -> None:
+    """Crea o actualiza una IP address en NetBox y la asigna a la interfaz."""
     node_type = get_node_type_from_object(iface_obj)
     assigned_type: str = (
         "dcim.interface" if node_type == "device" else "virtualization.vminterface"
@@ -2569,7 +2570,7 @@ def _assign_ip(
         current_id = getattr(ip_obj, "assigned_object_id", None)
         current_type = getattr(ip_obj, "assigned_object_type", None)
         if current_id == iface_obj.id and str(current_type) == assigned_type:
-            return True
+            return
 
     # 2. Buscar si hay alguna IP libre con este valor que podamos reclamar
     unassigned_ip = None
@@ -2585,7 +2586,7 @@ def _assign_ip(
                 cidr,
                 iface_obj.id,
             )
-            return True
+            return
         try:
             unassigned_ip.update(
                 {
@@ -2593,17 +2594,16 @@ def _assign_ip(
                     "assigned_object_id": iface_obj.id,
                 }
             )
-            return True
-        except Exception:
-            log.exception("Error actualizando IP libre %s", cidr)
-            return False
+            return
+        except Exception as e:
+            raise NetBoxApiError(f"Error actualizando IP libre {cidr}: {e}") from e
 
     # 3. Todas las IPs existentes están ocupadas por otros nodos. Crear una nueva.
     if dry_run:
         log.info(
             "[DRY-RUN] Crearía nueva IP %s (asignada a objeto %s)", cidr, iface_obj.id
         )
-        return True
+        return
 
     try:
         ip_addresses_endpoint.create(
@@ -2612,10 +2612,8 @@ def _assign_ip(
             assigned_object_type=assigned_type,
             assigned_object_id=iface_obj.id,
         )
-        return True
-    except Exception:
-        log.exception("Error creando IP %s", cidr)
-        return False
+    except Exception as e:
+        raise NetBoxApiError(f"Error creando IP {cidr}: {e}") from e
 
 
 def _sync_single_interface(
@@ -2625,10 +2623,9 @@ def _sync_single_interface(
     existing_ifaces: dict[str, NetBoxObject],
     ip_addresses_endpoint: Endpoint,
     dry_run: bool,
-) -> bool:
+) -> None:
     """
     Sincroniza una interfaz individual y le asigna su IP.
-    Retorna True si la sincronización fue exitosa, False en caso de error.
     """
     node_type = get_node_type_from_object(iface_endpoint)
     name: str = iface_data["name"]
@@ -2659,15 +2656,12 @@ def _sync_single_interface(
                 cast(Record, existing_ifaces[name]).update(payload)
             else:
                 existing_ifaces[name] = cast(Record, iface_endpoint.create(**payload))
-        except Exception:
-            log.exception("Error procesando interfaz %s", name)
-            return False
+        except Exception as e:
+            raise NetBoxApiError(f"Error procesando interfaz '{name}': {e}") from e
 
     if cidr:
         iface_obj = existing_ifaces[name]
-        return _assign_ip(ip_addresses_endpoint, cidr, iface_obj, dry_run)
-
-    return True
+        _assign_ip(ip_addresses_endpoint, cidr, iface_obj, dry_run)
 
 
 def sync_interfaces_for_object(
@@ -2693,15 +2687,17 @@ def sync_interfaces_for_object(
 
     errors = 0
     for iface_data in interfaces:
-        success = _sync_single_interface(
-            iface_data,
-            obj_id,
-            iface_endpoint,
-            existing_ifaces,
-            endpoints.ip_addresses,
-            dry_run,
-        )
-        if not success:
+        try:
+            _sync_single_interface(
+                iface_data,
+                obj_id,
+                iface_endpoint,
+                existing_ifaces,
+                endpoints.ip_addresses,
+                dry_run,
+            )
+        except NetBoxApiError:
+            log.exception("ERROR de API sincronizando interfaz")
             errors += 1
 
     return errors
