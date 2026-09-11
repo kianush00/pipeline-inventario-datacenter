@@ -1794,8 +1794,8 @@ def _resolve_netbox_status(row: CsvRow, config: NetBoxMappingConfig) -> str:
         virtual_machine -> staged
     """
     node_type: NodeType | None = get_node_type_from_row(row, config)
-    estado = extract_csv_value(row, "status", config)
-    status_mapped = config.status_map.get(estado)
+    status_csv = extract_csv_value(row, "status", config)
+    status_mapped = config.status_map.get(status_csv)
 
     if node_type is None:
         log.error(
@@ -1879,20 +1879,29 @@ def _resolve_device_role(
     row: CsvRow,
     roles_cache: dict[str, NetBoxObject],
     config: NetBoxMappingConfig,
-) -> NetBoxObject | None:
+) -> int:
     """
-    Busca un DeviceRole por nombre (insensible a mayúsculas).
+    Busca un DeviceRole por nombre (insensible a mayúsculas) y retorna su ID.
     Si el nombre está vacío o no existe, utiliza "Others" como fallback.
+    Lanza RowValidationError si el fallback "Others" tampoco existe.
     """
     role_csv = extract_csv_value(row, "role", config)
-    if not role_csv:
-        return roles_cache.get("others")
+    role_obj = None
 
-    normalized = role_csv.lower()
-    if normalized not in roles_cache:
-        return roles_cache.get("others")
+    if role_csv:
+        role_obj = roles_cache.get(role_csv.lower())
 
-    return roles_cache[normalized]
+    if not role_obj:
+        role_obj = roles_cache.get("others")
+
+    if not role_obj:
+        machine_name = extract_csv_value(row, "machine_name", config) or "?"
+        raise RowValidationError(
+            f"No existe el DeviceRole 'Others' en NetBox para asignar como "
+            f"fallback a la máquina '{machine_name}'."
+        )
+
+    return get_netbox_object_id(role_obj)
 
 
 # ============================================================
@@ -2164,15 +2173,7 @@ def _resolve_base_node(
     if platform_id is not None:
         payload["platform"] = platform_id
 
-    role_obj = _resolve_device_role(row, caches.device_roles, config)
-    if role_obj is None:
-        log.error(
-            "ERROR (%s): no existe el DeviceRole 'Others' en la configuración.",
-            machine_name,
-        )
-        return "ERROR", None
-    # TODO: encapsular procedimiento de obtencion de rol en funcion resolve_device_role, y arrojar error RowValidationError desde ahi en vez de retornarlo
-    payload["role"] = get_netbox_object_id(role_obj)
+    payload["role"] = _resolve_device_role(row, caches.device_roles, config)
     payload["status"] = _resolve_netbox_status(row, config)
     payload["site"] = get_netbox_object_id(site)
 
