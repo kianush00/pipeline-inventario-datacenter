@@ -29,6 +29,7 @@ Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes prin
 
 - Prioriza la legibilidad, la intención y la robustez profesional sobre la brevedad o soluciones rápidas.
 - **Cero atajos o parches forzados:** Toda modificación debe ser limpia, cuidadosa y respetar estrictamente los patrones de diseño y convenciones ya establecidas en el código base.
+- **Consistencia de patrones arquitectónicos:** Al implementar nueva lógica o procedimientos, no reinventes patrones, convenciones ni estructuras de flujo desde cero. Imita y replica los patrones de diseño y flujo ya consolidados en el archivo (ej. el manejo de excepciones, la estructura de las condiciones if-else, etc.), garantizando uniformidad estética y conceptual en todo el código base.
 - **Reutilización y creación de utilidades:** Prohibido duplicar lógica ad-hoc. Aprovecha siempre las funciones auxiliares (utilidades) existentes en el proyecto. Si introduces código nuevo que resuelva transformaciones, parseos o validaciones comunes no cubiertas actualmente, abstáelo en una nueva función auxiliar reutilizable siguiendo el diseño de los módulos de soporte existentes.
 - Nombra variables, funciones y clases de forma descriptiva, revelando su intención en el modelo de dominio.
 - **Principio de Responsabilidad Única (SRP)**: las funciones deben hacer una sola cosa y hacerla bien.

@@ -1862,7 +1862,6 @@ def _resolve_device_type(
     device_types_endpoint: Endpoint,
     row: CsvRow,
     manufacturer_obj: NetBoxObject,
-    model: str,
     cache: dict[tuple[str, str], NetBoxObject],
     dry_run: bool,
     config: NetBoxMappingConfig,
@@ -1871,6 +1870,7 @@ def _resolve_device_type(
     Resuelve y retorna el ID del DeviceType utilizando el manufacturer y el modelo.
     Si la altura ('alt_u') no se proporciona o es inválida, asume 1 por defecto.
     """
+    model = extract_csv_value(row, "model", config)
     raw_u_height = extract_csv_value(row, "alt_u", config)
     u_height = safe_int(raw_u_height) or 1
 
@@ -2267,6 +2267,14 @@ def sync_device(
     Sincroniza una fila de tipo "device" o "hipervisor" con NetBox.
     Retorna: (SyncStatus, obj_id | None)
     """
+    # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
+    manufacturer = extract_csv_value(row, "manufacturer", config)
+    model = extract_csv_value(row, "model", config)
+    if not manufacturer or not model:
+        machine_name_fallback = extract_csv_value(row, "machine_name", config) or "?"
+        log.warning("SKIP (%s): sin Marca o Modelo.", machine_name_fallback)
+        return "SKIPPED", None
+
     base = _resolve_base_node(
         endpoints,
         row,
@@ -2305,20 +2313,6 @@ def sync_device(
         else:
             log.info("INFO (%s): Hipervisor sin cluster asignado.", machine_name)
 
-    # Manufacturer.
-    manufacturer = extract_csv_value(row, "manufacturer", config)
-    model = extract_csv_value(row, "model", config)
-    if not manufacturer or not model:
-        log.warning("SKIP (%s): sin Marca o Modelo.", machine_name)
-        return "SKIPPED", None
-
-    manufacturer_obj = ensure_manufacturer(
-        endpoints.manufacturers,
-        manufacturer,
-        caches.manufacturers,
-        dry_run,
-    )
-
     # Rack.
     rack_name = extract_csv_value(row, "rack", config)
     if rack_name:
@@ -2331,12 +2325,19 @@ def sync_device(
         )
         payload["rack"] = get_netbox_object_id(rack)
 
+    # Manufacturer.
+    manufacturer_obj = ensure_manufacturer(
+        endpoints.manufacturers,
+        manufacturer,
+        caches.manufacturers,
+        dry_run,
+    )
+
     # DeviceType.
     payload["device_type"] = _resolve_device_type(
         endpoints.device_types,
         row,
         manufacturer_obj,
-        model,
         caches.device_types,
         dry_run,
         config,
@@ -2368,6 +2369,17 @@ def sync_vm(
     Sincroniza una fila de tipo "virtual_machine" con NetBox.
     Retorna: (SyncStatus, obj_id | None)
     """
+    # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
+    cluster_name = extract_csv_value(row, "cluster_name", config)
+    if not cluster_name:
+        machine_name_fallback = extract_csv_value(row, "machine_name", config) or "?"
+        log.warning(
+            "SKIP (%s): VM sin %s.",
+            machine_name_fallback,
+            config.columns.get("cluster_name", "Cluster"),
+        )
+        return "SKIPPED", None
+
     base = _resolve_base_node(
         endpoints,
         row,
@@ -2395,14 +2407,10 @@ def sync_vm(
         dry_run,
         config,
     )
+
     if cluster_id is not None:
         payload["cluster"] = cluster_id
     else:
-        log.warning(
-            "SKIP (%s): VM sin %s.",
-            machine_name,
-            config.columns.get("cluster_name", "Cluster"),
-        )
         return "SKIPPED", None
 
     # Device del hipervisor host (acotado a site y cacheado).
