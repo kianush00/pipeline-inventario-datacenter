@@ -1631,11 +1631,17 @@ def ensure_custom_fields(
 # ============================================================
 
 
-def _resolve_default_or_empty(default: FieldValue, is_optional: bool) -> FieldValue:
-    """Centraliza la política de fallback (default > None > cadena vacía)."""
+def _resolve_default_or_empty(
+    default: FieldValue,
+    is_optional: bool,
+    target: str,
+) -> FieldValue:
+    """Centraliza la política de fallback (default > None > error)."""
     if default is not None:
         return default
-    return None if is_optional else ""
+    if is_optional:
+        return None
+    raise RowValidationError(f"El campo obligatorio '{target}' está vacío en el CSV.")
 
 
 def _extract_concat_dot_value(
@@ -1734,18 +1740,18 @@ def _resolve_field_value(
         value = _extract_concat_dot_value(row, source, config)
         if value:
             return value
-        return _resolve_default_or_empty(default, is_optional)
+        return _resolve_default_or_empty(default, is_optional, target)
 
     raw_value = _extract_raw_source_value(row, source)
     if config.is_empty(raw_value):
-        return _resolve_default_or_empty(default, is_optional)
+        return _resolve_default_or_empty(default, is_optional, target)
 
     value: FieldValue = raw_value
 
     if field_def.map:
         mapped = _apply_value_map(raw_value, field_def.map, config, source)
         if mapped is None:
-            return _resolve_default_or_empty(default, is_optional)
+            return _resolve_default_or_empty(default, is_optional, target)
         value = mapped
 
     value = _validate_select_choice(value, custom_field_def, target, is_optional)
@@ -2001,20 +2007,6 @@ def _resolve_device_role(
 # ============================================================
 
 
-def _check_missing_core_fields(
-    machine_name: str,
-    machine_type: str,
-    config: NetBoxMappingConfig,
-) -> None:
-    """
-    Verifica si faltan campos principales requeridos (nombre o tipo).
-    Levanta RowSkipCondition si falta alguno.
-    """
-    if not machine_name or not machine_type:
-        empty_alias = "machine_name" if not machine_name else "machine_type"
-        empty_field = config.columns.get(empty_alias, empty_alias)
-        raise RowSkipCondition(f"Campo requerido '{empty_field}' vacío.")
-
 
 def _find_existing_object(
     uuid: str,
@@ -2224,8 +2216,6 @@ def _resolve_base_node(
     machine_name = extract_csv_value(row, "machine_name", config)
     uuid = extract_csv_value(row, "uuid", config)
     machine_type = extract_csv_value(row, "machine_type", config)
-
-    _check_missing_core_fields(machine_name, machine_type, config)
 
     payload = build_payload(row, native_maps, custom_maps, config)
 
