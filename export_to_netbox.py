@@ -639,44 +639,50 @@ def create_with_fallback_slug(
             ) from e
 
 
-def safe_int(value: Any) -> int | None:
-    """Convierte un valor a int, retornando None si no es convertible."""
+def parse_int(value: Any) -> int:
+    """Convierte un valor a int, o lanza ValueError si no es convertible."""
     try:
         return int(str(value).strip())
-    except (ValueError, TypeError):
-        return None
+    except (ValueError, TypeError) as e:
+        raise ValueError("No es un número entero válido.") from e
 
 
-def safe_int_gb_to_mb(value: Any) -> int | None:
+def parse_int_gb_to_mb(value: Any) -> int:
     """Convierte GB (string/float) a MB (entero). NetBox espera MB para memory."""
     try:
         gb = float(str(value).strip())
         return round(gb * 1024)
-    except (ValueError, TypeError):
-        return None
+    except (ValueError, TypeError) as e:
+        raise ValueError("No es un valor numérico válido.") from e
 
 
-def safe_bool_si_no(value: Any) -> bool | None:
+def parse_bool_si_no(value: Any) -> bool:
     """
     Convierte un valor a booleano según reglas específicas de 'si/no'.
-    'si'/'sí' → True, 'no' → False, otro → None.
+    Lanza ValueError si no coincide.
     """
     v = str(value).strip().lower()
     if v in ("si", "sí", "yes", "true", "1"):
         return True
     if v in ("no", "false", "0"):
         return False
-    return None
+    raise ValueError("No es 'si' ni 'no'.")
 
 
-def apply_cast(value: Any, cast_type: CastType) -> FieldValue:
+def apply_cast(value: Any, cast_type: CastType, target: str) -> FieldValue:
     """Aplica un cast específico a un valor según la definición del campo."""
-    if cast_type == "int":
-        return safe_int(value)
-    if cast_type == "int_gb_to_mb":
-        return safe_int_gb_to_mb(value)
-    if cast_type == "bool_si_no":
-        return safe_bool_si_no(value)
+    try:
+        if cast_type == "int":
+            return parse_int(value)
+        if cast_type == "int_gb_to_mb":
+            return parse_int_gb_to_mb(value)
+        if cast_type == "bool_si_no":
+            return parse_bool_si_no(value)
+    except ValueError as e:
+        raise RowValidationError(
+            f"Valor inválido '{value}' para el campo '{target}'. {e}"
+        ) from e
+
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return str(value)
@@ -735,10 +741,22 @@ def get_node_type_from_object(obj: Endpoint | NetBoxObject) -> NodeType:
     return "device"
 
 
-def get_node_type_from_row(row: CsvRow, config: NetBoxMappingConfig) -> NodeType | None:
+def get_node_type_from_row(row: CsvRow, config: NetBoxMappingConfig) -> NodeType:
     """Extrae el tipo de máquina y lo mapea al tipo de nodo NetBox."""
-    machine_type = extract_csv_value(row, "machine_type", config)
-    return config.machine_type_map.get(machine_type)
+    machine_type_val = extract_csv_value(row, "machine_type", config)
+
+    if not machine_type_val:
+        raise RowValidationError(
+            "El campo obligatorio 'machine_type' está vacío en el CSV."
+        )
+
+    node_type = config.machine_type_map.get(machine_type_val)
+    if node_type is None:
+        raise RowSkipCondition(
+            f"Tipo de máquina '{machine_type_val}' no está en machine_type_map."
+        )
+
+    return node_type
 
 
 def resolve_mapping_path(args_mapping: str | None) -> Path:
@@ -1757,7 +1775,7 @@ def _resolve_field_value(
     value = _validate_select_choice(value, custom_field_def, target, is_optional)
 
     if field_def.cast:
-        value = apply_cast(value, field_def.cast)
+        value = apply_cast(value, field_def.cast, target)
 
     return value
 
@@ -1819,16 +1837,9 @@ def _resolve_netbox_status(row: CsvRow, config: NetBoxMappingConfig) -> str:
         device         -> inventory
         virtual_machine -> staged
     """
-    node_type: NodeType | None = get_node_type_from_row(row, config)
+    node_type: NodeType = get_node_type_from_row(row, config)
     status_csv = extract_csv_value(row, "status", config)
     status_mapped = config.status_map.get(status_csv)
-
-    if node_type is None:
-        machine_name = extract_csv_value(row, "machine_name", config) or "?"
-        machine_type = extract_csv_value(row, "machine_type", config) or "?"
-        raise RowValidationError(
-            f"No se pudo determinar el tipo de nodo. Máquina: '{machine_name}', Tipo: '{machine_type}'"
-        )
 
     if status_mapped:
         return status_mapped
@@ -1906,7 +1917,12 @@ def _resolve_device_type(
     )
 
     raw_u_height = extract_csv_value(row, "alt_u", config)
-    u_height = safe_int(raw_u_height) or 1
+    try:
+        u_height = parse_int(raw_u_height) or 1
+    except ValueError:
+        raise RowValidationError(
+            f"Valor numérico inválido '{raw_u_height}' para 'alt_u'."
+        )
 
     device_type = ensure_device_type(
         endpoints.device_types,
@@ -2005,7 +2021,6 @@ def _resolve_device_role(
 # ============================================================
 # SINCRONIZACIÓN DE OBJETOS (DEVICES y VMS)
 # ============================================================
-
 
 
 def _find_existing_object(
@@ -2255,7 +2270,7 @@ def sync_device(
     manufacturer = extract_csv_value(row, "manufacturer", config)
     model = extract_csv_value(row, "model", config)
     if not manufacturer or not model:
-        raise RowSkipCondition("Sin Marca o Modelo definido.")
+        raise RowValidationError("Sin Marca o Modelo definido para el Device.")
 
     base = _resolve_base_node(
         endpoints,
@@ -2344,7 +2359,7 @@ def sync_vm(
     cluster_name = extract_csv_value(row, "cluster_name", config)
     if not cluster_name:
         cluster_alias = config.columns.get("cluster_name", "Cluster")
-        raise RowSkipCondition(f"VM sin {cluster_alias}.")
+        raise RowValidationError(f"VM sin {cluster_alias}.")
 
     base = _resolve_base_node(
         endpoints,
@@ -2375,7 +2390,7 @@ def sync_vm(
     if cluster_id is not None:
         payload["cluster"] = cluster_id
     else:
-        raise RowSkipCondition("Falló la resolución del cluster.")
+        raise RowValidationError("Falló la resolución del cluster.")
 
     # Device del hipervisor host (acotado a site y cacheado).
     host_dev_id = _resolve_host_device(
@@ -2391,9 +2406,12 @@ def sync_vm(
 
     # vcpus.
     cores = extract_csv_value(row, "cores", config)
-    cores_int = safe_int(cores)
-    if cores_int is not None:
-        payload["vcpus"] = float(cores_int)
+    if cores:
+        try:
+            cores_int = parse_int(cores)
+            payload["vcpus"] = float(cores_int)
+        except ValueError:
+            raise RowValidationError(f"Valor numérico inválido '{cores}' para 'cores'.")
 
     # ── GET o CREATE/UPDATE ──────────────────────────────────
     return _validate_sync(
@@ -2807,15 +2825,9 @@ def main() -> None:
         machine_name_raw = extract_csv_value(row, "machine_name", config)
         machine_name = machine_name_raw or f"fila {row_num}"
 
-        node_type: NodeType | None = get_node_type_from_row(row, config)
-
         # ── Sincronizar Device o VM ───────────────────────────
         try:
-            if node_type is None:
-                machine_type_val = extract_csv_value(row, "machine_type", config)
-                raise RowSkipCondition(
-                    f"Tipo de máquina '{machine_type_val}' no está en machine_type_map."
-                )
+            node_type: NodeType = get_node_type_from_row(row, config)
 
             if node_type == "device":
                 result, obj_id = sync_device(
