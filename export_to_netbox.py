@@ -2463,10 +2463,10 @@ def _parse_single_network_interface(
     mac_raw: str,
     status_map: dict[str, bool],
     config: NetBoxMappingConfig,
-) -> NetworkInterfaceData | None:
+) -> NetworkInterfaceData:
     """Parsea una única interfaz aislando la lógica de validación de IPs."""
     if config.is_empty(name):
-        return None
+        raise RowValidationError("El nombre de una interfaz de red no puede estar vacío.")
 
     enabled = status_map.get(status_raw.lower().strip(), True)
     ip_val = ip_raw if not config.is_empty(ip_raw) else None
@@ -2480,9 +2480,7 @@ def _parse_single_network_interface(
             if pfx_val:
                 cidr = _build_interface_cidr(ip_val, pfx_val, name)
         except FieldParseError as e:
-            log.warning("Se omitirá la asignación de IP: %s", e)
-            ip_val = None
-            cidr = None
+            raise RowValidationError(str(e)) from e
 
     return {
         "name": name,
@@ -2544,8 +2542,7 @@ def parse_network_interfaces(
             status_map=net_cfg.interface_status_map,
             config=config,
         )
-        if parsed:
-            interfaces.append(parsed)
+        interfaces.append(parsed)
 
     return interfaces
 
