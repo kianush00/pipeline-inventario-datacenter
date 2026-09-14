@@ -1401,7 +1401,7 @@ def _get_object_type_id(
     ots_endpoint: Endpoint,
     object_type: str,
     ot_cache: dict[str, int],
-) -> int | None:
+) -> int:
     """Obtiene el ID de Object Type en NetBox para un app_label.model dado."""
     if object_type in ot_cache:
         return ot_cache[object_type]
@@ -1426,11 +1426,10 @@ def _get_object_type_id(
         ) from e
 
     if not results:
-        log.warning(
-            "Object Type no encontrado en NetBox: %s",
-            object_type,
+        raise ConfigValidationError(
+            f"Object Type '{object_type}' no encontrado en NetBox. "
+            "Verifique que esté correctamente escrito en el YAML."
         )
-        return None
 
     ot_id = get_netbox_object_id(results[0])
     ot_cache[object_type] = ot_id
@@ -1612,7 +1611,7 @@ def ensure_custom_fields(
     cf_definitions: list[CustomFieldConfig] = cfg.get_all_custom_field_defs()
 
     for cf_def in cf_definitions:
-        raw_ot_ids: list[int | None] = [
+        ot_ids: list[int] = [
             _get_object_type_id(
                 endpoints.object_types,
                 ot,
@@ -1620,7 +1619,6 @@ def ensure_custom_fields(
             )
             for ot in cf_def.object_types
         ]
-        ot_ids: list[int] = [i for i in raw_ot_ids if i is not None]
 
         choice_set_id: int | None = None
         choice_set_cfg: ChoiceSetConfig | None = cf_def.choice_set
@@ -1917,12 +1915,15 @@ def _resolve_device_type(
     )
 
     raw_u_height = extract_csv_value(row, "alt_u", config)
-    try:
-        u_height = parse_int(raw_u_height) or 1
-    except ValueError:
-        raise RowValidationError(
-            f"Valor numérico inválido '{raw_u_height}' para 'alt_u'."
-        )
+    if not raw_u_height:
+        u_height = 1
+    else:
+        try:
+            u_height = parse_int(raw_u_height) or 1
+        except ValueError:
+            raise RowValidationError(
+                f"Valor numérico inválido '{raw_u_height}' para 'alt_u'."
+            )
 
     device_type = ensure_device_type(
         endpoints.device_types,
