@@ -694,11 +694,17 @@ def concat_dot(parts: list[str], config: NetBoxMappingConfig) -> str:
     return ". ".join(clean)
 
 
-def extract_csv_value(row: CsvRow, col_alias: str, config: NetBoxMappingConfig) -> str:
+def extract_csv_value(
+    row: CsvRow,
+    col_alias: str,
+    config: NetBoxMappingConfig,
+    required: bool = False,
+) -> str:
     """
     Extrae y sanitiza un valor del CSV usando su alias definido en el YAML.
     Si la celda está vacía (según config.is_empty) o la columna no existe o está
-    mapeada a None, retorna un string vacío ("").
+    mapeada a None, retorna un string vacío (""). Si 'required' es True y el
+    valor resultante está vacío, levanta RowValidationError.
     Si el alias ni siquiera existe en la configuración, levanta ConfigValidationError.
     """
     if col_alias not in config.columns:
@@ -709,9 +715,21 @@ def extract_csv_value(row: CsvRow, col_alias: str, config: NetBoxMappingConfig) 
 
     col_name = config.columns[col_alias]
     if not col_name:
+        if required:
+            raise RowValidationError(
+                f"El campo obligatorio '{col_alias}' no está mapeado en la configuración."
+            )
         return ""
+
     val = row.get(col_name, "").strip()
-    return "" if config.is_empty(val) else val
+    val = "" if config.is_empty(val) else val
+
+    if required and not val:
+        raise RowValidationError(
+            f"El campo obligatorio '{col_alias}' está vacío en el CSV."
+        )
+
+    return val
 
 
 def get_netbox_object_id(obj: NetBoxObject) -> int:
@@ -743,16 +761,11 @@ def get_node_type_from_object(obj: Endpoint | NetBoxObject) -> NodeType:
 
 def get_node_type_from_row(row: CsvRow, config: NetBoxMappingConfig) -> NodeType:
     """Extrae el tipo de máquina y lo mapea al tipo de nodo NetBox."""
-    machine_type_val = extract_csv_value(row, "machine_type", config)
-
-    if not machine_type_val:
-        raise RowValidationError(
-            "El campo obligatorio 'machine_type' está vacío en el CSV."
-        )
+    machine_type_val = extract_csv_value(row, "machine_type", config, required=True)
 
     node_type = config.machine_type_map.get(machine_type_val)
     if node_type is None:
-        raise RowSkipCondition(
+        raise RowValidationError(
             f"Tipo de máquina '{machine_type_val}' no está en machine_type_map."
         )
 
@@ -2224,9 +2237,9 @@ def _resolve_base_node(
     """
     Resuelve los campos comunes entre device y virtual_machine.
     """
-    machine_name = extract_csv_value(row, "machine_name", config)
+    machine_name = extract_csv_value(row, "machine_name", config, required=True)
     uuid = extract_csv_value(row, "uuid", config)
-    machine_type = extract_csv_value(row, "machine_type", config)
+    machine_type = extract_csv_value(row, "machine_type", config, required=True)
 
     payload = build_payload(row, native_maps, custom_maps, config)
 
@@ -2263,10 +2276,8 @@ def sync_device(
     Retorna: (SyncStatus, obj_id)
     """
     # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
-    manufacturer = extract_csv_value(row, "manufacturer", config)
-    model = extract_csv_value(row, "model", config)
-    if not manufacturer or not model:
-        raise RowValidationError("Sin Marca o Modelo definido para el Device.")
+    _ = extract_csv_value(row, "manufacturer", config, required=True)
+    _ = extract_csv_value(row, "model", config, required=True)
 
     base = _resolve_base_node(
         endpoints,
@@ -2352,10 +2363,7 @@ def sync_vm(
     Retorna: (SyncStatus, obj_id)
     """
     # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
-    cluster_name = extract_csv_value(row, "cluster_name", config)
-    if not cluster_name:
-        cluster_alias = config.columns.get("cluster_name", "Cluster")
-        raise RowValidationError(f"VM sin {cluster_alias}.")
+    _ = extract_csv_value(row, "cluster_name", config, required=True)
 
     base = _resolve_base_node(
         endpoints,
@@ -2461,7 +2469,9 @@ def _parse_single_network_interface(
 ) -> NetworkInterfaceData:
     """Parsea una única interfaz aislando la lógica de validación de IPs."""
     if config.is_empty(name):
-        raise RowValidationError("El nombre de una interfaz de red no puede estar vacío.")
+        raise RowValidationError(
+            "El nombre de una interfaz de red no puede estar vacío."
+        )
 
     enabled = status_map.get(status_raw.lower().strip(), True)
     ip_val = ip_raw if not config.is_empty(ip_raw) else None
