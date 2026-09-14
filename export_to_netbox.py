@@ -797,7 +797,7 @@ def load_config(mapping_path: Path) -> NetBoxMappingConfig:
             msg = err.get("msg", "")
             inp = err.get("input")
             error_msgs.append(f"[{loc}]: {msg} (valor recibido: {inp!r})")
-        
+
         full_error = "\n".join(error_msgs)
         raise ConfigValidationError(
             f"Error de validación en el archivo de mapping YAML ({mapping_path}):\n{full_error}"
@@ -826,7 +826,9 @@ def load_env() -> tuple[str, str, bool]:
     missing = [name for name, val in required_vars.items() if not val]
     if missing:
         missing_str = ", ".join(missing)
-        raise ConfigValidationError(f"Variables de entorno requeridas no definidas: {missing_str}")
+        raise ConfigValidationError(
+            f"Variables de entorno requeridas no definidas: {missing_str}"
+        )
 
     return url, token, verify_ssl
 
@@ -1439,7 +1441,7 @@ def _ensure_choice_set(
     existing_choice_sets: dict[str, Record],
     choice_set_cfg: ChoiceSetConfig,
     dry_run: bool,
-) -> int | None:
+) -> int:
     """Crea un choice set si no existe en NetBox."""
     choice_set_name: str = choice_set_cfg.name
     choices: list[list[str]] = _get_choice_set_choices(choice_set_cfg.choices)
@@ -1477,14 +1479,14 @@ def _ensure_choice_set(
         )
         return _get_choice_set_id(choice_set)
 
+    if dry_run:
+        log.info("[DRY-RUN] Actualizaría Choice Set: %s", choice_set_name)
+        return _get_choice_set_id(choice_set)
+
     extra_choices: Any = getattr(choice_set, "extra_choices", None)
     current_choices: list[list[str]] = _normalize_choices(extra_choices)
 
     if current_choices == choices:
-        return _get_choice_set_id(choice_set)
-
-    if dry_run:
-        log.info("[DRY-RUN] Actualizaría Choice Set: %s", choice_set_name)
         return _get_choice_set_id(choice_set)
 
     try:
@@ -1612,9 +1614,6 @@ def ensure_custom_fields(
                 choice_set_cfg,
                 dry_run,
             )
-
-            if choice_set_id is None:
-                continue
 
         # Crear el Custom Field si no existe.
         _ensure_custom_field(
@@ -1819,12 +1818,11 @@ def _resolve_netbox_status(row: CsvRow, config: NetBoxMappingConfig) -> str:
     status_mapped = config.status_map.get(status_csv)
 
     if node_type is None:
-        log.error(
-            "No se pudo determinar el tipo de nodo. Máquina: '%s', Tipo: '%s'",
-            extract_csv_value(row, "machine_name", config) or "?",
-            extract_csv_value(row, "machine_type", config) or "?",
+        machine_name = extract_csv_value(row, "machine_name", config) or "?"
+        machine_type = extract_csv_value(row, "machine_type", config) or "?"
+        raise RowValidationError(
+            f"No se pudo determinar el tipo de nodo. Máquina: '{machine_name}', Tipo: '{machine_type}'"
         )
-        raise RowValidationError("No se pudo determinar el tipo de nodo.")
 
     if status_mapped:
         return status_mapped
@@ -2490,10 +2488,10 @@ def _parse_single_network_interface(
 def parse_network_interfaces(
     row: CsvRow,
     config: NetBoxMappingConfig,
-) -> list[NetworkInterfaceData] | None:
+) -> list[NetworkInterfaceData]:
     """
     Parsea las columnas de red del CSV y devuelve una lista de interfaces.
-    Retorna None si los arrays (listas tras el split) tienen longitudes distintas.
+    Lanza RowValidationError si los arrays tienen longitudes distintas.
     """
     net_cfg = config.network
     cols = net_cfg.columns
@@ -2514,7 +2512,9 @@ def parse_network_interfaces(
     max_len = len(names)
     for lst in (statuses, ips, prefixes, macs):
         if lst and len(lst) != max_len:
-            return None  # Longitudes incompatibles
+            raise RowValidationError(
+                "Las columnas de red tienen longitudes inconsistentes."
+            )
 
     def fill_if_empty(lst: list[str], length: int) -> list[str]:
         return lst if lst else [""] * length
@@ -2886,13 +2886,17 @@ def main() -> None:
             continue
 
         # ── Parsear interfaces ────────────────────────────────
-        interfaces = parse_network_interfaces(row, config)
-        if interfaces is None:
-            log.warning(
-                "Interfaces de '%s' tienen longitudes inconsistentes; "
-                "se omitirán para esta fila.",
-                machine_name,
+        try:
+            interfaces = parse_network_interfaces(row, config)
+        except RowValidationError:
+            log.exception("Error al parsear interfaces de '%s'", machine_name)
+            counts["ERROR"] += 1
+            continue
+        except Exception:
+            log.exception(
+                "ERROR inesperado al parsear interfaces de '%s'", machine_name
             )
+            counts["ERROR"] += 1
             continue
 
         # ── Sincronizar interfaces del objeto ─────────────────
