@@ -1682,19 +1682,17 @@ def _apply_value_map(
     map_key: str,
     config: NetBoxMappingConfig,
     source: str | list[str],
+    target: str,
 ) -> FieldValue:
     """
     Aplica el mapeo declarativo (ej. environment_map) sobre un valor crudo.
-    Retorna None si el valor no está definido en el mapa (miss).
+    Lanza RowValidationError si el valor no está definido en el mapa.
     """
     mapped = config.get_map(map_key).get(value.strip())
     if mapped is None:
-        log.warning(
-            "Valor '%s' de la columna '%s' no está definido en '%s'; "
-            "el campo se omitirá para esta fila.",
-            value,
-            source,
-            map_key,
+        raise RowValidationError(
+            f"El valor '{value}' de la columna '{source}' no está definido en el mapa '{map_key}' "
+            f"para el campo '{target}'."
         )
     return mapped
 
@@ -1765,10 +1763,7 @@ def _resolve_field_value(
     value: FieldValue = raw_value
 
     if field_def.map:
-        mapped = _apply_value_map(raw_value, field_def.map, config, source)
-        if mapped is None:
-            return _resolve_default_or_empty(default, is_optional, target)
-        value = mapped
+        value = _apply_value_map(raw_value, field_def.map, config, source, target)
 
     value = _validate_select_choice(value, custom_field_def, target, is_optional)
 
