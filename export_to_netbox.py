@@ -945,7 +945,7 @@ def build_netbox_endpoints(nb: Api) -> NetBoxEndpoints:
 # ============================================================
 
 
-def read_csv(path: Path) -> tuple[list[str], list[CsvRow]]:
+def _read_csv(path: Path) -> tuple[list[str], list[CsvRow]]:
     """
     Lee merged_inventory.csv.
     Devuelve (headers, rows) donde cada row es {header: value}.
@@ -964,16 +964,17 @@ def read_csv(path: Path) -> tuple[list[str], list[CsvRow]]:
     return list(headers), rows
 
 
-def validate_csv_headers(
+def _validate_csv_headers(
     headers: list[str],
     config: NetBoxMappingConfig,
-) -> None:
+) -> list[str]:
     """
     Valida que los encabezados del CSV incluyan todas las columnas obligatorias
     configuradas en 'required_columns' dentro de netbox_mapping.yaml.
     Valida la *existencia de la columna en la cabecera*, no que cada fila
     deba tener un valor no vacío.
     Levanta ConfigValidationError si faltan columnas obligatorias.
+    Retorna la lista de cabeceras intacta si la validación es exitosa.
     """
     header_set = set(headers)
 
@@ -999,6 +1000,21 @@ def validate_csv_headers(
             "Columnas del mapping no encontradas en el CSV (se tratarán como vacías): %s",
             ", ".join(repr(c) for c in missing_optional),
         )
+
+    return headers
+
+
+def read_and_validate_csv(
+    csv_path: Path,
+    config: NetBoxMappingConfig,
+) -> list[CsvRow]:
+    """
+    Orquesta la lectura del archivo CSV y la validación de sus cabeceras.
+    Retorna únicamente las filas parseadas (diccionarios), listas para ser procesadas.
+    """
+    headers, rows = _read_csv(csv_path)
+    _validate_csv_headers(headers, config)
+    return rows
 
 
 # ============================================================
@@ -1728,7 +1744,7 @@ def ensure_custom_fields(
 
     # Obtener lista unificada de definiciones de Custom Field O(1).
     cf_definitions: list[CustomFieldConfig] = cfg.get_all_custom_field_defs()
-    
+
     ensured_cfs: dict[str, NetBoxObject] = {}
 
     for cf_def in cf_definitions:
@@ -1762,7 +1778,7 @@ def ensure_custom_fields(
             dry_run,
         )
         ensured_cfs[cf_def.name] = cf_obj
-        
+
     return ensured_cfs
 
 
@@ -3037,10 +3053,7 @@ def main() -> None:
     config: NetBoxMappingConfig = load_config(mapping_path)
 
     # ── Leer y Validar CSV (Fail-Fast) ───────────────────────
-    headers, rows = read_csv(args.csv)
-
-    # ── Validar que el CSV tenga las columnas requeridas ────
-    validate_csv_headers(headers, config)
+    rows = read_and_validate_csv(args.csv, config)
 
     # ── Conteo global de nombres de máquina ───────────────
     # Usado para validar unicidad antes de permitir
