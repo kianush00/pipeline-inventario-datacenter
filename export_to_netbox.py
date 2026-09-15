@@ -542,6 +542,21 @@ class NetBoxMappingConfig(BaseModel):
 
         return self
 
+    def resolve_node_type(self, machine_type: str) -> NodeType:
+        """
+        Resuelve el NodeType ('device' o 'virtual_machine') a partir de un machine_type.
+        Lanza RowValidationError si el mapeo es inválido.
+        """
+        if not machine_type:
+            raise RowValidationError("El campo 'machine_type' está vacío.")
+
+        node_type = self.machine_type_map.get(machine_type)
+        if node_type is None:
+            raise RowValidationError(
+                f"El tipo de máquina '{machine_type}' no está registrado en 'machine_type_map'."
+            )
+        return node_type
+
 
 # ===========================================================
 # CACHE DE DATOS
@@ -768,15 +783,8 @@ def get_node_type_from_object(obj: Endpoint | NetBoxObject) -> NodeType:
 
 def get_node_type_from_row(row: CsvRow, config: NetBoxMappingConfig) -> NodeType:
     """Extrae el tipo de máquina y lo mapea al tipo de nodo NetBox."""
-    machine_type_val = extract_csv_value(row, "machine_type", config, required=True)
-
-    node_type = config.machine_type_map.get(machine_type_val)
-    if node_type is None:
-        raise RowValidationError(
-            f"Tipo de máquina '{machine_type_val}' no está en machine_type_map."
-        )
-
-    return node_type
+    machine_type_val = extract_csv_value(row, "machine_type", config)
+    return config.resolve_node_type(machine_type_val)
 
 
 def resolve_mapping_path(args_mapping: str | None) -> Path:
@@ -1072,7 +1080,7 @@ def ensure_cluster_type(
     return obj
 
 
-def _precompute_cluster_type_map(
+def precompute_cluster_type_map(
     rows: list[CsvRow],
     config: NetBoxMappingConfig,
 ) -> dict[str, str]:
@@ -1119,7 +1127,7 @@ def _precompute_cluster_type_map(
     return cluster_type_map
 
 
-def _ensure_dynamic_cluster_types(
+def ensure_dynamic_cluster_types(
     endpoints: NetBoxEndpoints,
     cluster_type_map: dict[str, str],
     fallback_cfg: ClusterTypeConfig,
@@ -2419,6 +2427,7 @@ def sync_device(
     _ = extract_csv_value(row, "manufacturer", config, required=True)
     _ = extract_csv_value(row, "model", config, required=True)
 
+    # Resolvemos los campos base
     base = _resolve_base_node(
         endpoints,
         row,
@@ -2508,6 +2517,7 @@ def sync_vm(
     # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
     _ = extract_csv_value(row, "cluster_name", config, required=True)
 
+    # Resolvemos los campos base
     base = _resolve_base_node(
         endpoints,
         row,
@@ -3079,8 +3089,8 @@ def main() -> None:
     caches: CacheStore = CacheStore()
 
     # ── Pre-escaneo: asociar clústeres con su tecnología ─────
-    cluster_type_map = _precompute_cluster_type_map(rows, config)
-    fallback_cluster_type = _ensure_dynamic_cluster_types(
+    cluster_type_map = precompute_cluster_type_map(rows, config)
+    fallback_cluster_type = ensure_dynamic_cluster_types(
         endpoints,
         cluster_type_map,
         config.cluster_type,
@@ -3107,31 +3117,17 @@ def main() -> None:
     vm_rows: list[tuple[int, CsvRow]] = []
 
     for row_num, row in enumerate(rows, start=2):
-        machine_type = extract_csv_value(row, "machine_type", config)
-        node_type = config.machine_type_map.get(machine_type)
-
-        if node_type == "device":
-            device_rows.append((row_num, row))
-        elif node_type == "virtual_machine":
-            vm_rows.append((row_num, row))
-        else:
-            # Valor ausente o no registrado en machine_type_map.
+        try:
+            node_type = get_node_type_from_row(row, config)
+            if node_type == "device":
+                device_rows.append((row_num, row))
+            else:
+                vm_rows.append((row_num, row))
+        except RowValidationError:
             machine_name = (
                 extract_csv_value(row, "machine_name", config) or f"fila {row_num}"
             )
-            if not machine_type:
-                log.error(
-                    "ERROR fila %d ('%s'): el campo obligatorio 'machine_type' está vacío.",
-                    row_num,
-                    machine_name,
-                )
-            else:
-                log.error(
-                    "ERROR fila %d ('%s'): tipo de máquina '%s' no está en machine_type_map.",
-                    row_num,
-                    machine_name,
-                    machine_type,
-                )
+            log.exception("ERROR fila %d ('%s')", row_num, machine_name)
             counts["ERROR"] += 1
 
     log.info(
