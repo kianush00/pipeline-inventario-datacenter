@@ -556,6 +556,7 @@ class MockNetBoxRecord(BaseModel):
     id: int = 0
     name: str = ""
     slug: str = ""
+    type: str = ""
     model: str = ""
     vm_role: bool = False
     custom_fields: dict[str, Any] = Field(default_factory=dict)
@@ -1627,8 +1628,11 @@ def _ensure_custom_field(
     ot_ids: list[int],
     choice_set_id: int | None,
     dry_run: bool,
-) -> None:
-    """Crea un custom field si no existe en NetBox."""
+) -> NetBoxObject:
+    """
+    Crea un custom field si no existe en NetBox.
+    Retorna el objeto Custom Field.
+    """
     name: str = cf_def.name
 
     if name in existing_cfs:
@@ -1636,7 +1640,7 @@ def _ensure_custom_field(
             "Custom field ya existe: %s",
             name,
         )
-        return
+        return existing_cfs[name]
 
     if dry_run:
         log.info(
@@ -1644,7 +1648,7 @@ def _ensure_custom_field(
             name,
             cf_def.type,
         )
-        return
+        return MockNetBoxRecord(id=0, name=name, type=cf_def.type)
 
     create_kwargs: NetBoxPayload = {
         "name": name,
@@ -1665,6 +1669,7 @@ def _ensure_custom_field(
         created_cf = cast(Record, custom_fields_endpoint.create(**create_kwargs))
         existing_cfs[name] = created_cf
         log.info("Custom field creado: %s", name)
+        return created_cf
     except Exception as e:
         raise ConfigValidationError(f"Error al crear custom field '{name}': {e}") from e
 
@@ -1673,7 +1678,7 @@ def ensure_custom_fields(
     endpoints: NetBoxEndpoints,
     cfg: NetBoxMappingConfig,
     dry_run: bool,
-) -> None:
+) -> dict[str, NetBoxObject]:
     """
     Garantiza que todos los custom fields definidos en el YAML
     existan en NetBox.
@@ -1691,6 +1696,8 @@ def ensure_custom_fields(
     - El endpoint /api/extras/object-types/ fue eliminado en NetBox 4.5.
     - Los Choice Sets se gestionan mediante
     /api/extras/custom-field-choice-sets/.
+
+    Retorna un diccionario mapeando el nombre del Custom Field a su objeto en NetBox.
     """
     # Obtener Custom Fields y Choice Sets existentes.
     custom_fields = cast(list[Record], endpoints.custom_fields.all())
@@ -1707,6 +1714,8 @@ def ensure_custom_fields(
 
     # Obtener lista unificada de definiciones de Custom Field O(1).
     cf_definitions: list[CustomFieldConfig] = cfg.get_all_custom_field_defs()
+    
+    ensured_cfs: dict[str, NetBoxObject] = {}
 
     for cf_def in cf_definitions:
         ot_ids: list[int] = [
@@ -1730,7 +1739,7 @@ def ensure_custom_fields(
             )
 
         # Crear el Custom Field si no existe.
-        _ensure_custom_field(
+        cf_obj = _ensure_custom_field(
             endpoints.custom_fields,
             existing_cfs,
             cf_def,
@@ -1738,6 +1747,9 @@ def ensure_custom_fields(
             choice_set_id,
             dry_run,
         )
+        ensured_cfs[cf_def.name] = cf_obj
+        
+    return ensured_cfs
 
 
 # ============================================================
