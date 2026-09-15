@@ -2824,7 +2824,7 @@ def _sync_row(
     csv_name_counts: Counter[str],
     counts: SyncCounts,
     dry_run: bool,
-) -> None:
+) -> SyncCounts:
     """
     Sincroniza una fila individual del CSV con NetBox, incluyendo
     la creación/actualización del objeto principal y sus interfaces de red.
@@ -2864,11 +2864,11 @@ def _sync_row(
     except RowSkipCondition as e:
         log.warning("SKIP fila %d: %s", row_num, e)
         counts["SKIPPED"] += 1
-        return
+        return counts
     except (NetBoxApiError, RowValidationError):
         log.exception("ERROR en fila %d", row_num)
         counts["ERROR"] += 1
-        return
+        return counts
     except Exception:
         log.exception(
             "ERROR inesperado al procesar fila %d ('%s')",
@@ -2876,7 +2876,7 @@ def _sync_row(
             machine_name,
         )
         counts["ERROR"] += 1
-        return
+        return counts
 
     counts[result] += 1
 
@@ -2887,7 +2887,7 @@ def _sync_row(
                 "SKIP interfaces de '%s': el objeto no tiene ID.",
                 machine_name,
             )
-        return
+        return counts
 
     # ── Parsear interfaces ────────────────────────────────
     try:
@@ -2895,11 +2895,11 @@ def _sync_row(
     except RowValidationError:
         log.exception("Error al parsear interfaces de '%s'", machine_name)
         counts["ERROR"] += 1
-        return
+        return counts
     except Exception:
         log.exception("ERROR inesperado al parsear interfaces de '%s'", machine_name)
         counts["ERROR"] += 1
-        return
+        return counts
 
     # ── Sincronizar interfaces del objeto ─────────────────
     try:
@@ -2917,6 +2917,8 @@ def _sync_row(
             "ERROR inesperado al sincronizar interfaces de '%s'", machine_name
         )
         counts["ERROR"] += 1
+        
+    return counts
 
 
 def _print_summary_and_exit(
@@ -3078,7 +3080,7 @@ def main() -> None:
     # ── Fase 1: Sincronizar Devices ──────────────────────────
     log.info("── Fase 1: Sincronizando %d Device(s) ──", len(device_rows))
     for row_num, row in device_rows:
-        _sync_row(
+        counts = _sync_row(
             row_num,
             row,
             "device",
@@ -3096,7 +3098,7 @@ def main() -> None:
     # ── Fase 2: Sincronizar VMs ──────────────────────────────
     log.info("── Fase 2: Sincronizando %d VM(s) ──", len(vm_rows))
     for row_num, row in vm_rows:
-        _sync_row(
+        counts = _sync_row(
             row_num,
             row,
             "virtual_machine",
