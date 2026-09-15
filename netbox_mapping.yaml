@@ -173,8 +173,6 @@ device_roles:
     slug: "others"
     color: "9e9e9e"
 
-
-
 # ── Estado → NetBox status ───────────────────────────────────
 # 'Estado' del inventario maestro utiliza directamente la
 # semántica del campo status de NetBox.

@@ -51,8 +51,9 @@ import os
 import re
 import sys
 from collections import Counter
+from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, NoReturn, TypeAlias, TypedDict, Union, cast
+from typing import Any, Literal, NoReturn, TypeAlias, TypedDict, Union, cast, get_args
 
 import requests
 import urllib3
@@ -115,26 +116,34 @@ class FieldParseError(ValueError):
 # TYPE ALIASES Y ESTRUCTURAS DE TIPOS
 # ============================================================
 
-SyncStatus: TypeAlias = Literal["CREATED", "UPDATED", "UNCHANGED"]
+
+class SyncStatus(str, Enum):
+    CREATED = "CREATED"
+    UPDATED = "UPDATED"
+    UNCHANGED = "UNCHANGED"
+    SKIPPED = "SKIPPED"
+    ERROR = "ERROR"
+
+
+class NodeType(str, Enum):
+    DEVICE = "device"
+    VIRTUAL_MACHINE = "virtual_machine"
+
+
+class CastType(str, Enum):
+    INT = "int"
+    INT_GB_TO_MB = "int_gb_to_mb"
+    BOOL_SI_NO = "bool_si_no"
+
+
 SyncResult: TypeAlias = tuple[SyncStatus, int]
-NodeType: TypeAlias = Literal["device", "virtual_machine"]
-CastType: TypeAlias = Literal["int", "int_gb_to_mb", "bool_si_no"]
 CsvRow: TypeAlias = dict[str, str]
 FieldValue: TypeAlias = str | int | float | bool | None
 CustomFieldsPayload: TypeAlias = dict[str, FieldValue]
 NetBoxPayload: TypeAlias = dict[str, Any]
 CsvColumnAliases: TypeAlias = dict[str, str]
 NetBoxObject: TypeAlias = Union[Record, "MockNetBoxRecord"]
-
-
-class SyncCounts(TypedDict):
-    """Contadores de resultados de la sincronización con NetBox."""
-
-    CREATED: int
-    UPDATED: int
-    UNCHANGED: int
-    SKIPPED: int
-    ERROR: int
+SyncCounts: TypeAlias = dict[SyncStatus, int]
 
 
 class NetworkInterfaceData(TypedDict):
@@ -339,7 +348,7 @@ class FieldMappingConfig(BaseModel):
     target: str = Field(min_length=1)
     is_optional: bool = True
     is_unique: bool = False
-    cast: Literal["int", "int_gb_to_mb", "bool_si_no"] | None = None
+    cast: CastType | None = None
     transform: Literal["concat_dot"] | None = None
 
     @model_validator(mode="after")
@@ -412,6 +421,12 @@ class NodeTypesConfig(BaseModel):
     device: NodeMappingConfig
     virtual_machine: NodeMappingConfig
 
+    def get_config(self, node_type: NodeType) -> NodeMappingConfig:
+        """Retorna la configuración de mapeo fuertemente tipada según el tipo de nodo."""
+        if node_type == NodeType.DEVICE:
+            return self.device
+        return self.virtual_machine
+
 
 class NetBoxMappingConfig(BaseModel):
     """
@@ -438,7 +453,7 @@ class NetBoxMappingConfig(BaseModel):
     empty_values: list[str] = Field(
         default_factory=lambda: ["N/A", "", "None", "n/a", "none"]
     )
-    # TODO: evaluar si ambos atributos privados merecen la pena, y si están desactualizados o no
+
     _empty_values_set: frozenset[str] = PrivateAttr(default_factory=frozenset)
     _custom_field_defs_map: dict[str, CustomFieldConfig] = PrivateAttr(
         default_factory=dict
@@ -523,7 +538,6 @@ class NetBoxMappingConfig(BaseModel):
             raise ValueError(
                 "El Custom Field 'machine_type' debe tener un 'map' configurado."
             )
-        # TODO: evaluar si merece la pena validar el custom field "machine_name" también.
         return self
 
     def resolve_node_type(self, machine_type: str) -> NodeType:
@@ -546,13 +560,12 @@ class NetBoxMappingConfig(BaseModel):
                 f"El tipo de máquina '{machine_type}' no está registrado en el mapa de 'machine_type'."
             )
 
-        # TODO: evaluar si se puede validar node_type directamente referenciando el NodeType enum.
-        if node_type not in ("device", "virtual_machine"):
+        try:
+            return NodeType(node_type)
+        except ValueError:
             raise ValueError(
                 f"El mapeo de machine_type resolvió '{node_type}', el cual no es un NodeType válido."
             )
-
-        return node_type  # type: ignore
 
 
 # ===========================================================
@@ -691,11 +704,11 @@ def parse_bool_si_no(value: Any) -> bool:
 def apply_cast(value: Any, cast_type: CastType, target: str) -> FieldValue:
     """Aplica un cast específico a un valor según la definición del campo."""
     try:
-        if cast_type == "int":
+        if cast_type == CastType.INT:
             return parse_int(value)
-        if cast_type == "int_gb_to_mb":
+        if cast_type == CastType.INT_GB_TO_MB:
             return parse_int_gb_to_mb(value)
-        if cast_type == "bool_si_no":
+        if cast_type == CastType.BOOL_SI_NO:
             return parse_bool_si_no(value)
     except ValueError as e:
         raise RowValidationError(
@@ -769,13 +782,13 @@ def get_node_type_from_object(obj: Endpoint | NetBoxObject) -> NodeType:
 
     # Útil para Endpoints de pynetbox
     if "virtualization" in url or name == "virtual-machines":
-        return "virtual_machine"
+        return NodeType.VIRTUAL_MACHINE
 
     # Si es un NetBoxObject tendrá el atributo del padre
     if hasattr(obj, "virtual_machine"):
-        return "virtual_machine"
+        return NodeType.VIRTUAL_MACHINE
 
-    return "device"
+    return NodeType.DEVICE
 
 
 def get_node_type_from_row(row: CsvRow, config: NetBoxMappingConfig) -> NodeType:
@@ -1980,8 +1993,7 @@ def _resolve_netbox_status(row: CsvRow, config: NetBoxMappingConfig) -> str:
     if status_mapped:
         return status_mapped
 
-    # TODO: hacer que la clase NodeTypes sea más fácil de usar.
-    node_cfg = cast(NodeMappingConfig, getattr(config.node_types, node_type))
+    node_cfg = config.node_types.get_config(node_type)
     return node_cfg.status_default
 
 
@@ -2296,7 +2308,7 @@ def _execute_sync(
                 machine_name,
                 uuid,
             )
-            return "CREATED", 0
+            return SyncStatus.CREATED, 0
 
         existing_id = get_netbox_object_id(existing[0])
         diff = _check_record_changes(existing[0], payload)
@@ -2308,7 +2320,7 @@ def _execute_sync(
                 uuid,
                 list(diff.keys()),
             )
-            return "UPDATED", existing_id
+            return SyncStatus.UPDATED, existing_id
 
         log.info(
             "[DRY-RUN] UNCHANGED %s: %s (UUID=%s)",
@@ -2316,22 +2328,22 @@ def _execute_sync(
             machine_name,
             uuid,
         )
-        return "UNCHANGED", existing_id
+        return SyncStatus.UNCHANGED, existing_id
 
     if not existing:
         obj = cast(Record, endpoint.create(**payload))
         obj_id = get_netbox_object_id(obj)
         log.info("CREATED %s: %s (ID=%d)", node_type, machine_name, obj_id)
-        return "CREATED", obj_id
+        return SyncStatus.CREATED, obj_id
 
     existing_id = get_netbox_object_id(existing[0])
     updated = existing[0].update(payload)
     if updated:
         log.info("UPDATED %s: %s", node_type, machine_name)
-        return "UPDATED", existing_id
+        return SyncStatus.UPDATED, existing_id
 
     log.info("UNCHANGED %s: %s", node_type, machine_name)
-    return "UNCHANGED", existing_id
+    return SyncStatus.UNCHANGED, existing_id
 
 
 def _validate_sync(
@@ -2423,7 +2435,7 @@ def sync_device(
     _ = extract_csv_value(row, "manufacturer", config, required=True)
     _ = extract_csv_value(row, "model", config, required=True)
 
-    node_cfg = config.node_types.device
+    node_cfg = config.node_types.get_config(NodeType.DEVICE)
 
     # Resolvemos los campos base
     base = _resolve_base_node(
@@ -2515,7 +2527,7 @@ def sync_vm(
     # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
     _ = extract_csv_value(row, "cluster_name", config, required=True)
 
-    node_cfg = config.node_types.virtual_machine
+    node_cfg = config.node_types.get_config(NodeType.VIRTUAL_MACHINE)
 
     # Resolvemos los campos base
     base = _resolve_base_node(
@@ -2723,7 +2735,9 @@ def _assign_ip(
     """
     node_type = get_node_type_from_object(iface_obj)
     assigned_type: str = (
-        "dcim.interface" if node_type == "device" else "virtualization.vminterface"
+        "dcim.interface"
+        if node_type == NodeType.DEVICE
+        else "virtualization.vminterface"
     )
     existing_ips: list[Record] = list(ip_addresses_endpoint.filter(address=cidr))
 
@@ -2813,7 +2827,7 @@ def _sync_single_interface(
     if mac:
         payload["mac_address"] = mac.upper()
 
-    if node_type == "device":
+    if node_type == NodeType.DEVICE:
         payload["device"] = obj_id
         payload["type"] = "other"  # tipo genérico; ajustable
     else:
@@ -2852,7 +2866,7 @@ def sync_interfaces_for_object(
 ) -> int:
     """Sincroniza interfaces y sus IPs para un Device o VM.
     Retorna la cantidad de errores encontrados (0 si todo fue exitoso)."""
-    if node_type == "device":
+    if node_type == NodeType.DEVICE:
         iface_endpoint = endpoints.device_interfaces
         iface_filter = {"device_id": obj_id}
     else:
@@ -2911,7 +2925,7 @@ def _sync_row(
     machine_name = extract_csv_value(row, "machine_name", config) or f"fila {row_num}"
 
     try:
-        if node_type == "device":
+        if node_type == NodeType.DEVICE:
             result, obj_id = sync_device(
                 endpoints,
                 row,
@@ -2939,11 +2953,11 @@ def _sync_row(
         raise ConfigValidationError(f"Error de configuración en fila {row_num}: {e}")
     except RowSkipCondition as e:
         log.warning("SKIP fila %d: %s", row_num, e)
-        counts["SKIPPED"] += 1
+        counts[SyncStatus.SKIPPED] += 1
         return counts
     except (NetBoxApiError, RowValidationError):
         log.exception("ERROR en fila %d", row_num)
-        counts["ERROR"] += 1
+        counts[SyncStatus.ERROR] += 1
         return counts
     except Exception:
         log.exception(
@@ -2951,7 +2965,7 @@ def _sync_row(
             row_num,
             machine_name,
         )
-        counts["ERROR"] += 1
+        counts[SyncStatus.ERROR] += 1
         return counts
 
     counts[result] += 1
@@ -2970,11 +2984,11 @@ def _sync_row(
         interfaces = parse_network_interfaces(row, config)
     except RowValidationError:
         log.exception("Error al parsear interfaces de '%s'", machine_name)
-        counts["ERROR"] += 1
+        counts[SyncStatus.ERROR] += 1
         return counts
     except Exception:
         log.exception("ERROR inesperado al parsear interfaces de '%s'", machine_name)
-        counts["ERROR"] += 1
+        counts[SyncStatus.ERROR] += 1
         return counts
 
     # ── Sincronizar interfaces del objeto ─────────────────
@@ -2987,12 +3001,12 @@ def _sync_row(
             dry_run,
         )
         if iface_errors > 0:
-            counts["ERROR"] += iface_errors
+            counts[SyncStatus.ERROR] += iface_errors
     except Exception:
         log.exception(
             "ERROR inesperado al sincronizar interfaces de '%s'", machine_name
         )
-        counts["ERROR"] += 1
+        counts[SyncStatus.ERROR] += 1
 
     return counts
 
@@ -3007,11 +3021,11 @@ def _print_summary_and_exit(
         "\n" + "=" * 50 + "\n"
         "Resumen de exportación a NetBox\n" + "=" * 50 + "\n"
         f"  Total filas procesadas : {total_rows}\n"
-        f"  Creados                : {counts['CREATED']}\n"
-        f"  Actualizados           : {counts['UPDATED']}\n"
-        f"  Sin cambios            : {counts['UNCHANGED']}\n"
-        f"  Omitidos (SKIP)        : {counts['SKIPPED']}\n"
-        f"  Errores                : {counts['ERROR']}\n" + "=" * 50
+        f"  Creados                : {counts[SyncStatus.CREATED]}\n"
+        f"  Actualizados           : {counts[SyncStatus.UPDATED]}\n"
+        f"  Sin cambios            : {counts[SyncStatus.UNCHANGED]}\n"
+        f"  Omitidos (SKIP)        : {counts[SyncStatus.SKIPPED]}\n"
+        f"  Errores                : {counts[SyncStatus.ERROR]}\n" + "=" * 50
     )
 
     if dry_run:
@@ -3019,7 +3033,7 @@ def _print_summary_and_exit(
 
     log.info(summary)
 
-    sys.exit(0 if counts["ERROR"] == 0 else 1)
+    sys.exit(0 if counts[SyncStatus.ERROR] == 0 else 1)
 
 
 def main() -> None:
@@ -3104,11 +3118,11 @@ def main() -> None:
 
     # ── Contadores ───────────────────────────────────────────
     counts: SyncCounts = {
-        "CREATED": 0,
-        "UPDATED": 0,
-        "UNCHANGED": 0,
-        "SKIPPED": 0,
-        "ERROR": 0,
+        SyncStatus.CREATED: 0,
+        SyncStatus.UPDATED: 0,
+        SyncStatus.UNCHANGED: 0,
+        SyncStatus.SKIPPED: 0,
+        SyncStatus.ERROR: 0,
     }
 
     # ── Clasificar filas por tipo de nodo ─────────────────────
@@ -3118,7 +3132,7 @@ def main() -> None:
     for row_num, row in enumerate(rows, start=2):
         try:
             node_type = get_node_type_from_row(row, config)
-            if node_type == "device":
+            if node_type == NodeType.DEVICE:
                 device_rows.append((row_num, row))
             else:
                 vm_rows.append((row_num, row))
@@ -3127,13 +3141,13 @@ def main() -> None:
                 extract_csv_value(row, "machine_name", config) or f"fila {row_num}"
             )
             log.exception("ERROR fila %d ('%s')", row_num, machine_name)
-            counts["ERROR"] += 1
+            counts[SyncStatus.ERROR] += 1
 
     log.info(
         "Clasificación: %d device(s), %d VM(s), %d error(es) de tipo.",
         len(device_rows),
         len(vm_rows),
-        counts["ERROR"],
+        counts[SyncStatus.ERROR],
     )
 
     # ── Fase 1: Sincronizar Devices ──────────────────────────
@@ -3142,7 +3156,7 @@ def main() -> None:
         counts = _sync_row(
             row_num,
             row,
-            "device",
+            NodeType.DEVICE,
             endpoints,
             config,
             site,
@@ -3160,7 +3174,7 @@ def main() -> None:
         counts = _sync_row(
             row_num,
             row,
-            "virtual_machine",
+            NodeType.VIRTUAL_MACHINE,
             endpoints,
             config,
             site,
