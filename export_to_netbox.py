@@ -52,7 +52,7 @@ import re
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Any, Literal, NoReturn, TypeAlias, TypedDict, cast
+from typing import Any, Literal, NoReturn, TypeAlias, TypedDict, Union, cast
 
 import requests
 import urllib3
@@ -124,7 +124,7 @@ FieldValue: TypeAlias = str | int | float | bool | None
 CustomFieldsPayload: TypeAlias = dict[str, FieldValue]
 NetBoxPayload: TypeAlias = dict[str, Any]
 CsvColumnAliases: TypeAlias = dict[str, str]
-NetBoxObject: TypeAlias = "Record | MockNetBoxRecord"
+NetBoxObject: TypeAlias = Union[Record, "MockNetBoxRecord"]
 
 
 class SyncCounts(TypedDict):
@@ -308,6 +308,7 @@ class CustomFieldConfig(BaseModel):
     object_types: list[str] = Field(default_factory=list)
     choice_set: ChoiceSetConfig | None = None
     default: FieldValue = None
+    map: dict[str, str] | None = None
 
     @field_validator("object_types")
     @classmethod
@@ -340,7 +341,6 @@ class FieldMappingConfig(BaseModel):
     is_unique: bool = False
     cast: Literal["int", "int_gb_to_mb", "bool_si_no"] | None = None
     transform: Literal["concat_dot"] | None = None
-    map: str | None = None
 
     @model_validator(mode="after")
     def validate_transform_and_source(self) -> "FieldMappingConfig":
@@ -365,25 +365,21 @@ class FieldMappingConfig(BaseModel):
         return self
 
 
-class StatusDefaultsConfig(BaseModel):
-    """Valores por defecto para status de Device y VM."""
+class StatusConfig(BaseModel):
+    """Configuración de estado (status) de NetBox."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    device: str = "inventory"
-    virtual_machine: str = "staged"
+    map: dict[str, str]
 
 
-class NetworkColumnsConfig(BaseModel):
-    """Nombres de columnas del CSV para interfaces de red."""
+class NetworkFieldConfig(BaseModel):
+    """Configuración de campo individual para interfaces de red."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    names: str = Field(min_length=1)
-    status: str = Field(min_length=1)
-    ip: str = Field(min_length=1)
-    prefix: str = Field(min_length=1)
-    mac: str = Field(min_length=1)
+    source: str = Field(min_length=1)
+    map: dict[str, Any] | None = None
 
 
 class NetworkConfig(BaseModel):
@@ -391,10 +387,30 @@ class NetworkConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    columns: NetworkColumnsConfig
-    interface_status_map: dict[str, bool] = Field(
-        default_factory=lambda: {"up": True, "down": False}
-    )
+    names: NetworkFieldConfig
+    status: NetworkFieldConfig
+    ip: NetworkFieldConfig
+    prefix: NetworkFieldConfig
+    mac: NetworkFieldConfig
+
+
+class NodeMappingConfig(BaseModel):
+    """Configuración de mapeo y fallback para un tipo de nodo específico."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status_default: str = Field(min_length=1)
+    native_mappings: list[FieldMappingConfig] = Field(default_factory=list)
+    custom_mappings: list[FieldMappingConfig] = Field(default_factory=list)
+
+
+class NodeTypesConfig(BaseModel):
+    """Configuración agrupada por tipo de nodo (device vs virtual_machine)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    device: NodeMappingConfig
+    virtual_machine: NodeMappingConfig
 
 
 class NetBoxMappingConfig(BaseModel):
@@ -403,7 +419,7 @@ class NetBoxMappingConfig(BaseModel):
     Valida tipos, restricciones de valor y consistencia referencial.
     Centraliza el acceso a columnas y métodos utilitarios de ejecución como is_empty().
 
-    NOTA: Las listas y diccionarios de este modelo (ej. custom_field_definitions) son
+    Las listas y diccionarios de este modelo (ej. custom_field_definitions) son
     poblados automáticamente por Pydantic en la función load_config() al deserializar el
     archivo YAML.
     """
@@ -415,25 +431,16 @@ class NetBoxMappingConfig(BaseModel):
     site: SiteConfig
     cluster_type: ClusterTypeConfig
     device_roles: list[DeviceRoleConfig]
-    environment_map: dict[str, str] = Field(default_factory=dict)
-    machine_type_map: dict[str, Literal["device", "virtual_machine"]]
-    status_map: dict[str, str]
-    status_defaults: StatusDefaultsConfig = Field(default_factory=StatusDefaultsConfig)
+    status: StatusConfig
     custom_field_definitions: list[CustomFieldConfig] = Field(default_factory=list)
-    device_native_mappings: list[FieldMappingConfig] = Field(default_factory=list)
-    device_custom_mappings: list[FieldMappingConfig] = Field(default_factory=list)
-    vm_native_mappings: list[FieldMappingConfig] = Field(default_factory=list)
-    vm_custom_mappings: list[FieldMappingConfig] = Field(default_factory=list)
+    node_types: NodeTypesConfig
     network: NetworkConfig
     empty_values: list[str] = Field(
         default_factory=lambda: ["N/A", "", "None", "n/a", "none"]
     )
-
+    # TODO: evaluar si ambos atributos privados merecen la pena, y si están desactualizados o no
     _empty_values_set: frozenset[str] = PrivateAttr(default_factory=frozenset)
     _custom_field_defs_map: dict[str, CustomFieldConfig] = PrivateAttr(
-        default_factory=dict
-    )
-    _available_maps: dict[str, dict[str, FieldValue]] = PrivateAttr(
         default_factory=dict
     )
 
@@ -449,13 +456,6 @@ class NetBoxMappingConfig(BaseModel):
         for cf in self.custom_field_definitions:
             cf_map[cf.name] = cf
         object.__setattr__(self, "_custom_field_defs_map", cf_map)
-
-        maps: dict[str, dict[str, FieldValue]] = {
-            k: v
-            for k, v in self.model_dump().items()
-            if isinstance(v, dict) and k.endswith("_map")
-        }
-        object.__setattr__(self, "_available_maps", maps)
 
     @property
     def columns(self) -> CsvColumnAliases:
@@ -486,10 +486,6 @@ class NetBoxMappingConfig(BaseModel):
         """Retorna la lista completa de definiciones de Custom Field."""
         return list(self._custom_field_defs_map.values())
 
-    def get_map(self, map_name: str) -> dict[str, FieldValue]:
-        """Devuelve un mapa de configuración por nombre."""
-        return self._available_maps.get(map_name, {})
-
     def is_empty(self, value: Any) -> bool:
         """Determina si un valor es considerado vacío según empty_values."""
         if value is None:
@@ -506,21 +502,7 @@ class NetBoxMappingConfig(BaseModel):
                 "para fallback de roles no reconocidos."
             )
 
-        # 2. Validar que los 'map' referenciados existan en el modelo
-        for field_group_name, field_group in [
-            ("device_native_mappings", self.device_native_mappings),
-            ("device_custom_mappings", self.device_custom_mappings),
-            ("vm_native_mappings", self.vm_native_mappings),
-            ("vm_custom_mappings", self.vm_custom_mappings),
-        ]:
-            for f in field_group:
-                if f.map and f.map not in self._available_maps:
-                    raise ValueError(
-                        f"En '{field_group_name}', target '{f.target}' "
-                        f"referencia map '{f.map}', pero no está definido en el YAML."
-                    )
-
-        # 3. Validar que las columnas requeridas existan en el catálogo conocido
+        # 2. Validar que las columnas requeridas existan en el catálogo conocido
         known_columns = set(self.csv_column_aliases.values())
         unknown_required = set(self.required_columns) - known_columns
         if unknown_required:
@@ -529,17 +511,19 @@ class NetBoxMappingConfig(BaseModel):
                 f"en 'csv_column_aliases': {unknown_required}"
             )
 
-        # 4. Validar machine_type_map no vacío
-        if not self.machine_type_map:
-            raise ValueError("'machine_type_map' no puede estar vacío.")
-
-        # 5. Validar que el Custom Field 'machine_type' esté definido en custom_field_definitions
+        # 3. Validar que el Custom Field 'machine_type' esté definido en custom_field_definitions y tenga un mapa
         cf_names = {cf.name for cf in self.custom_field_definitions}
         if "machine_type" not in cf_names:
             raise ValueError(
                 "El Custom Field 'machine_type' es obligatorio dentro de custom_field_definitions."
             )
 
+        machine_type_def = self.get_custom_field_def("machine_type")
+        if not machine_type_def or not machine_type_def.map:
+            raise ValueError(
+                "El Custom Field 'machine_type' debe tener un 'map' configurado."
+            )
+        # TODO: evaluar si merece la pena validar el custom field "machine_name" también.
         return self
 
     def resolve_node_type(self, machine_type: str) -> NodeType:
@@ -550,12 +534,25 @@ class NetBoxMappingConfig(BaseModel):
         if not machine_type:
             raise RowValidationError("El campo 'machine_type' está vacío.")
 
-        node_type = self.machine_type_map.get(machine_type)
+        machine_type_def = self.get_custom_field_def("machine_type")
+        if not machine_type_def or not machine_type_def.map:
+            raise RowValidationError(
+                "El Custom Field 'machine_type' carece de un mapa de valores válido."
+            )
+
+        node_type = machine_type_def.map.get(machine_type)
         if node_type is None:
             raise RowValidationError(
-                f"El tipo de máquina '{machine_type}' no está registrado en 'machine_type_map'."
+                f"El tipo de máquina '{machine_type}' no está registrado en el mapa de 'machine_type'."
             )
-        return node_type
+
+        # TODO: evaluar si se puede validar node_type directamente referenciando el NodeType enum.
+        if node_type not in ("device", "virtual_machine"):
+            raise ValueError(
+                f"El mapeo de machine_type resolvió '{node_type}', el cual no es un NodeType válido."
+            )
+
+        return node_type  # type: ignore
 
 
 # ===========================================================
@@ -1827,19 +1824,18 @@ def _extract_raw_source_value(row: CsvRow, source: str | list[str]) -> str:
 
 def _apply_value_map(
     value: str,
-    map_key: str,
-    config: NetBoxMappingConfig,
+    map_dict: dict[str, str],
     source: str | list[str],
     target: str,
 ) -> FieldValue:
     """
-    Aplica el mapeo declarativo (ej. environment_map) sobre un valor crudo.
+    Aplica el mapeo declarativo sobre un valor crudo.
     Lanza RowValidationError si el valor no está definido en el mapa.
     """
-    mapped = config.get_map(map_key).get(value.strip())
+    mapped = map_dict.get(value.strip())
     if mapped is None:
         raise RowValidationError(
-            f"El valor '{value}' de la columna '{source}' no está definido en el mapa '{map_key}' "
+            f"El valor '{value}' de la columna '{source}' no está definido en el mapa "
             f"para el campo '{target}'."
         )
     return mapped
@@ -1910,8 +1906,8 @@ def _resolve_field_value(
 
     value: FieldValue = raw_value
 
-    if field_def.map:
-        value = _apply_value_map(raw_value, field_def.map, config, source, target)
+    if custom_field_def and custom_field_def.map:
+        value = _apply_value_map(raw_value, custom_field_def.map, source, target)
 
     value = _validate_select_choice(value, custom_field_def, target, is_optional)
 
@@ -1974,19 +1970,19 @@ def _resolve_netbox_status(row: CsvRow, config: NetBoxMappingConfig) -> str:
     """
     Resuelve el status NetBox a partir de la columna 'Estado'.
 
-    Si el valor no existe en status_map:
-        device         -> inventory
-        virtual_machine -> staged
+    Si el valor no existe en status_map, se aplica el fallback
+    correspondiente al tipo de nodo.
     """
     node_type: NodeType = get_node_type_from_row(row, config)
     status_csv = extract_csv_value(row, "status", config)
-    status_mapped = config.status_map.get(status_csv)
+    status_mapped = config.status.map.get(status_csv)
 
     if status_mapped:
         return status_mapped
-    if node_type == "device":
-        return config.status_defaults.device
-    return config.status_defaults.virtual_machine
+
+    # TODO: hacer que la clase NodeTypes sea más fácil de usar.
+    node_cfg = cast(NodeMappingConfig, getattr(config.node_types, node_type))
+    return node_cfg.status_default
 
 
 def _resolve_platform(
@@ -2427,6 +2423,8 @@ def sync_device(
     _ = extract_csv_value(row, "manufacturer", config, required=True)
     _ = extract_csv_value(row, "model", config, required=True)
 
+    node_cfg = config.node_types.device
+
     # Resolvemos los campos base
     base = _resolve_base_node(
         endpoints,
@@ -2434,8 +2432,8 @@ def sync_device(
         config,
         site,
         caches,
-        config.device_native_mappings,
-        config.device_custom_mappings,
+        node_cfg.native_mappings,
+        node_cfg.custom_mappings,
         dry_run,
     )
 
@@ -2517,6 +2515,8 @@ def sync_vm(
     # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
     _ = extract_csv_value(row, "cluster_name", config, required=True)
 
+    node_cfg = config.node_types.virtual_machine
+
     # Resolvemos los campos base
     base = _resolve_base_node(
         endpoints,
@@ -2524,8 +2524,8 @@ def sync_vm(
         config,
         site,
         caches,
-        config.vm_native_mappings,
-        config.vm_custom_mappings,
+        node_cfg.native_mappings,
+        node_cfg.custom_mappings,
         dry_run,
     )
 
@@ -2661,20 +2661,19 @@ def parse_network_interfaces(
     Lanza RowValidationError si los arrays tienen longitudes distintas.
     """
     net_cfg = config.network
-    cols = net_cfg.columns
 
     def split_col(col_name: str) -> list[str]:
         raw = row.get(col_name, "")
         return [v.strip() for v in raw.split(",")] if not config.is_empty(raw) else []
 
-    names = split_col(cols.names)
+    names = split_col(net_cfg.names.source)
     if not names:
         return []
 
-    statuses = split_col(cols.status)
-    ips = split_col(cols.ip)
-    prefixes = split_col(cols.prefix)
-    macs = split_col(cols.mac)
+    statuses = split_col(net_cfg.status.source)
+    ips = split_col(net_cfg.ip.source)
+    prefixes = split_col(net_cfg.prefix.source)
+    macs = split_col(net_cfg.mac.source)
 
     max_len = len(names)
     for lst in (statuses, ips, prefixes, macs):
@@ -2699,7 +2698,7 @@ def parse_network_interfaces(
             ip_raw=ips[i],
             pfx_raw=prefixes[i],
             mac_raw=macs[i],
-            status_map=net_cfg.interface_status_map,
+            status_map=net_cfg.status.map or {},
             config=config,
         )
         interfaces.append(parsed)

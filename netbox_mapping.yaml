@@ -173,26 +173,7 @@ device_roles:
     slug: "others"
     color: "9e9e9e"
 
-# ── Mapeo de Entorno ─────────────────────────────────────────
-# Transforma los valores de entorno del CSV al slug/valor interno
-# admitido por el Choice Set del Custom Field en NetBox.
-#
-# NOTA: Cualquier diccionario en la raíz del YAML cuya clave termine
-# en `_map` (ej. environment_map) será detectado y registrado automáticamente
-# por el script como un mapa de resolución. Puedes utilizar estos mapas
-# referenciándolos con la propiedad `map: "nombre_del_mapa"` en la definición
-# de los campos del dispositivo o VM.
-environment_map:
-  "Producción": "production"
-  "Certificación": "certification"
-  "Desarrollo": "development"
 
-# ── Tipo de máquina → modelo NetBox ──────────────────────────
-# Determina si la fila se exporta como Device o VirtualMachine.
-machine_type_map:
-  "Dedicada": "device"
-  "Hipervisor": "device"
-  "VM": "virtual_machine"
 
 # ── Estado → NetBox status ───────────────────────────────────
 # 'Estado' del inventario maestro utiliza directamente la
@@ -214,18 +195,15 @@ machine_type_map:
 # deberá aplicar el fallback correspondiente al tipo de objeto:
 #   Device           → inventory
 #   VirtualMachine   → staged
-status_map:
-  "Activo": "active"
-  "Planificado": "planned"
-  "En preparación": "staged"
-  "Fallido": "failed"
-  "En inventario": "inventory"
-  "En baja": "decommissioning"
-  "Fuera de línea": "offline"
-
-status_defaults:
-  device: "inventory"
-  virtual_machine: "staged"
+status:
+  map:
+    "Activo": "active"
+    "Planificado": "planned"
+    "En preparación": "staged"
+    "Fallido": "failed"
+    "En inventario": "inventory"
+    "En baja": "decommissioning"
+    "Fuera de línea": "offline"
 
 # ── Definiciones de Custom Fields (Esquema DDL) ──────────────
 # El script garantiza que estos custom fields existen en NetBox.
@@ -275,6 +253,10 @@ custom_field_definitions:
           label: "Hipervisor"
         - value: "VM"
           label: "VM"
+    map:
+      "Dedicada": "device"
+      "Hipervisor": "device"
+      "VM": "virtual_machine"
 
   - name: "environment"
     label: "Entorno"
@@ -292,6 +274,10 @@ custom_field_definitions:
           label: "Certificación"
         - value: "development"
           label: "Desarrollo"
+    map:
+      "Producción": "production"
+      "Certificación": "certification"
+      "Desarrollo": "development"
 
   - name: "inventory_uuid"
     label: "UUID de inventario"
@@ -416,170 +402,159 @@ custom_field_definitions:
 # 'device_type' son resueltas a objetos/IDs NetBox por sus respectivas
 # funciones especializadas en el script, por lo que no forman parte de esta lista.
 
-device_native_mappings:
-  - source: *col_nombre_maquina
-    target: "name"
-    is_optional: false
+node_types:
+  device:
+    status_default: "inventory"
+    native_mappings:
+      - source: *col_nombre_maquina
+        target: "name"
+        is_optional: false
 
-  - source: *col_serial
-    target: "serial"
-    is_optional: true
-    is_unique: true
+      - source: *col_serial
+        target: "serial"
+        is_optional: true
+        is_unique: true
 
-  - source: *col_asset_tag
-    target: "asset_tag"
-    is_optional: true
-    is_unique: true
+      - source: *col_asset_tag
+        target: "asset_tag"
+        is_optional: true
+        is_unique: true
 
-  - source: *col_pos_u
-    target: "position"
-    is_optional: true
-    cast: "int"
+      - source: *col_pos_u
+        target: "position"
+        is_optional: true
+        cast: "int"
 
-  - source: [*col_desc, *col_notas]
-    target: "description"
-    transform: "concat_dot"
-    is_optional: true
+      - source: [*col_desc, *col_notas]
+        target: "description"
+        transform: "concat_dot"
+        is_optional: true
 
-# ── Mapeo de Custom Fields de Device ─────────────────────────
-# Sección DML: define cómo EXTRAER datos del CSV y MAPEARLOS a
-# Custom Fields de la API de NetBox para objetos Device.
-# Los valores resultantes se empaquetan dentro del sub-diccionario
-# "custom_fields" del payload JSON.
-device_custom_mappings:
-  - source: *col_uuid
-    target: "inventory_uuid"
-    is_optional: true
+    custom_mappings:
+      - source: *col_uuid
+        target: "inventory_uuid"
+        is_optional: true
 
-  - source: *col_tipo_maquina
-    target: "machine_type"
-    is_optional: false
+      - source: *col_tipo_maquina
+        target: "machine_type"
+        is_optional: false
 
-  - source: *col_entorno
-    target: "environment"
-    is_optional: true
-    map: "environment_map"
+      - source: *col_entorno
+        target: "environment"
+        is_optional: true
 
-  - source: *col_service_tag
-    target: "service_tag"
-    is_optional: true
+      - source: *col_service_tag
+        target: "service_tag"
+        is_optional: true
 
-  - source: *col_cpu_modelo
-    target: "cpu_model"
-    is_optional: true
+      - source: *col_cpu_modelo
+        target: "cpu_model"
+        is_optional: true
 
-  - source: *col_cores
-    target: "cpu_cores"
-    is_optional: true
-    cast: "int"
+      - source: *col_cores
+        target: "cpu_cores"
+        is_optional: true
+        cast: "int"
 
-  - source: *col_threads
-    target: "cpu_threads"
-    is_optional: true
-    cast: "int"
+      - source: *col_threads
+        target: "cpu_threads"
+        is_optional: true
+        cast: "int"
 
-  - source: *col_sockets
-    target: "cpu_sockets"
-    is_optional: true
-    cast: "int"
+      - source: *col_sockets
+        target: "cpu_sockets"
+        is_optional: true
+        cast: "int"
 
-  - source: *col_discos
-    target: "disks"
-    is_optional: true
+      - source: *col_discos
+        target: "disks"
+        is_optional: true
 
-  - source: *col_raid
-    target: "raid"
-    is_optional: true
+      - source: *col_raid
+        target: "raid"
+        is_optional: true
 
-  - source: *col_bios_ver
-    target: "bios_version"
-    is_optional: true
+      - source: *col_bios_ver
+        target: "bios_version"
+        is_optional: true
 
-  - source: *col_bios_date
-    target: "bios_date"
-    is_optional: true
+      - source: *col_bios_date
+        target: "bios_date"
+        is_optional: true
 
-  - source: *col_nodo_rundeck
-    target: "rundeck_node"
-    is_optional: true
-    cast: "bool_si_no"
+      - source: *col_nodo_rundeck
+        target: "rundeck_node"
+        is_optional: true
+        cast: "bool_si_no"
 
-  - source: *col_so_ver
-    target: "os_version"
-    is_optional: true
+      - source: *col_so_ver
+        target: "os_version"
+        is_optional: true
 
-  - source: *col_hip_os
-    target: "hypervisor_os"
-    is_optional: true
+      - source: *col_hip_os
+        target: "hypervisor_os"
+        is_optional: true
 
-  - source: *col_hip_ver
-    target: "hypervisor_version"
-    is_optional: true
+      - source: *col_hip_ver
+        target: "hypervisor_version"
+        is_optional: true
 
-# ── Mapeo de Campos Nativos de VirtualMachine ────────────────
-# Sección DML: define cómo EXTRAER datos del CSV y MAPEARLOS a
-# campos nativos de la API de NetBox para objetos VirtualMachine.
-# NOTA: Claves foráneas como 'site', 'role', 'platform', 'cluster' y 'device'
-# son resueltas a objetos/IDs NetBox por funciones especializadas en el script.
+  virtual_machine:
+    status_default: "staged"
+    native_mappings:
+      - source: *col_nombre_maquina
+        target: "name"
+        is_optional: false
 
-vm_native_mappings:
-  - source: *col_nombre_maquina
-    target: "name"
-    is_optional: false
+      - source: *col_ram_gb
+        target: "memory"
+        is_optional: true
+        cast: "int_gb_to_mb"
 
-  - source: *col_ram_gb
-    target: "memory"
-    is_optional: true
-    cast: "int_gb_to_mb"
+      - source: *col_disk_cap
+        target: "disk"
+        is_optional: true
+        cast: "int"
 
-  - source: *col_disk_cap
-    target: "disk"
-    is_optional: true
-    cast: "int"
+      - source: [*col_desc, *col_notas]
+        target: "description"
+        transform: "concat_dot"
+        is_optional: true
 
-  - source: [*col_desc, *col_notas]
-    target: "description"
-    transform: "concat_dot"
-    is_optional: true
+    custom_mappings:
+      - source: *col_uuid
+        target: "inventory_uuid"
+        is_optional: true
 
-# ── Mapeo de Custom Fields de VirtualMachine ─────────────────
-# Sección DML: define cómo EXTRAER datos del CSV y MAPEARLOS a
-# Custom Fields de la API de NetBox para objetos VirtualMachine.
-vm_custom_mappings:
-  - source: *col_uuid
-    target: "inventory_uuid"
-    is_optional: true
+      - source: *col_tipo_maquina
+        target: "machine_type"
+        is_optional: false
 
-  - source: *col_tipo_maquina
-    target: "machine_type"
-    is_optional: false
+      - source: *col_entorno
+        target: "environment"
+        is_optional: true
 
-  - source: *col_entorno
-    target: "environment"
-    is_optional: true
-    map: "environment_map"
+      - source: *col_cpu_modelo
+        target: "cpu_model"
+        is_optional: true
 
-  - source: *col_cpu_modelo
-    target: "cpu_model"
-    is_optional: true
+      - source: *col_cores
+        target: "cpu_cores"
+        is_optional: true
+        cast: "int"
 
-  - source: *col_cores
-    target: "cpu_cores"
-    is_optional: true
-    cast: "int"
+      - source: *col_discos
+        target: "disks"
+        is_optional: true
 
-  - source: *col_discos
-    target: "disks"
-    is_optional: true
+      - source: *col_nodo_rundeck
+        target: "rundeck_node"
+        is_optional: true
+        cast: "bool_si_no"
 
-  - source: *col_nodo_rundeck
-    target: "rundeck_node"
-    is_optional: true
-    cast: "bool_si_no"
-
-  - source: *col_so_ver
-    target: "os_version"
-    is_optional: true
+      - source: *col_so_ver
+        target: "os_version"
+        is_optional: true
 
 # ── Interfaces de red ─────────────────────────────────────────
 # Las cinco columnas de red se parsean en paralelo por posición,
@@ -623,16 +598,19 @@ vm_custom_mappings:
 #   Dirección MAC en formato estándar (ej. "ab:cd:ef:01:23:45").
 
 network:
-  columns:
-    names: *col_ifaces
-    status: *col_ifaces_status
-    ip: *col_ip
-    prefix: *col_pfx
-    mac: *col_mac
-
-  interface_status_map:
-    "up": true
-    "down": false
+  names:
+    source: *col_ifaces
+  status:
+    source: *col_ifaces_status
+    map:
+      "up": true
+      "down": false
+  ip:
+    source: *col_ip
+  prefix:
+    source: *col_pfx
+  mac:
+    source: *col_mac
 
 # ── Valores vacíos ─────────────────────────────────────────
 # Valores vacíos que se consideran equivalentes a None/N/A y
