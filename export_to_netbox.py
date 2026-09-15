@@ -560,6 +560,11 @@ class MockNetBoxRecord(BaseModel):
     vm_role: bool = False
     custom_fields: dict[str, Any] = Field(default_factory=dict)
 
+    # Red y asignaciones (para simulaciones de IP)
+    address: str | None = None
+    assigned_object_id: int | None = None
+    assigned_object_type: str | None = None
+
 
 class CacheStore(BaseModel):
     """
@@ -2660,8 +2665,11 @@ def _assign_ip(
     cidr: str,
     iface_obj: NetBoxObject,
     dry_run: bool,
-) -> None:
-    """Crea o actualiza una IP address en NetBox y la asigna a la interfaz."""
+) -> NetBoxObject:
+    """
+    Crea o actualiza una IP address en NetBox y la asigna a la interfaz.
+    Retorna el objeto IP.
+    """
     node_type = get_node_type_from_object(iface_obj)
     assigned_type: str = (
         "dcim.interface" if node_type == "device" else "virtualization.vminterface"
@@ -2673,7 +2681,7 @@ def _assign_ip(
         current_id = getattr(ip_obj, "assigned_object_id", None)
         current_type = getattr(ip_obj, "assigned_object_type", None)
         if current_id == iface_obj.id and str(current_type) == assigned_type:
-            return
+            return ip_obj
 
     # 2. Buscar si hay alguna IP libre con este valor que podamos reclamar
     unassigned_ip = None
@@ -2689,7 +2697,12 @@ def _assign_ip(
                 cidr,
                 iface_obj.id,
             )
-            return
+            return MockNetBoxRecord(
+                id=0,
+                address=cidr,
+                assigned_object_id=iface_obj.id,
+                assigned_object_type=assigned_type,
+            )
         try:
             unassigned_ip.update(
                 {
@@ -2697,7 +2710,7 @@ def _assign_ip(
                     "assigned_object_id": iface_obj.id,
                 }
             )
-            return
+            return unassigned_ip
         except Exception as e:
             raise NetBoxApiError(f"Error actualizando IP libre {cidr}: {e}") from e
 
@@ -2706,14 +2719,22 @@ def _assign_ip(
         log.info(
             "[DRY-RUN] Crearía nueva IP %s (asignada a objeto %s)", cidr, iface_obj.id
         )
-        return
+        return MockNetBoxRecord(
+            id=0,
+            address=cidr,
+            assigned_object_id=iface_obj.id,
+            assigned_object_type=assigned_type,
+        )
 
     try:
-        ip_addresses_endpoint.create(
-            address=cidr,
-            status="active",
-            assigned_object_type=assigned_type,
-            assigned_object_id=iface_obj.id,
+        return cast(
+            Record,
+            ip_addresses_endpoint.create(
+                address=cidr,
+                status="active",
+                assigned_object_type=assigned_type,
+                assigned_object_id=iface_obj.id,
+            ),
         )
     except Exception as e:
         raise NetBoxApiError(f"Error creando IP {cidr}: {e}") from e
@@ -2726,9 +2747,10 @@ def _sync_single_interface(
     existing_ifaces: dict[str, NetBoxObject],
     ip_addresses_endpoint: Endpoint,
     dry_run: bool,
-) -> None:
+) -> tuple[NetBoxObject, NetBoxObject | None]:
     """
     Sincroniza una interfaz individual y le asigna su IP.
+    Retorna una tupla con (Interfaz, IP asignada o None).
     """
     node_type = get_node_type_from_object(iface_endpoint)
     name: str = iface_data["name"]
@@ -2762,9 +2784,12 @@ def _sync_single_interface(
         except Exception as e:
             raise NetBoxApiError(f"Error procesando interfaz '{name}': {e}") from e
 
+    ip_obj = None
     if cidr:
         iface_obj = existing_ifaces[name]
-        _assign_ip(ip_addresses_endpoint, cidr, iface_obj, dry_run)
+        ip_obj = _assign_ip(ip_addresses_endpoint, cidr, iface_obj, dry_run)
+
+    return existing_ifaces[name], ip_obj
 
 
 def sync_interfaces_for_object(
@@ -2917,7 +2942,7 @@ def _sync_row(
             "ERROR inesperado al sincronizar interfaces de '%s'", machine_name
         )
         counts["ERROR"] += 1
-        
+
     return counts
 
 
