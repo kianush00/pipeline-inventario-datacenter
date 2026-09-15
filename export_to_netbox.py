@@ -582,6 +582,7 @@ class CacheStore(BaseModel):
     platforms: dict[str, NetBoxObject] = Field(default_factory=dict)
     racks: dict[tuple[int, str], NetBoxObject] = Field(default_factory=dict)
     clusters: dict[tuple[int, str], NetBoxObject] = Field(default_factory=dict)
+    cluster_types: dict[str, NetBoxObject] = Field(default_factory=dict)
     device_roles: dict[str, NetBoxObject] = Field(default_factory=dict)
     host_devices: dict[tuple[int, str], int | None] = Field(default_factory=dict)
 
@@ -1027,13 +1028,11 @@ def ensure_site(
 
 def ensure_cluster_type(
     endpoints: NetBoxEndpoints,
-    cluster_type_cfg: ClusterTypeConfig,
+    name: str,
+    slug: str,
     dry_run: bool,
 ) -> NetBoxObject:
-    """Garantiza que el ClusterType definido en el YAML exista en NetBox."""
-    name = cluster_type_cfg.name
-    slug = cast(str, cluster_type_cfg.slug)
-
+    """Garantiza que el ClusterType exista en NetBox."""
     results: list[Record] = list(endpoints.cluster_types.filter(name=name))
     if results:
         return results[0]
@@ -1049,6 +1048,87 @@ def ensure_cluster_type(
 
     log.info("ClusterType creado: %s", name)
     return obj
+
+
+def _precompute_cluster_type_map(
+    rows: list[CsvRow],
+    config: NetBoxMappingConfig,
+) -> dict[str, str]:
+    """
+    Pre-escaneo del CSV: asocia cada cluster_name con la tecnología
+    del hipervisor (hypervisor_os) para determinar qué ClusterTypes
+    crear dinámicamente.
+
+    Solo procesa filas de tipo "Hipervisor". Si dos hipervisores del
+    mismo clúster reportan distintos valores de SO, lanza un error
+    explícito para forzar la corrección del maestro.
+
+    Retorna un diccionario {cluster_name: hypervisor_os}.
+    """
+    cluster_type_map: dict[str, str] = {}
+
+    for row in rows:
+        machine_type = extract_csv_value(row, "machine_type", config)
+        if machine_type != "Hipervisor":
+            continue
+
+        cluster_name = extract_csv_value(row, "cluster_name", config)
+        hypervisor_os = extract_csv_value(row, "hypervisor_os", config)
+
+        if not cluster_name or not hypervisor_os:
+            continue
+
+        existing_os = cluster_type_map.get(cluster_name)
+        if existing_os is not None and existing_os != hypervisor_os:
+            raise ConfigValidationError(
+                f"Conflicto de SO en el clúster '{cluster_name}': "
+                f"un hipervisor reporta '{existing_os}' y otro '{hypervisor_os}'. "
+                "Corrija el inventario maestro."
+            )
+
+        cluster_type_map[cluster_name] = hypervisor_os
+
+    if cluster_type_map:
+        log.info(
+            "Pre-escaneo: %d clúster(es) asociados a ClusterType dinámico.",
+            len(cluster_type_map),
+        )
+
+    return cluster_type_map
+
+
+def _ensure_dynamic_cluster_types(
+    endpoints: NetBoxEndpoints,
+    cluster_type_map: dict[str, str],
+    fallback_cfg: ClusterTypeConfig,
+    cache: dict[str, NetBoxObject],
+    dry_run: bool,
+) -> NetBoxObject:
+    """
+    Crea los ClusterTypes dinámicos en NetBox a partir de los valores
+    únicos de hypervisor_os y los almacena en el caché.
+
+    Siempre garantiza el fallback estático del YAML como respaldo
+    para clústeres sin información de SO.
+
+    Retorna el ClusterType fallback.
+    """
+    # Garantizar el fallback estático del YAML.
+    fallback_name = fallback_cfg.name
+    fallback_slug = cast(str, fallback_cfg.slug)
+    fallback = ensure_cluster_type(endpoints, fallback_name, fallback_slug, dry_run)
+    cache[fallback_name] = fallback
+
+    # Crear ClusterTypes dinámicos (uno por cada SO único).
+    unique_os_names: set[str] = set(cluster_type_map.values())
+    for os_name in sorted(unique_os_names):
+        if os_name in cache:
+            continue
+        os_slug = slugify(os_name)
+        ct = ensure_cluster_type(endpoints, os_name, os_slug, dry_run)
+        cache[os_name] = ct
+
+    return fallback
 
 
 def ensure_manufacturer(
@@ -1878,16 +1958,28 @@ def _resolve_platform(
 def _resolve_cluster(
     cluster_endpoint: Endpoint,
     row: CsvRow,
-    cluster_type: NetBoxObject,
+    cluster_type_map: dict[str, str],
+    cluster_type_cache: dict[str, NetBoxObject],
+    fallback_cluster_type: NetBoxObject,
     site: NetBoxObject,
     cluster_cache: dict[tuple[int, str], NetBoxObject],
     dry_run: bool,
     config: NetBoxMappingConfig,
 ) -> int | None:
-    """Resuelve el Cluster desde la columna correspondiente y retorna su ID (si existe)."""
+    """
+    Resuelve el Cluster desde la columna correspondiente y retorna su ID.
+
+    Determina el ClusterType correcto usando el mapa pre-computado
+    (cluster_name → hypervisor_os → ClusterType). Si el clúster no
+    tiene una tecnología asociada, usa el fallback genérico del YAML.
+    """
     cluster_name = extract_csv_value(row, "cluster_name", config)
     if not cluster_name:
         return None
+
+    # Resolver el ClusterType correcto para este clúster.
+    os_name = cluster_type_map.get(cluster_name)
+    cluster_type = cluster_type_cache[os_name] if os_name else fallback_cluster_type
 
     cluster = ensure_cluster(
         cluster_endpoint,
@@ -2266,7 +2358,8 @@ def sync_device(
     row: CsvRow,
     config: NetBoxMappingConfig,
     site: NetBoxObject,
-    cluster_type: NetBoxObject,
+    cluster_type_map: dict[str, str],
+    fallback_cluster_type: NetBoxObject,
     caches: CacheStore,
     csv_name_counts: Counter[str],
     dry_run: bool,
@@ -2304,7 +2397,9 @@ def sync_device(
         cluster_id = _resolve_cluster(
             endpoints.clusters,
             row,
-            cluster_type,
+            cluster_type_map,
+            caches.cluster_types,
+            fallback_cluster_type,
             site,
             caches.clusters,
             dry_run,
@@ -2353,7 +2448,8 @@ def sync_vm(
     row: CsvRow,
     config: NetBoxMappingConfig,
     site: NetBoxObject,
-    cluster_type: NetBoxObject,
+    cluster_type_map: dict[str, str],
+    fallback_cluster_type: NetBoxObject,
     caches: CacheStore,
     csv_name_counts: Counter[str],
     dry_run: bool,
@@ -2384,7 +2480,9 @@ def sync_vm(
     cluster_id = _resolve_cluster(
         endpoints.clusters,
         row,
-        cluster_type,
+        cluster_type_map,
+        caches.cluster_types,
+        fallback_cluster_type,
         site,
         caches.clusters,
         dry_run,
@@ -2713,6 +2811,114 @@ def sync_interfaces_for_object(
 # ============================================================
 
 
+def _sync_row(
+    row_num: int,
+    row: CsvRow,
+    node_type: NodeType,
+    endpoints: NetBoxEndpoints,
+    config: NetBoxMappingConfig,
+    site: NetBoxObject,
+    cluster_type_map: dict[str, str],
+    fallback_cluster_type: NetBoxObject,
+    caches: CacheStore,
+    csv_name_counts: Counter[str],
+    counts: SyncCounts,
+    dry_run: bool,
+) -> None:
+    """
+    Sincroniza una fila individual del CSV con NetBox, incluyendo
+    la creación/actualización del objeto principal y sus interfaces de red.
+
+    Gestiona internamente todas las excepciones esperadas y actualiza
+    los contadores de resultado en el diccionario mutable `counts`.
+    """
+    machine_name = extract_csv_value(row, "machine_name", config) or f"fila {row_num}"
+
+    try:
+        if node_type == "device":
+            result, obj_id = sync_device(
+                endpoints,
+                row,
+                config,
+                site,
+                cluster_type_map,
+                fallback_cluster_type,
+                caches,
+                csv_name_counts,
+                dry_run,
+            )
+        else:
+            result, obj_id = sync_vm(
+                endpoints,
+                row,
+                config,
+                site,
+                cluster_type_map,
+                fallback_cluster_type,
+                caches,
+                csv_name_counts,
+                dry_run,
+            )
+    except ConfigValidationError as e:
+        raise ConfigValidationError(f"Error de configuración en fila {row_num}: {e}")
+    except RowSkipCondition as e:
+        log.warning("SKIP fila %d: %s", row_num, e)
+        counts["SKIPPED"] += 1
+        return
+    except (NetBoxApiError, RowValidationError):
+        log.exception("ERROR en fila %d", row_num)
+        counts["ERROR"] += 1
+        return
+    except Exception:
+        log.exception(
+            "ERROR inesperado al procesar fila %d ('%s')",
+            row_num,
+            machine_name,
+        )
+        counts["ERROR"] += 1
+        return
+
+    counts[result] += 1
+
+    # ── Validar ID para interfaces (Fail-Fast) ────────────
+    if not obj_id:
+        if not dry_run:
+            log.warning(
+                "SKIP interfaces de '%s': el objeto no tiene ID.",
+                machine_name,
+            )
+        return
+
+    # ── Parsear interfaces ────────────────────────────────
+    try:
+        interfaces = parse_network_interfaces(row, config)
+    except RowValidationError:
+        log.exception("Error al parsear interfaces de '%s'", machine_name)
+        counts["ERROR"] += 1
+        return
+    except Exception:
+        log.exception("ERROR inesperado al parsear interfaces de '%s'", machine_name)
+        counts["ERROR"] += 1
+        return
+
+    # ── Sincronizar interfaces del objeto ─────────────────
+    try:
+        iface_errors = sync_interfaces_for_object(
+            endpoints,
+            obj_id,
+            node_type,
+            interfaces,
+            dry_run,
+        )
+        if iface_errors > 0:
+            counts["ERROR"] += iface_errors
+    except Exception:
+        log.exception(
+            "ERROR inesperado al sincronizar interfaces de '%s'", machine_name
+        )
+        counts["ERROR"] += 1
+
+
 def _print_summary_and_exit(
     total_rows: int,
     counts: SyncCounts,
@@ -2802,12 +3008,19 @@ def main() -> None:
 
     # ── Garantizar taxonomía global ──────────────────────────
     site: NetBoxObject = ensure_site(endpoints, config.site, args.dry_run)
-    cluster_type: NetBoxObject = ensure_cluster_type(
-        endpoints, config.cluster_type, args.dry_run
-    )
 
     # ── Inicializar caches ───────────────────────────────────
     caches: CacheStore = CacheStore()
+
+    # ── Pre-escaneo: asociar clústeres con su tecnología ─────
+    cluster_type_map = _precompute_cluster_type_map(rows, config)
+    fallback_cluster_type = _ensure_dynamic_cluster_types(
+        endpoints,
+        cluster_type_map,
+        config.cluster_type,
+        caches.cluster_types,
+        args.dry_run,
+    )
 
     # ── Garantizar taxonomía local ──────────────────────────
     ensure_all_device_roles(
@@ -2823,103 +3036,80 @@ def main() -> None:
         "ERROR": 0,
     }
 
-    # ── Procesar filas ───────────────────────────────────────
+    # ── Clasificar filas por tipo de nodo ─────────────────────
+    device_rows: list[tuple[int, CsvRow]] = []
+    vm_rows: list[tuple[int, CsvRow]] = []
+
     for row_num, row in enumerate(rows, start=2):
-        machine_name_raw = extract_csv_value(row, "machine_name", config)
-        machine_name = machine_name_raw or f"fila {row_num}"
+        machine_type = extract_csv_value(row, "machine_type", config)
+        node_type = config.machine_type_map.get(machine_type)
 
-        # ── Sincronizar Device o VM ───────────────────────────
-        try:
-            node_type: NodeType = get_node_type_from_row(row, config)
-
-            if node_type == "device":
-                result, obj_id = sync_device(
-                    endpoints,
-                    row,
-                    config,
-                    site,
-                    cluster_type,
-                    caches,
-                    csv_name_counts,
-                    args.dry_run,
-                )
-            else:
-                result, obj_id = sync_vm(
-                    endpoints,
-                    row,
-                    config,
-                    site,
-                    cluster_type,
-                    caches,
-                    csv_name_counts,
-                    args.dry_run,
-                )
-        except ConfigValidationError as e:
-            raise ConfigValidationError(
-                f"Error de configuración en fila {row_num}: {e}"
+        if node_type == "device":
+            device_rows.append((row_num, row))
+        elif node_type == "virtual_machine":
+            vm_rows.append((row_num, row))
+        else:
+            # Valor ausente o no registrado en machine_type_map.
+            machine_name = (
+                extract_csv_value(row, "machine_name", config) or f"fila {row_num}"
             )
-        except RowSkipCondition as e:
-            log.warning("SKIP fila %d: %s", row_num, e)
-            counts["SKIPPED"] += 1
-            continue
-        except NetBoxApiError:
-            log.exception("ERROR de API en fila %d", row_num)
-            counts["ERROR"] += 1
-            continue
-        except RowValidationError:
-            log.exception("ERROR fila %d", row_num)
-            counts["ERROR"] += 1
-            continue
-        except Exception:
-            log.exception(
-                "ERROR inesperado al procesar fila %d ('%s')",
-                row_num,
-                machine_name,
-            )
-            counts["ERROR"] += 1
-            continue
-
-        counts[result] += 1
-
-        # ── Validar ID para interfaces (Fail-Fast) ────────────
-        if not obj_id:
-            if not args.dry_run:
-                log.warning(
-                    "SKIP interfaces de '%s': el objeto no tiene ID.",
+            if not machine_type:
+                log.error(
+                    "ERROR fila %d ('%s'): el campo obligatorio 'machine_type' está vacío.",
+                    row_num,
                     machine_name,
                 )
-            continue
+            else:
+                log.error(
+                    "ERROR fila %d ('%s'): tipo de máquina '%s' no está en machine_type_map.",
+                    row_num,
+                    machine_name,
+                    machine_type,
+                )
+            counts["ERROR"] += 1
 
-        # ── Parsear interfaces ────────────────────────────────
-        try:
-            interfaces = parse_network_interfaces(row, config)
-        except RowValidationError:
-            log.exception("Error al parsear interfaces de '%s'", machine_name)
-            counts["ERROR"] += 1
-            continue
-        except Exception:
-            log.exception(
-                "ERROR inesperado al parsear interfaces de '%s'", machine_name
-            )
-            counts["ERROR"] += 1
-            continue
+    log.info(
+        "Clasificación: %d device(s), %d VM(s), %d error(es) de tipo.",
+        len(device_rows),
+        len(vm_rows),
+        counts["ERROR"],
+    )
 
-        # ── Sincronizar interfaces del objeto ─────────────────
-        try:
-            iface_errors = sync_interfaces_for_object(
-                endpoints,
-                obj_id,
-                node_type,
-                interfaces,
-                args.dry_run,
-            )
-            if iface_errors > 0:
-                counts["ERROR"] += iface_errors
-        except Exception:
-            log.exception(
-                "ERROR inesperado al sincronizar interfaces de '%s'", machine_name
-            )
-            counts["ERROR"] += 1
+    # ── Fase 1: Sincronizar Devices ──────────────────────────
+    log.info("── Fase 1: Sincronizando %d Device(s) ──", len(device_rows))
+    for row_num, row in device_rows:
+        _sync_row(
+            row_num,
+            row,
+            "device",
+            endpoints,
+            config,
+            site,
+            cluster_type_map,
+            fallback_cluster_type,
+            caches,
+            csv_name_counts,
+            counts,
+            args.dry_run,
+        )
+
+    # ── Fase 2: Sincronizar VMs ──────────────────────────────
+    log.info("── Fase 2: Sincronizando %d VM(s) ──", len(vm_rows))
+    for row_num, row in vm_rows:
+        _sync_row(
+            row_num,
+            row,
+            "virtual_machine",
+            endpoints,
+            config,
+            site,
+            cluster_type_map,
+            fallback_cluster_type,
+            caches,
+            csv_name_counts,
+            counts,
+            args.dry_run,
+        )
 
     # ── Resumen ──────────────────────────────────────────────
     _print_summary_and_exit(len(rows), counts, args.dry_run)
