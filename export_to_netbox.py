@@ -1190,13 +1190,16 @@ def _sync_device_type_u_height(
     model: str,
     target_height: int,
     dry_run: bool,
-) -> None:
-    """Sincroniza la altura en U del modelo de servidor."""
+) -> Record:
+    """
+    Sincroniza la altura en U del modelo de servidor.
+    Retorna el objeto DeviceType modificado (o intacto).
+    """
     target_height_val = target_height or 1
     current_height = float(getattr(existing_dt, "u_height", 1) or 1)
 
     if current_height == float(target_height_val):
-        return
+        return existing_dt
 
     if dry_run:
         log.info(
@@ -1205,7 +1208,7 @@ def _sync_device_type_u_height(
             current_height,
             target_height_val,
         )
-        return
+        return existing_dt
 
     try:
         existing_dt.update({"u_height": target_height_val})
@@ -1214,6 +1217,7 @@ def _sync_device_type_u_height(
             model,
             target_height_val,
         )
+        return existing_dt
     except Exception as e:
         raise NetBoxApiError(
             f"Error actualizando u_height de DeviceType '{model}': {e}"
@@ -1262,8 +1266,7 @@ def ensure_device_type(
         device_types_endpoint.filter(model=model, manufacturer_id=manufacturer_id)
     )
     if results:
-        existing_dt = results[0]
-        _sync_device_type_u_height(existing_dt, model, u_height, dry_run)
+        existing_dt = _sync_device_type_u_height(results[0], model, u_height, dry_run)
         cache[key] = existing_dt
         return existing_dt
 
@@ -1427,13 +1430,16 @@ def _sync_single_device_role(
     role_def: DeviceRoleConfig,
     device_roles_cache: dict[str, NetBoxObject],
     dry_run: bool,
-) -> None:
-    """Sincroniza un único DeviceRole y asegura que permita VMs."""
+) -> NetBoxObject:
+    """
+    Sincroniza un único DeviceRole y asegura que permita VMs.
+    Retorna el objeto DeviceRole.
+    """
     name = role_def.name
     key = name.lower()
 
     if key in device_roles_cache:
-        return
+        return device_roles_cache[key]
 
     results: list[Record] = list(endpoints.device_roles.filter(name=name))
     if results:
@@ -1451,12 +1457,13 @@ def _sync_single_device_role(
                     ) from e
 
         device_roles_cache[key] = role_obj
-        return
+        return role_obj
 
     if dry_run:
         log.info("[DRY-RUN] Crearía DeviceRole: %s", name)
-        device_roles_cache[key] = MockNetBoxRecord(id=0, name=name, vm_role=True)
-        return
+        obj_mock = MockNetBoxRecord(id=0, name=name, vm_role=True)
+        device_roles_cache[key] = obj_mock
+        return obj_mock
 
     try:
         slug = cast(str, role_def.slug)
@@ -1471,6 +1478,7 @@ def _sync_single_device_role(
         )
         log.info("DeviceRole creado: %s", name)
         device_roles_cache[key] = obj
+        return obj
     except Exception as e:
         raise ConfigValidationError(f"Error creando DeviceRole '{name}': {e}") from e
 
@@ -1480,15 +1488,21 @@ def ensure_all_device_roles(
     device_roles: list[DeviceRoleConfig],
     device_roles_cache: dict[str, NetBoxObject],
     dry_run: bool,
-) -> None:
+) -> dict[str, NetBoxObject]:
     """
     Garantiza que todos los device roles definidos en el YAML
     existen en NetBox (/api/dcim/device-roles/).
     Todos los roles se habilitan para su uso en Virtual Machines.
     Puebla caches.device_roles con {nombre_lower: objeto}.
+    Retorna un diccionario con los DeviceRoles sincronizados.
     """
+    ensured_roles: dict[str, NetBoxObject] = {}
     for role_def in device_roles:
-        _sync_single_device_role(endpoints, role_def, device_roles_cache, dry_run)
+        key = role_def.name.lower()
+        ensured_roles[key] = _sync_single_device_role(
+            endpoints, role_def, device_roles_cache, dry_run
+        )
+    return ensured_roles
 
 
 # ============================================================
