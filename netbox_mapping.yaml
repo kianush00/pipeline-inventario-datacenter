@@ -97,8 +97,9 @@ site:
 # valor del campo 'Cluster' en el CSV.
 # El cluster_type se crea automáticamente si no existe.
 cluster_type:
-  name: "Hipervisor"
-  slug: "hipervisor"
+  default:
+    name: "Hipervisor"
+    slug: "hipervisor"
 
 # ── Roles de dispositivo ─────────────────────────────────────
 # Lista canónica de Device Roles utilizados por Devices y VMs.
@@ -402,7 +403,8 @@ custom_field_definitions:
 
 node_types:
   device:
-    status_default: "inventory"
+    status:
+      default: "inventory"
     native_mappings:
       - source: *col_nombre_maquina
         target: "name"
@@ -498,7 +500,8 @@ node_types:
         is_optional: true
 
   virtual_machine:
-    status_default: "staged"
+    status:
+      default: "staged"
     native_mappings:
       - source: *col_nombre_maquina
         target: "name"

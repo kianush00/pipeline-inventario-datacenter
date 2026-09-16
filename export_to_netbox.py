@@ -53,7 +53,7 @@ import sys
 from collections import Counter
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, NoReturn, TypeAlias, TypedDict, Union, cast, get_args
+from typing import Any, Literal, NoReturn, TypeAlias, TypedDict, Union, cast
 
 import requests
 import urllib3
@@ -233,11 +233,8 @@ class SiteConfig(BaseModel):
         return v
 
 
-class ClusterTypeConfig(BaseModel):
-    """Configuración del ClusterType en NetBox."""
-
+class ClusterTypeDefaultConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-
     name: str = Field(min_length=1)
     slug: str | None = None
 
@@ -249,6 +246,14 @@ class ClusterTypeConfig(BaseModel):
             if raw_slug:
                 data["slug"] = slugify(str(raw_slug))
         return data
+
+
+class ClusterTypeConfig(BaseModel):
+    """Configuración del ClusterType en NetBox."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    default: ClusterTypeDefaultConfig
 
 
 class DeviceRoleConfig(BaseModel):
@@ -403,12 +408,17 @@ class NetworkConfig(BaseModel):
     mac: NetworkFieldConfig
 
 
+class StatusDefaultConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    default: str = Field(min_length=1)
+
+
 class NodeMappingConfig(BaseModel):
     """Configuración de mapeo y fallback para un tipo de nodo específico."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    status_default: str = Field(min_length=1)
+    status: StatusDefaultConfig
     native_mappings: list[FieldMappingConfig] = Field(default_factory=list)
     custom_mappings: list[FieldMappingConfig] = Field(default_factory=list)
 
@@ -1154,8 +1164,8 @@ def ensure_dynamic_cluster_types(
     Retorna el ClusterType fallback.
     """
     # Garantizar el fallback estático del YAML.
-    fallback_name = fallback_cfg.name
-    fallback_slug = cast(str, fallback_cfg.slug)
+    fallback_name = fallback_cfg.default.name
+    fallback_slug = cast(str, fallback_cfg.default.slug)
     fallback = ensure_cluster_type(endpoints, fallback_name, fallback_slug, dry_run)
     cache[fallback_name] = fallback
 
@@ -1994,7 +2004,7 @@ def _resolve_netbox_status(row: CsvRow, config: NetBoxMappingConfig) -> str:
         return status_mapped
 
     node_cfg = config.node_types.get_config(node_type)
-    return node_cfg.status_default
+    return node_cfg.status.default
 
 
 def _resolve_platform(
