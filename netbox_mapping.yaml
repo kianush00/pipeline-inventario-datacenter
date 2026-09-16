@@ -39,10 +39,10 @@
 
 csv_columns:
   machine_name:
-    source: &col_nombre_maquina "Nombre maquina"
+    source: &col_machine_name "Nombre maquina"
     required: true
   machine_type:
-    source: &col_tipo_maquina "Tipo de maquina"
+    source: &col_machine_type "Tipo de maquina"
     required: true
     map:
       "Dedicada": "device"
@@ -76,16 +76,16 @@ csv_columns:
     source: "Cluster"
     required: true
   cores:
-    source: &col_cores "Cores"
+    source: &col_cpu_cores "Cores"
   inventory_uuid:
-    source: &col_uuid "UUID"
+    source: &col_inventory_uuid "UUID"
     required: true
   os_ver:
-    source: &col_so_ver "Version SO Host"
+    source: &col_os_version "Version SO Host"
   hypervisor_os:
-    source: &col_hip_os "SO Hipervisor"
+    source: &col_hypervisor_os "SO Hipervisor"
   hypervisor_ver:
-    source: &col_hip_ver "Version SO Hipervisor"
+    source: &col_hypervisor_version "Version SO Hipervisor"
   serial:
     source: &col_serial "Serial Number"
   asset_tag:
@@ -97,9 +97,9 @@ csv_columns:
   desc:
     source: &col_desc "Descripcion"
   notes:
-    source: &col_notas "Notas"
+    source: &col_notes "Notas"
   environment:
-    source: &col_entorno "Entorno"
+    source: &col_environment "Entorno"
     map:
       "Producción": "production"
       "Certificación": "certification"
@@ -107,21 +107,21 @@ csv_columns:
   service_tag:
     source: &col_service_tag "Service Tag"
   cpu_model:
-    source: &col_cpu_modelo "CPU Modelo"
+    source: &col_cpu_model "CPU Modelo"
   threads:
-    source: &col_threads "Threads"
+    source: &col_cpu_threads "Threads"
   sockets:
-    source: &col_sockets "Sockets"
+    source: &col_cpu_sockets "Sockets"
   disks:
-    source: &col_discos "Discos"
+    source: &col_disks "Discos"
   raid:
     source: &col_raid "RAID"
   bios_ver:
-    source: &col_bios_ver "Version BIOS"
+    source: &col_bios_version "Version BIOS"
   bios_date:
     source: &col_bios_date "Fecha BIOS"
   rundeck_node:
-    source: &col_nodo_rundeck "Nodo Rundeck"
+    source: &col_rundeck_node "Nodo Rundeck"
   ram_gb:
     source: &col_ram_gb "RAM (GB)"
   disk_cap:
@@ -424,7 +424,7 @@ node_types:
     status:
       default: "inventory"
     native_mappings:
-      - source: *col_nombre_maquina
+      - source: *col_machine_name
         target: "name"
         is_optional: false
 
@@ -443,21 +443,21 @@ node_types:
         is_optional: true
         cast: "int"
 
-      - source: [*col_desc, *col_notas]
+      - source: [*col_desc, *col_notes]
         target: "description"
         transform: "concat_dot"
         is_optional: true
 
     custom_mappings:
-      - source: *col_uuid
+      - source: *col_inventory_uuid
         target: *cf_inventory_uuid
         is_optional: true
 
-      - source: *col_tipo_maquina
+      - source: *col_machine_type
         target: *cf_machine_type
         is_optional: false
 
-      - source: *col_entorno
+      - source: *col_environment
         target: *cf_environment
         is_optional: true
 
@@ -465,26 +465,26 @@ node_types:
         target: *cf_service_tag
         is_optional: true
 
-      - source: *col_cpu_modelo
+      - source: *col_cpu_model
         target: *cf_cpu_model
         is_optional: true
 
-      - source: *col_cores
+      - source: *col_cpu_cores
         target: *cf_cpu_cores
         is_optional: true
         cast: "int"
 
-      - source: *col_threads
+      - source: *col_cpu_threads
         target: *cf_cpu_threads
         is_optional: true
         cast: "int"
 
-      - source: *col_sockets
+      - source: *col_cpu_sockets
         target: *cf_cpu_sockets
         is_optional: true
         cast: "int"
 
-      - source: *col_discos
+      - source: *col_disks
         target: *cf_disks
         is_optional: true
 
@@ -492,7 +492,7 @@ node_types:
         target: *cf_raid
         is_optional: true
 
-      - source: *col_bios_ver
+      - source: *col_bios_version
         target: *cf_bios_version
         is_optional: true
 
@@ -500,20 +500,20 @@ node_types:
         target: *cf_bios_date
         is_optional: true
 
-      - source: *col_nodo_rundeck
+      - source: *col_rundeck_node
         target: *cf_rundeck_node
         is_optional: true
         cast: "bool_si_no"
 
-      - source: *col_so_ver
+      - source: *col_os_version
         target: *cf_os_version
         is_optional: true
 
-      - source: *col_hip_os
+      - source: *col_hypervisor_os
         target: *cf_hypervisor_os
         is_optional: true
 
-      - source: *col_hip_ver
+      - source: *col_hypervisor_version
         target: *cf_hypervisor_version
         is_optional: true
 
@@ -521,7 +521,7 @@ node_types:
     status:
       default: "staged"
     native_mappings:
-      - source: *col_nombre_maquina
+      - source: *col_machine_name
         target: "name"
         is_optional: false
 
@@ -535,43 +535,43 @@ node_types:
         is_optional: true
         cast: "int"
 
-      - source: [*col_desc, *col_notas]
+      - source: [*col_desc, *col_notes]
         target: "description"
         transform: "concat_dot"
         is_optional: true
 
     custom_mappings:
-      - source: *col_uuid
+      - source: *col_inventory_uuid
         target: *cf_inventory_uuid
         is_optional: true
 
-      - source: *col_tipo_maquina
+      - source: *col_machine_type
         target: *cf_machine_type
         is_optional: false
 
-      - source: *col_entorno
+      - source: *col_environment
         target: *cf_environment
         is_optional: true
 
-      - source: *col_cpu_modelo
+      - source: *col_cpu_model
         target: *cf_cpu_model
         is_optional: true
 
-      - source: *col_cores
+      - source: *col_cpu_cores
         target: *cf_cpu_cores
         is_optional: true
         cast: "int"
 
-      - source: *col_discos
+      - source: *col_disks
         target: *cf_disks
         is_optional: true
 
-      - source: *col_nodo_rundeck
+      - source: *col_rundeck_node
         target: *cf_rundeck_node
         is_optional: true
         cast: "bool_si_no"
 
-      - source: *col_so_ver
+      - source: *col_os_version
         target: *cf_os_version
         is_optional: true
 
