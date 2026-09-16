@@ -377,26 +377,6 @@ class FieldMappingConfig(BaseModel):
         return self
 
 
-class NetworkFieldConfig(BaseModel):
-    """Configuración de campo individual para interfaces de red."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    source: str = Field(min_length=1)
-
-
-class NetworkConfig(BaseModel):
-    """Configuración de red y mapeo de estado de interfaces."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    names: NetworkFieldConfig
-    status: NetworkFieldConfig
-    ip: NetworkFieldConfig
-    prefix: NetworkFieldConfig
-    mac: NetworkFieldConfig
-
-
 class StatusDefaultConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     default: str = Field(min_length=1)
@@ -453,7 +433,6 @@ class NetBoxMappingConfig(BaseModel):
     device_roles: list[DeviceRoleConfig]
     custom_field_definitions: list[CustomFieldConfig] = Field(default_factory=list)
     node_types: NodeTypesConfig
-    network: NetworkConfig
     empty_values: list[str] = Field(
         default_factory=lambda: ["N/A", "", "None", "n/a", "none"]
     )
@@ -2672,21 +2651,43 @@ def parse_network_interfaces(
     """
     Parsea las columnas de red del CSV y devuelve una lista de interfaces.
     Lanza RowValidationError si los arrays tienen longitudes distintas.
+
+    Reglas de validación:
+      - La columna "Interfaces" (names) define la cantidad de interfaces.
+      - Las demás columnas deben tener exactamente la misma cantidad de
+        elementos separados por comas, o estar completamente vacías.
+      - Una columna completamente vacía indica que ninguna interfaz
+        tiene ese dato (ej. todas las IPs son N/A o están en blanco).
+      - Si una columna tiene datos pero su cantidad de elementos difiere
+        de la cantidad de interfaces, la fila se descarta para interfaces
+        (el Device/VM se sincroniza de todas formas).
+
+    Columna "Red IP" (prefix):
+      Contiene la red o máscara asociada a cada IP. Se combina con la
+      columna "IP" para construir el CIDR que NetBox requiere en su API.
+
+      Formatos soportados:
+        - Red/Prefijo:  "136.12.34.128/26"          → se extrae "26"
+        - Red/Máscara:  "192.168.1.0/255.255.255.0" → se extrae "255.255.255.0"
+        - Prefijo solo: "26"                        → se usa directamente
+        - Máscara sola: "255.255.255.0"             → se usa directamente
+
+      En todos los casos, el script normaliza al formato CIDR canónico
+      antes de enviarlo a NetBox.
     """
-    net_cfg = config.network
 
     def split_col(col_name: str) -> list[str]:
         raw = row.get(col_name, "")
         return [v.strip() for v in raw.split(",")] if not config.is_empty(raw) else []
 
-    names = split_col(net_cfg.names.source)
+    names = split_col(config.csv_columns["iface_names"].source)
     if not names:
         return []
 
-    statuses = split_col(net_cfg.status.source)
-    ips = split_col(net_cfg.ip.source)
-    prefixes = split_col(net_cfg.prefix.source)
-    macs = split_col(net_cfg.mac.source)
+    statuses = split_col(config.csv_columns["iface_status"].source)
+    ips = split_col(config.csv_columns["iface_ip"].source)
+    prefixes = split_col(config.csv_columns["iface_pfx"].source)
+    macs = split_col(config.csv_columns["iface_mac"].source)
 
     max_len = len(names)
     for lst in (statuses, ips, prefixes, macs):

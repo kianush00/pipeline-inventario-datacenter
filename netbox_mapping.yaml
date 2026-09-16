@@ -127,18 +127,18 @@ csv_columns:
   disk_cap:
     source: &col_disk_cap "Capacidad visible (GB)"
   iface_names:
-    source: &col_ifaces "Interfaces"
+    source: "Interfaces"
   iface_status:
-    source: &col_ifaces_status "Interfaces estado"
+    source: "Interfaces estado"
     map:
       "up": true
       "down": false
   iface_ip:
-    source: &col_ip "IP"
+    source: "IP"
   iface_pfx:
-    source: &col_pfx "Red IP"
+    source: "Red IP"
   iface_mac:
-    source: &col_mac "MAC"
+    source: "MAC"
 
 # ── Site único ───────────────────────────────────────────────
 # Si no existe en NetBox, el script lo crea automáticamente.
@@ -574,59 +574,6 @@ node_types:
       - source: *col_os_version
         target: *cf_os_version
         is_optional: true
-
-# ── Interfaces de red ─────────────────────────────────────────
-# Las cinco columnas de red se parsean en paralelo por posición,
-# separando cada celda por comas.
-#
-# Ejemplo de una fila del CSV:
-#   Interfaces:         "eth0, eth1, eth2"
-#   Interfaces estado:  "up, down, down"
-#   IP:                 "136.12.34.147, N/A, N/A"
-#   Red IP:             "136.12.34.128/26, N/A, N/A"
-#   MAC:                "ab:cd:ef:01:23:45, de:ad:be:ef:12:34, 12:ab:cd:ef:56:78"
-#
-# Reglas de validación:
-#   - La columna "Interfaces" (names) define la cantidad de interfaces.
-#   - Las demás columnas deben tener exactamente la misma cantidad de
-#     elementos separados por comas, o estar completamente vacías.
-#   - Una columna completamente vacía indica que ninguna interfaz
-#     tiene ese dato (ej. todas las IPs son N/A o están en blanco).
-#   - Si una columna tiene datos pero su cantidad de elementos difiere
-#     de la cantidad de interfaces, la fila se descarta para interfaces
-#     (el Device/VM se sincroniza de todas formas).
-#
-# Columna "Red IP" (prefix):
-#   Contiene la red o máscara asociada a cada IP. Se combina con la
-#   columna "IP" para construir el CIDR que NetBox requiere en su API
-#   (campo `address` de IP Address: POST /api/ipam/ip-addresses/).
-#
-#   Formatos soportados:
-#     - Red/Prefijo:  "136.12.34.128/26"          → se extrae "26"
-#     - Red/Máscara:  "192.168.1.0/255.255.255.0" → se extrae "255.255.255.0"
-#     - Prefijo solo: "26"                        → se usa directamente
-#     - Máscara sola: "255.255.255.0"             → se usa directamente
-#
-#   En todos los casos, el script normaliza al formato CIDR canónico
-#   (ej. "136.12.34.147/26") antes de enviarlo a NetBox.
-#
-# Columna "IP":
-#   Dirección IPv4 sin máscara.
-#
-# Columna "MAC":
-#   Dirección MAC en formato estándar (ej. "ab:cd:ef:01:23:45").
-
-network:
-  names:
-    source: *col_ifaces
-  status:
-    source: *col_ifaces_status
-  ip:
-    source: *col_ip
-  prefix:
-    source: *col_pfx
-  mac:
-    source: *col_mac
 
 # ── Valores vacíos ─────────────────────────────────────────
 # Valores vacíos que se consideran equivalentes a None/N/A y
