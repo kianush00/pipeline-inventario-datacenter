@@ -160,7 +160,7 @@ class BaseNodeData(TypedDict):
     """Representa la estructura base resuelta de un nodo antes de sincronizar."""
 
     machine_name: str
-    uuid: str
+    inventory_uuid: str
     machine_type: str
     payload: NetBoxPayload
 
@@ -476,11 +476,6 @@ class NetBoxMappingConfig(BaseModel):
             cf_map[cf.name] = cf
         object.__setattr__(self, "_custom_field_defs_map", cf_map)
 
-    @property
-    def columns(self) -> dict[str, str]:
-        """Alias ergonómico de acceso al glosario de columnas del CSV."""
-        return {k: v.source for k, v in self.csv_columns.items()}
-
     def get_required_columns(self) -> set[str]:
         """
         Retorna el conjunto de columnas obligatorias configuradas en el YAML.
@@ -764,13 +759,13 @@ def extract_csv_value(
     valor resultante está vacío, levanta RowValidationError.
     Si el alias ni siquiera existe en la configuración, levanta ConfigValidationError.
     """
-    if col_alias not in config.columns:
+    if col_alias not in config.csv_columns:
         raise ConfigValidationError(
             f"Error crítico de configuración: El alias '{col_alias}' solicitado "
             "por el script no existe en `csv_columns` del archivo YAML."
         )
 
-    col_name = config.columns[col_alias]
+    col_name = config.csv_columns[col_alias].source
     if not col_name:
         if required:
             raise RowValidationError(
@@ -2399,7 +2394,7 @@ def _resolve_base_node(
     Resuelve los campos comunes entre device y virtual_machine.
     """
     machine_name = extract_csv_value(row, "machine_name", config, required=True)
-    uuid = extract_csv_value(row, "uuid", config)
+    uuid = extract_csv_value(row, "inventory_uuid", config)
     machine_type = extract_csv_value(row, "machine_type", config, required=True)
 
     payload = build_payload(row, native_maps, custom_maps, config)
@@ -2416,7 +2411,7 @@ def _resolve_base_node(
 
     return {
         "machine_name": machine_name,
-        "uuid": uuid,
+        "inventory_uuid": uuid,
         "machine_type": machine_type,
         "payload": payload,
     }
@@ -2456,7 +2451,7 @@ def sync_device(
     )
 
     machine_name = base["machine_name"]
-    uuid = base["uuid"]
+    uuid = base["inventory_uuid"]
     machine_type = base["machine_type"]
     payload = base["payload"]
 
@@ -2548,7 +2543,7 @@ def sync_vm(
     )
 
     machine_name = base["machine_name"]
-    uuid = base["uuid"]
+    uuid = base["inventory_uuid"]
     payload = base["payload"]
 
     # Cluster.

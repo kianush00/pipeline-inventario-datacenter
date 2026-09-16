@@ -77,7 +77,7 @@ csv_columns:
     required: true
   cores:
     source: &col_cores "Cores"
-  uuid:
+  inventory_uuid:
     source: &col_uuid "UUID"
     required: true
   os_ver:
@@ -98,7 +98,7 @@ csv_columns:
     source: &col_desc "Descripcion"
   notes:
     source: &col_notas "Notas"
-  env:
+  environment:
     source: &col_entorno "Entorno"
     map:
       "Producción": "production"
@@ -262,7 +262,7 @@ device_roles:
 #   multiobject    → Referencia múltiple a objetos NetBox
 
 custom_field_definitions:
-  - name: "machine_type"
+  - name: &cf_machine_type "machine_type"
     label: "Tipo de maquina"
     type: "select"
     required: true
@@ -279,7 +279,7 @@ custom_field_definitions:
         - value: "VM"
           label: "VM"
 
-  - name: "environment"
+  - name: &cf_environment "environment"
     label: "Entorno"
     type: "select"
     required: false
@@ -296,7 +296,7 @@ custom_field_definitions:
         - value: "development"
           label: "Desarrollo"
 
-  - name: "inventory_uuid"
+  - name: &cf_inventory_uuid "inventory_uuid"
     label: "UUID de inventario"
     type: "text"
     required: false
@@ -304,14 +304,14 @@ custom_field_definitions:
       - "dcim.device"
       - "virtualization.virtualmachine"
 
-  - name: "service_tag"
+  - name: &cf_service_tag "service_tag"
     label: "Service Tag"
     type: "text"
     required: false
     object_types:
       - "dcim.device"
 
-  - name: "cpu_model"
+  - name: &cf_cpu_model "cpu_model"
     label: "Modelo CPU"
     type: "text"
     required: false
@@ -319,7 +319,7 @@ custom_field_definitions:
       - "dcim.device"
       - "virtualization.virtualmachine"
 
-  - name: "cpu_cores"
+  - name: &cf_cpu_cores "cpu_cores"
     label: "Cores CPU"
     type: "integer"
     required: false
@@ -327,21 +327,21 @@ custom_field_definitions:
       - "dcim.device"
       - "virtualization.virtualmachine"
 
-  - name: "cpu_threads"
+  - name: &cf_cpu_threads "cpu_threads"
     label: "Threads CPU"
     type: "integer"
     required: false
     object_types:
       - "dcim.device"
 
-  - name: "cpu_sockets"
+  - name: &cf_cpu_sockets "cpu_sockets"
     label: "Sockets CPU"
     type: "integer"
     required: false
     object_types:
       - "dcim.device"
 
-  - name: "disks"
+  - name: &cf_disks "disks"
     label: "Discos"
     type: "text"
     required: false
@@ -349,28 +349,28 @@ custom_field_definitions:
       - "dcim.device"
       - "virtualization.virtualmachine"
 
-  - name: "raid"
+  - name: &cf_raid "raid"
     label: "RAID"
     type: "text"
     required: false
     object_types:
       - "dcim.device"
 
-  - name: "bios_version"
+  - name: &cf_bios_version "bios_version"
     label: "Versión BIOS"
     type: "text"
     required: false
     object_types:
       - "dcim.device"
 
-  - name: "bios_date"
+  - name: &cf_bios_date "bios_date"
     label: "Fecha BIOS"
     type: "text"
     required: false
     object_types:
       - "dcim.device"
 
-  - name: "rundeck_node"
+  - name: &cf_rundeck_node "rundeck_node"
     label: "Nodo Rundeck"
     type: "boolean"
     required: false
@@ -379,7 +379,7 @@ custom_field_definitions:
       - "dcim.device"
       - "virtualization.virtualmachine"
 
-  - name: "os_version"
+  - name: &cf_os_version "os_version"
     label: "Version SO Host"
     type: "text"
     required: false
@@ -387,14 +387,14 @@ custom_field_definitions:
       - "dcim.device"
       - "virtualization.virtualmachine"
 
-  - name: "hypervisor_os"
+  - name: &cf_hypervisor_os "hypervisor_os"
     label: "SO Hipervisor"
     type: "text"
     required: false
     object_types:
       - "dcim.device"
 
-  - name: "hypervisor_version"
+  - name: &cf_hypervisor_version "hypervisor_version"
     label: "Version SO Hipervisor"
     type: "text"
     required: false
@@ -450,71 +450,71 @@ node_types:
 
     custom_mappings:
       - source: *col_uuid
-        target: "inventory_uuid"
+        target: *cf_inventory_uuid
         is_optional: true
 
       - source: *col_tipo_maquina
-        target: "machine_type"
+        target: *cf_machine_type
         is_optional: false
 
       - source: *col_entorno
-        target: "environment"
+        target: *cf_environment
         is_optional: true
 
       - source: *col_service_tag
-        target: "service_tag"
+        target: *cf_service_tag
         is_optional: true
 
       - source: *col_cpu_modelo
-        target: "cpu_model"
+        target: *cf_cpu_model
         is_optional: true
 
       - source: *col_cores
-        target: "cpu_cores"
+        target: *cf_cpu_cores
         is_optional: true
         cast: "int"
 
       - source: *col_threads
-        target: "cpu_threads"
+        target: *cf_cpu_threads
         is_optional: true
         cast: "int"
 
       - source: *col_sockets
-        target: "cpu_sockets"
+        target: *cf_cpu_sockets
         is_optional: true
         cast: "int"
 
       - source: *col_discos
-        target: "disks"
+        target: *cf_disks
         is_optional: true
 
       - source: *col_raid
-        target: "raid"
+        target: *cf_raid
         is_optional: true
 
       - source: *col_bios_ver
-        target: "bios_version"
+        target: *cf_bios_version
         is_optional: true
 
       - source: *col_bios_date
-        target: "bios_date"
+        target: *cf_bios_date
         is_optional: true
 
       - source: *col_nodo_rundeck
-        target: "rundeck_node"
+        target: *cf_rundeck_node
         is_optional: true
         cast: "bool_si_no"
 
       - source: *col_so_ver
-        target: "os_version"
+        target: *cf_os_version
         is_optional: true
 
       - source: *col_hip_os
-        target: "hypervisor_os"
+        target: *cf_hypervisor_os
         is_optional: true
 
       - source: *col_hip_ver
-        target: "hypervisor_version"
+        target: *cf_hypervisor_version
         is_optional: true
 
   virtual_machine:
@@ -542,37 +542,37 @@ node_types:
 
     custom_mappings:
       - source: *col_uuid
-        target: "inventory_uuid"
+        target: *cf_inventory_uuid
         is_optional: true
 
       - source: *col_tipo_maquina
-        target: "machine_type"
+        target: *cf_machine_type
         is_optional: false
 
       - source: *col_entorno
-        target: "environment"
+        target: *cf_environment
         is_optional: true
 
       - source: *col_cpu_modelo
-        target: "cpu_model"
+        target: *cf_cpu_model
         is_optional: true
 
       - source: *col_cores
-        target: "cpu_cores"
+        target: *cf_cpu_cores
         is_optional: true
         cast: "int"
 
       - source: *col_discos
-        target: "disks"
+        target: *cf_disks
         is_optional: true
 
       - source: *col_nodo_rundeck
-        target: "rundeck_node"
+        target: *cf_rundeck_node
         is_optional: true
         cast: "bool_si_no"
 
       - source: *col_so_ver
-        target: "os_version"
+        target: *cf_os_version
         is_optional: true
 
 # ── Interfaces de red ─────────────────────────────────────────
