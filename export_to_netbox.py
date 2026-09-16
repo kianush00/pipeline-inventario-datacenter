@@ -321,7 +321,6 @@ class CustomFieldConfig(BaseModel):
     object_types: list[str] = Field(default_factory=list)
     choice_set: ChoiceSetConfig | None = None
     default: FieldValue = None
-    map: dict[str, str] | None = None
 
     @field_validator("object_types")
     @classmethod
@@ -378,21 +377,12 @@ class FieldMappingConfig(BaseModel):
         return self
 
 
-class StatusConfig(BaseModel):
-    """Configuración de estado (status) de NetBox."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    map: dict[str, str]
-
-
 class NetworkFieldConfig(BaseModel):
     """Configuración de campo individual para interfaces de red."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     source: str = Field(min_length=1)
-    map: dict[str, Any] | None = None
 
 
 class NetworkConfig(BaseModel):
@@ -441,6 +431,7 @@ class CsvColumnDef(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     source: str = Field(min_length=1)
     required: bool = False
+    map: dict[str, Any] | None = None
 
 
 class NetBoxMappingConfig(BaseModel):
@@ -460,7 +451,6 @@ class NetBoxMappingConfig(BaseModel):
     site: SiteConfig
     cluster_type: ClusterTypeConfig
     device_roles: list[DeviceRoleConfig]
-    status: StatusConfig
     custom_field_definitions: list[CustomFieldConfig] = Field(default_factory=list)
     node_types: NodeTypesConfig
     network: NetworkConfig
@@ -507,6 +497,13 @@ class NetBoxMappingConfig(BaseModel):
         """
         return {v.source for v in self.csv_columns.values()}
 
+    def get_column_def_by_source(self, source_name: str) -> CsvColumnDef | None:
+        """Busca y retorna la definición de la columna a partir de su nombre exacto (source) en el CSV."""
+        for col_def in self.csv_columns.values():
+            if col_def.source == source_name:
+                return col_def
+        return None
+
     def get_custom_field_def(self, target: str) -> CustomFieldConfig | None:
         """Retorna la definición de un Custom Field en O(1) por nombre de target."""
         return self._custom_field_defs_map.get(target)
@@ -538,10 +535,10 @@ class NetBoxMappingConfig(BaseModel):
                 "El Custom Field 'machine_type' es obligatorio dentro de custom_field_definitions."
             )
 
-        machine_type_def = self.get_custom_field_def("machine_type")
-        if not machine_type_def or not machine_type_def.map:
+        col_def = self.csv_columns.get("machine_type")
+        if not col_def or not col_def.map:
             raise ValueError(
-                "El Custom Field 'machine_type' debe tener un 'map' configurado."
+                "La columna 'machine_type' debe tener un 'map' configurado en csv_columns."
             )
         return self
 
@@ -553,13 +550,13 @@ class NetBoxMappingConfig(BaseModel):
         if not machine_type:
             raise RowValidationError("El campo 'machine_type' está vacío.")
 
-        machine_type_def = self.get_custom_field_def("machine_type")
-        if not machine_type_def or not machine_type_def.map:
+        col_def = self.csv_columns.get("machine_type")
+        if not col_def or not col_def.map:
             raise RowValidationError(
-                "El Custom Field 'machine_type' carece de un mapa de valores válido."
+                "La columna 'machine_type' carece de un mapa de valores válido."
             )
 
-        node_type = machine_type_def.map.get(machine_type)
+        node_type = col_def.map.get(machine_type)
         if node_type is None:
             raise RowValidationError(
                 f"El tipo de máquina '{machine_type}' no está registrado en el mapa de 'machine_type'."
@@ -1924,8 +1921,10 @@ def _resolve_field_value(
 
     value: FieldValue = raw_value
 
-    if custom_field_def and custom_field_def.map:
-        value = _apply_value_map(raw_value, custom_field_def.map, source, target)
+    if isinstance(source, str):
+        col_def = config.get_column_def_by_source(source)
+        if col_def and col_def.map:
+            value = _apply_value_map(raw_value, col_def.map, source, target)
 
     value = _validate_select_choice(value, custom_field_def, target, is_optional)
 
@@ -1993,10 +1992,12 @@ def _resolve_netbox_status(row: CsvRow, config: NetBoxMappingConfig) -> str:
     """
     node_type: NodeType = get_node_type_from_row(row, config)
     status_csv = extract_csv_value(row, "status", config)
-    status_mapped = config.status.map.get(status_csv)
 
-    if status_mapped:
-        return status_mapped
+    status_col = config.csv_columns.get("status")
+    if status_col and status_col.map:
+        status_mapped = status_col.map.get(status_csv)
+        if status_mapped:
+            return status_mapped
 
     node_cfg = config.node_types.get_config(node_type)
     return node_cfg.status.default
@@ -2715,7 +2716,7 @@ def parse_network_interfaces(
             ip_raw=ips[i],
             pfx_raw=prefixes[i],
             mac_raw=macs[i],
-            status_map=net_cfg.status.map or {},
+            status_map=config.csv_columns["iface_status"].map or {},
             config=config,
         )
         interfaces.append(parsed)

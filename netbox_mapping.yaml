@@ -44,10 +44,22 @@ csv_columns:
   machine_type:
     source: &col_tipo_maquina "Tipo de maquina"
     required: true
+    map:
+      "Dedicada": "device"
+      "Hipervisor": "device"
+      "VM": "virtual_machine"
   os:
     source: "SO Host"
   status:
     source: "Estado"
+    map:
+      "Activo": "active"
+      "Planificado": "planned"
+      "En preparación": "staged"
+      "Fallido": "failed"
+      "En inventario": "inventory"
+      "En baja": "decommissioning"
+      "Fuera de línea": "offline"
   role:
     source: "Rol"
   manufacturer:
@@ -88,6 +100,10 @@ csv_columns:
     source: &col_notas "Notas"
   env:
     source: &col_entorno "Entorno"
+    map:
+      "Producción": "production"
+      "Certificación": "certification"
+      "Desarrollo": "development"
   service_tag:
     source: &col_service_tag "Service Tag"
   cpu_model:
@@ -114,6 +130,9 @@ csv_columns:
     source: &col_ifaces "Interfaces"
   iface_status:
     source: &col_ifaces_status "Interfaces estado"
+    map:
+      "up": true
+      "down": false
   iface_ip:
     source: &col_ip "IP"
   iface_pfx:
@@ -211,36 +230,6 @@ device_roles:
     slug: "others"
     color: "9e9e9e"
 
-# ── Estado → NetBox status ───────────────────────────────────
-# 'Estado' del inventario maestro utiliza directamente la
-# semántica del campo status de NetBox.
-#
-# Valores admitidos por NetBox:
-#   active          → Operativo y en producción
-#   planned         → Proyectado o pendiente de instalación
-#   staged          → En preparación o preconfiguración
-#   failed          → Con fallas o fuera de servicio por fallos
-#   inventory       → Almacenado como repuesto o stock disponible
-#   decommissioning → En proceso de desmantelamiento o retiro
-#   offline         → Apagado o temporalmente inaccesible
-#
-# El valor almacenado en el CSV está en español y se transforma
-# al valor interno utilizado por NetBox.
-#
-# Si el valor recibido no está definido en este mapa, el script
-# deberá aplicar el fallback correspondiente al tipo de objeto:
-#   Device           → inventory
-#   VirtualMachine   → staged
-status:
-  map:
-    "Activo": "active"
-    "Planificado": "planned"
-    "En preparación": "staged"
-    "Fallido": "failed"
-    "En inventario": "inventory"
-    "En baja": "decommissioning"
-    "Fuera de línea": "offline"
-
 # ── Definiciones de Custom Fields (Esquema DDL) ──────────────
 # El script garantiza que estos custom fields existen en NetBox.
 # Esta sección DEFINE la estructura de los campos en la base de datos
@@ -289,10 +278,6 @@ custom_field_definitions:
           label: "Hipervisor"
         - value: "VM"
           label: "VM"
-    map:
-      "Dedicada": "device"
-      "Hipervisor": "device"
-      "VM": "virtual_machine"
 
   - name: "environment"
     label: "Entorno"
@@ -310,10 +295,6 @@ custom_field_definitions:
           label: "Certificación"
         - value: "development"
           label: "Desarrollo"
-    map:
-      "Producción": "production"
-      "Certificación": "certification"
-      "Desarrollo": "development"
 
   - name: "inventory_uuid"
     label: "UUID de inventario"
@@ -640,9 +621,6 @@ network:
     source: *col_ifaces
   status:
     source: *col_ifaces_status
-    map:
-      "up": true
-      "down": false
   ip:
     source: *col_ip
   prefix:
