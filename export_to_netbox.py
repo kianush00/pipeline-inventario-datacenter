@@ -504,6 +504,39 @@ class NetBoxMappingConfig(BaseModel):
                 return col_def
         return None
 
+    def map_value(self, alias: str, value: str, strict: bool = True) -> Any:
+        """
+        Aplica el mapa de transformación de la columna identificada por su `alias`.
+        Si la columna no tiene mapa, devuelve el `value` original.
+        Si la columna tiene mapa y el valor no existe en él:
+            - Si strict=True, levanta RowValidationError.
+            - Si strict=False, devuelve None.
+        """
+        col_def = self.csv_columns.get(alias)
+        return self._apply_map(col_def, value, f"columna '{alias}'", strict)
+
+    def map_value_by_source(self, source: str, value: str, strict: bool = True) -> Any:
+        """Igual que map_value, pero busca la columna por su nombre exacto (source) en el CSV."""
+        col_def = self.get_column_def_by_source(source)
+        return self._apply_map(col_def, value, f"columna de origen '{source}'", strict)
+
+    def _apply_map(
+        self, col_def: CsvColumnDef | None, value: str, identifier: str, strict: bool
+    ) -> Any:
+        if not col_def or not col_def.map:
+            return value
+
+        mapped = col_def.map.get(value.strip())
+        if mapped is not None:
+            return mapped
+
+        if not strict:
+            return None
+
+        raise RowValidationError(
+            f"El valor '{value}' de la {identifier} no está definido en el mapa configurado."
+        )
+
     def get_custom_field_def(self, target: str) -> CustomFieldConfig | None:
         """Retorna la definición de un Custom Field en O(1) por nombre de target."""
         return self._custom_field_defs_map.get(target)
@@ -550,17 +583,7 @@ class NetBoxMappingConfig(BaseModel):
         if not machine_type:
             raise RowValidationError("El campo 'machine_type' está vacío.")
 
-        col_def = self.csv_columns.get("machine_type")
-        if not col_def or not col_def.map:
-            raise RowValidationError(
-                "La columna 'machine_type' carece de un mapa de valores válido."
-            )
-
-        node_type = col_def.map.get(machine_type)
-        if node_type is None:
-            raise RowValidationError(
-                f"El tipo de máquina '{machine_type}' no está registrado en el mapa de 'machine_type'."
-            )
+        node_type = self.map_value("machine_type", machine_type, strict=True)
 
         try:
             return NodeType(node_type)
@@ -1837,25 +1860,6 @@ def _extract_raw_source_value(row: CsvRow, source: str | list[str]) -> str:
     return row.get(source[0], "") if source else ""
 
 
-def _apply_value_map(
-    value: str,
-    map_dict: dict[str, str],
-    source: str | list[str],
-    target: str,
-) -> FieldValue:
-    """
-    Aplica el mapeo declarativo sobre un valor crudo.
-    Lanza RowValidationError si el valor no está definido en el mapa.
-    """
-    mapped = map_dict.get(value.strip())
-    if mapped is None:
-        raise RowValidationError(
-            f"El valor '{value}' de la columna '{source}' no está definido en el mapa "
-            f"para el campo '{target}'."
-        )
-    return mapped
-
-
 def _validate_select_choice(
     value: FieldValue,
     custom_field_def: CustomFieldConfig | None,
@@ -1922,9 +1926,7 @@ def _resolve_field_value(
     value: FieldValue = raw_value
 
     if isinstance(source, str):
-        col_def = config.get_column_def_by_source(source)
-        if col_def and col_def.map:
-            value = _apply_value_map(raw_value, col_def.map, source, target)
+        value = config.map_value_by_source(source, raw_value, strict=True)
 
     value = _validate_select_choice(value, custom_field_def, target, is_optional)
 
@@ -1993,11 +1995,9 @@ def _resolve_netbox_status(row: CsvRow, config: NetBoxMappingConfig) -> str:
     node_type: NodeType = get_node_type_from_row(row, config)
     status_csv = extract_csv_value(row, "status", config)
 
-    status_col = config.csv_columns.get("status")
-    if status_col and status_col.map:
-        status_mapped = status_col.map.get(status_csv)
-        if status_mapped:
-            return status_mapped
+    status_mapped = config.map_value("status", status_csv, strict=False)
+    if status_mapped is not None:
+        return status_mapped
 
     node_cfg = config.node_types.get_config(node_type)
     return node_cfg.status.default
