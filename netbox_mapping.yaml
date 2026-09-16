@@ -12,15 +12,15 @@
 #   NETBOX_VERIFY_SSL     → "true" / "false" (por defecto: true)
 #   NETBOX_SITE_NAME      → nombre del Site de NetBox
 
-# ── Alias de columnas del CSV ────────────────────────────────
-# Glosario centralizado de todos los nombres de columnas del
+# ── Definición de columnas del CSV ─────────────────────────────
+# Glosario centralizado de todos los campos del
 # archivo merged_inventory.csv que utiliza el exportador.
 #
 # Cada entrada define:
 #   - Una clave semántica (ej. machine_name) usada en el script Python.
-#   - Un ancla YAML (&col_id) para reutilizar como alias (*col_id)
-#     en las secciones de mapeo más abajo.
-#   - El nombre textual exacto de la columna en el CSV.
+#   - Un subcampo `source` con el nombre textual exacto de la columna en el CSV.
+#     Puede incluir un ancla YAML (&col_id) para reutilizarlo en el mapeo inferior.
+#   - Un subcampo opcional `required: true` si la columna es obligatoria.
 #
 # Formato de celdas esperado (Input Format):
 # - Campos simples (Strings, Números): El valor directo. Se le aplicará .strip()
@@ -29,62 +29,99 @@
 # - Valores nulos/vacíos: Si el valor de la celda coincide con algún elemento de
 #   la lista `empty_values` (al final de este archivo), se tratará como "vacío" (N/A)
 #   y no se enviará a NetBox, salvo que sea obligatorio.
-
-csv_column_aliases:
-  machine_name: &col_nombre_maquina "Nombre maquina"
-  machine_type: &col_tipo_maquina "Tipo de maquina"
-  os: "SO Host"
-  status: "Estado"
-  role: "Rol"
-  manufacturer: &col_marca "Marca"
-  model: &col_modelo "Modelo"
-  rack: "Rack"
-  host_device: "Dispositivo Host"
-  cluster_name: &col_cluster_name "Cluster"
-  cores: &col_cores "Cores"
-  uuid: &col_uuid "UUID"
-  os_ver: &col_so_ver "Version SO Host"
-  hypervisor_os: &col_hip_os "SO Hipervisor"
-  hypervisor_ver: &col_hip_ver "Version SO Hipervisor"
-  serial: &col_serial "Serial Number"
-  asset_tag: &col_asset_tag "Nro Inventario"
-  pos_u: &col_pos_u "Posicion (U)"
-  alt_u: "Altura (U)"
-  desc: &col_desc "Descripcion"
-  notes: &col_notas "Notas"
-  env: &col_entorno "Entorno"
-  service_tag: &col_service_tag "Service Tag"
-  cpu_model: &col_cpu_modelo "CPU Modelo"
-  threads: &col_threads "Threads"
-  sockets: &col_sockets "Sockets"
-  disks: &col_discos "Discos"
-  raid: &col_raid "RAID"
-  bios_ver: &col_bios_ver "Version BIOS"
-  bios_date: &col_bios_date "Fecha BIOS"
-  rundeck_node: &col_nodo_rundeck "Nodo Rundeck"
-  ram_gb: &col_ram_gb "RAM (GB)"
-  disk_cap: &col_disk_cap "Capacidad visible (GB)"
-  iface_names: &col_ifaces "Interfaces"
-  iface_status: &col_ifaces_status "Interfaces estado"
-  iface_ip: &col_ip "IP"
-  iface_pfx: &col_pfx "Red IP"
-  iface_mac: &col_mac "MAC"
-
+#
 # ── Columnas obligatorias del CSV (Presencia en cabecera) ────
-# Columnas cuya presencia en el encabezado del CSV es indispensable (bloqueante).
+# Las columnas con el subcampo `required: true` son aquellas cuya presencia
+# en el encabezado del CSV es indispensable (bloqueante).
 # Esto valida la *existencia del encabezado* en el CSV, no que el *valor de la celda*
 # deba estar obligatoriamente lleno en todas las filas.
 # Si alguna falta en el encabezado, el script aborta inmediatamente.
-required_columns:
-  - *col_nombre_maquina
-  - *col_tipo_maquina
-  - *col_uuid
-  - *col_marca
-  - *col_modelo
-  - *col_cluster_name
+
+csv_columns:
+  machine_name:
+    source: &col_nombre_maquina "Nombre maquina"
+    required: true
+  machine_type:
+    source: &col_tipo_maquina "Tipo de maquina"
+    required: true
+  os:
+    source: "SO Host"
+  status:
+    source: "Estado"
+  role:
+    source: "Rol"
+  manufacturer:
+    source: "Marca"
+    required: true
+  model:
+    source: "Modelo"
+    required: true
+  rack:
+    source: "Rack"
+  host_device:
+    source: "Dispositivo Host"
+  cluster_name:
+    source: "Cluster"
+    required: true
+  cores:
+    source: &col_cores "Cores"
+  uuid:
+    source: &col_uuid "UUID"
+    required: true
+  os_ver:
+    source: &col_so_ver "Version SO Host"
+  hypervisor_os:
+    source: &col_hip_os "SO Hipervisor"
+  hypervisor_ver:
+    source: &col_hip_ver "Version SO Hipervisor"
+  serial:
+    source: &col_serial "Serial Number"
+  asset_tag:
+    source: &col_asset_tag "Nro Inventario"
+  pos_u:
+    source: &col_pos_u "Posicion (U)"
+  alt_u:
+    source: "Altura (U)"
+  desc:
+    source: &col_desc "Descripcion"
+  notes:
+    source: &col_notas "Notas"
+  env:
+    source: &col_entorno "Entorno"
+  service_tag:
+    source: &col_service_tag "Service Tag"
+  cpu_model:
+    source: &col_cpu_modelo "CPU Modelo"
+  threads:
+    source: &col_threads "Threads"
+  sockets:
+    source: &col_sockets "Sockets"
+  disks:
+    source: &col_discos "Discos"
+  raid:
+    source: &col_raid "RAID"
+  bios_ver:
+    source: &col_bios_ver "Version BIOS"
+  bios_date:
+    source: &col_bios_date "Fecha BIOS"
+  rundeck_node:
+    source: &col_nodo_rundeck "Nodo Rundeck"
+  ram_gb:
+    source: &col_ram_gb "RAM (GB)"
+  disk_cap:
+    source: &col_disk_cap "Capacidad visible (GB)"
+  iface_names:
+    source: &col_ifaces "Interfaces"
+  iface_status:
+    source: &col_ifaces_status "Interfaces estado"
+  iface_ip:
+    source: &col_ip "IP"
+  iface_pfx:
+    source: &col_pfx "Red IP"
+  iface_mac:
+    source: &col_mac "MAC"
 
 # ── Site único ───────────────────────────────────────────────
-# Todos los objetos se asignan a este site.
 # Si no existe en NetBox, el script lo crea automáticamente.
 # Para evitar errores con espacios y caracteres especiales, el slug
 # se procesa a partir del nombre.

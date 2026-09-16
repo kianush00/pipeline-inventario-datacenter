@@ -141,7 +141,6 @@ CsvRow: TypeAlias = dict[str, str]
 FieldValue: TypeAlias = str | int | float | bool | None
 CustomFieldsPayload: TypeAlias = dict[str, FieldValue]
 NetBoxPayload: TypeAlias = dict[str, Any]
-CsvColumnAliases: TypeAlias = dict[str, str]
 NetBoxObject: TypeAlias = Union[Record, "MockNetBoxRecord"]
 SyncCounts: TypeAlias = dict[SyncStatus, int]
 
@@ -438,6 +437,12 @@ class NodeTypesConfig(BaseModel):
         return self.virtual_machine
 
 
+class CsvColumnDef(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    source: str = Field(min_length=1)
+    required: bool = False
+
+
 class NetBoxMappingConfig(BaseModel):
     """
     Contrato completo de configuración y mapeo cargado desde netbox_mapping.yaml.
@@ -451,8 +456,7 @@ class NetBoxMappingConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    csv_column_aliases: CsvColumnAliases
-    required_columns: list[str] = Field(min_length=1)
+    csv_columns: dict[str, CsvColumnDef]
     site: SiteConfig
     cluster_type: ClusterTypeConfig
     device_roles: list[DeviceRoleConfig]
@@ -483,9 +487,9 @@ class NetBoxMappingConfig(BaseModel):
         object.__setattr__(self, "_custom_field_defs_map", cf_map)
 
     @property
-    def columns(self) -> CsvColumnAliases:
+    def columns(self) -> dict[str, str]:
         """Alias ergonómico de acceso al glosario de columnas del CSV."""
-        return self.csv_column_aliases
+        return {k: v.source for k, v in self.csv_columns.items()}
 
     def get_required_columns(self) -> set[str]:
         """
@@ -494,14 +498,14 @@ class NetBoxMappingConfig(BaseModel):
         del CSV (fila 1). No implica que cada fila deba tener obligatoriamente un
         *valor no vacío* en dicha columna.
         """
-        return set(self.required_columns)
+        return {v.source for v in self.csv_columns.values() if v.required}
 
     def get_all_expected_columns(self) -> set[str]:
         """
         Retorna el catálogo completo de nombres de columnas esperadas
-        en el CSV, combinando los alias de columnas y las requeridas.
+        en el CSV.
         """
-        return set(self.csv_column_aliases.values()) | set(self.required_columns)
+        return {v.source for v in self.csv_columns.values()}
 
     def get_custom_field_def(self, target: str) -> CustomFieldConfig | None:
         """Retorna la definición de un Custom Field en O(1) por nombre de target."""
@@ -527,16 +531,7 @@ class NetBoxMappingConfig(BaseModel):
                 "para fallback de roles no reconocidos."
             )
 
-        # 2. Validar que las columnas requeridas existan en el catálogo conocido
-        known_columns = set(self.csv_column_aliases.values())
-        unknown_required = set(self.required_columns) - known_columns
-        if unknown_required:
-            raise ValueError(
-                f"Las siguientes columnas en 'required_columns' no están declaradas "
-                f"en 'csv_column_aliases': {unknown_required}"
-            )
-
-        # 3. Validar que el Custom Field 'machine_type' esté definido en custom_field_definitions y tenga un mapa
+        # 2. Validar que el Custom Field 'machine_type' esté definido en custom_field_definitions y tenga un mapa
         cf_names = {cf.name for cf in self.custom_field_definitions}
         if "machine_type" not in cf_names:
             raise ValueError(
@@ -752,7 +747,7 @@ def extract_csv_value(
     if col_alias not in config.columns:
         raise ConfigValidationError(
             f"Error crítico de configuración: El alias '{col_alias}' solicitado "
-            "por el script no existe en `csv_column_aliases` del archivo YAML."
+            "por el script no existe en `csv_columns` del archivo YAML."
         )
 
     col_name = config.columns[col_alias]
@@ -998,7 +993,7 @@ def _validate_csv_headers(
 ) -> list[str]:
     """
     Valida que los encabezados del CSV incluyan todas las columnas obligatorias
-    configuradas en 'required_columns' dentro de netbox_mapping.yaml.
+    configuradas en 'csv_columns' con el flag 'required: true' dentro de netbox_mapping.yaml.
     Valida la *existencia de la columna en la cabecera*, no que cada fila
     deba tener un valor no vacío.
     Levanta ConfigValidationError si faltan columnas obligatorias.
