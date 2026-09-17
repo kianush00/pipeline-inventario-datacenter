@@ -1886,7 +1886,9 @@ def _resolve_field_value(
     row: CsvRow,
     field_def: FieldMappingConfig,
     config: NetBoxMappingConfig,
-    is_custom_mapping: bool,
+    is_optional: bool,
+    default: FieldValue = None,
+    custom_field_def: CustomFieldConfig | None = None,
 ) -> FieldValue:
     """
     Interpreta un `FieldMappingConfig` sobre una fila del CSV para devolver el valor final.
@@ -1896,17 +1898,6 @@ def _resolve_field_value(
     """
     source = field_def.source
     target = field_def.target
-
-    if is_custom_mapping:
-        custom_field_def = config.get_custom_field_def(target)
-        # Seguro que no es None gracias a validate_config_cross_references
-        assert custom_field_def is not None
-        is_optional = not custom_field_def.required
-        default = custom_field_def.default
-    else:
-        custom_field_def = None
-        is_optional = not field_def.required
-        default = None
 
     # Ruta independiente: multi-columna con concatenación no pasa por
     # map/select/cast, igual que en el comportamiento original.
@@ -1956,19 +1947,47 @@ def build_payload(
     payload: NetBoxPayload = {}
     cf_payload: CustomFieldsPayload = {}
 
-    for maps, target_dict, is_custom in [
-        (native_maps, payload, False),
-        (custom_maps, cf_payload, True),
-    ]:
-        for fd in maps:
-            value = _resolve_field_value(row, fd, config, is_custom_mapping=is_custom)
+    def _assign_if_valid(
+        target_dict: dict[str, Any], fd: FieldMappingConfig, val: FieldValue
+    ) -> None:
+        """Sanitiza y asigna el valor al payload solo si es válido."""
+        # Sanitización dinámica de constraints UNIQUE dictadas por el YAML.
+        if fd.is_unique and val == "":
+            val = None
 
-            # Sanitización dinámica de constraints UNIQUE dictadas por el YAML.
-            if fd.is_unique and value == "":
-                value = None
+        if val is not None:
+            target_dict[fd.target] = val
 
-            if value is not None:
-                target_dict[fd.target] = value
+    for fd in native_maps:
+        value = _resolve_field_value(
+            row,
+            fd,
+            config,
+            is_optional=not fd.required,
+            default=None,
+            custom_field_def=None,
+        )
+
+        _assign_if_valid(payload, fd, value)
+
+    for fd in custom_maps:
+        cf_def = config.get_custom_field_def(fd.target)
+        if cf_def is None:
+            raise ConfigValidationError(
+                f"Error crítico de configuración: El custom_mapping target "
+                f"'{fd.target}' no está definido en custom_field_definitions."
+            )
+
+        value = _resolve_field_value(
+            row,
+            fd,
+            config,
+            is_optional=not cf_def.required,
+            default=cf_def.default,
+            custom_field_def=cf_def,
+        )
+
+        _assign_if_valid(cf_payload, fd, value)
 
     # Agregar los custom fields al payload
     if cf_payload:
