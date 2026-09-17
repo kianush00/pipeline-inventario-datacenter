@@ -21,22 +21,26 @@ from export_to_netbox import (
     ConfigValidationError,
     CustomFieldConfig,
     FieldMappingConfig,
+    FieldParseError,
     MockNetBoxRecord,
     NetBoxMappingConfig,
     NetBoxObject,
     NodeType,
     RowValidationError,
     SyncStatus,
+    _build_interface_cidr,
     _execute_sync,
     _extract_raw_source_value,
     _find_existing_object,
     _generate_fallback_slug,
     _is_name_safely_unique,
+    _parse_single_network_interface,
     _resolve_default_or_empty,
     _resolve_device_role,
     _resolve_field_value,
     _resolve_netbox_status,
     _validate_csv_headers,
+    _validate_interface_ip,
     _validate_select_choice,
     apply_cast,
     build_payload,
@@ -49,6 +53,7 @@ from export_to_netbox import (
     parse_bool_si_no,
     parse_int,
     parse_int_gb_to_mb,
+    parse_network_interfaces,
     slugify,
 )
 
@@ -887,3 +892,146 @@ class TestExecuteSync:
         assert status == SyncStatus.UPDATED
         assert obj_id == 50
         mock_existing.update.assert_not_called()
+
+
+# ============================================================
+# ETAPA 5: PARSEO DE INTERFACES DE RED
+# ============================================================
+
+
+class TestValidateInterfaceIp:
+    """Verifica la validación de direcciones IP crudas."""
+
+    def test_valid_ipv4(self) -> None:
+        assert _validate_interface_ip("192.168.1.10", "eth0") == "192.168.1.10"
+
+    def test_valid_ipv6(self) -> None:
+        assert _validate_interface_ip("2001:db8::1", "eth0") == "2001:db8::1"
+
+    def test_invalid_ip_raises_error(self) -> None:
+        with pytest.raises(FieldParseError, match="no es una dirección IP válida"):
+            _validate_interface_ip("256.0.0.1", "eth0")
+
+
+class TestBuildInterfaceCidr:
+    """Verifica la combinación de IP y prefijo/máscara a CIDR canónico."""
+
+    def test_prefix_only(self) -> None:
+        assert _build_interface_cidr("192.168.1.10", "24", "eth0") == "192.168.1.10/24"
+
+    def test_network_and_prefix(self) -> None:
+        # Extrae el '26'
+        assert (
+            _build_interface_cidr("136.12.34.129", "136.12.34.128/26", "eth0")
+            == "136.12.34.129/26"
+        )
+
+    def test_network_and_mask(self) -> None:
+        # Extrae la máscara y la convierte a prefijo CIDR equivalente
+        assert (
+            _build_interface_cidr("192.168.1.5", "192.168.1.0/255.255.255.0", "eth0")
+            == "192.168.1.5/24"
+        )
+
+    def test_invalid_prefix_raises_error(self) -> None:
+        with pytest.raises(FieldParseError, match="Prefijo o CIDR inválido"):
+            _build_interface_cidr("192.168.1.5", "33", "eth0")  # /33 no existe en IPv4
+
+
+class TestParseSingleNetworkInterface:
+    """Verifica el parseo de una única interfaz."""
+
+    def test_complete_interface(self, config: NetBoxMappingConfig) -> None:
+        status_map = {"up": True, "down": False}
+        parsed = _parse_single_network_interface(
+            name="eth0",
+            status_raw="up",
+            ip_raw="10.0.0.1",
+            pfx_raw="24",
+            mac_raw="AA:BB:CC:DD:EE:FF",
+            status_map=status_map,
+            config=config,
+        )
+        assert parsed["name"] == "eth0"
+        assert parsed["enabled"] is True
+        assert parsed["ip"] == "10.0.0.1"
+        assert parsed["prefix"] == "24"
+        assert parsed["cidr"] == "10.0.0.1/24"
+        assert parsed["mac"] == "AA:BB:CC:DD:EE:FF"
+
+    def test_interface_without_ip(self, config: NetBoxMappingConfig) -> None:
+        status_map = {"up": True}
+        parsed = _parse_single_network_interface(
+            name="eth1",
+            status_raw="up",
+            ip_raw="",
+            pfx_raw="",
+            mac_raw="",
+            status_map=status_map,
+            config=config,
+        )
+        assert parsed["ip"] is None
+        assert parsed["prefix"] is None
+        assert parsed["cidr"] is None
+
+    def test_empty_name_raises_error(self, config: NetBoxMappingConfig) -> None:
+        with pytest.raises(
+            RowValidationError,
+            match="El nombre de una interfaz de red no puede estar vacío",
+        ):
+            _parse_single_network_interface("", "up", "1.1.1.1", "24", "", {}, config)
+
+
+class TestParseNetworkInterfaces:
+    """Verifica el procesamiento de columnas CSV enteras de red."""
+
+    def test_multiple_interfaces(self, config: NetBoxMappingConfig) -> None:
+        row = {
+            config.csv_columns["iface_names"].source: "eth0, eth1",
+            config.csv_columns["iface_status"].source: "up, down",
+            config.csv_columns["iface_ip"].source: "192.168.1.1, 10.0.0.1",
+            config.csv_columns["iface_pfx"].source: "24, 8",
+            config.csv_columns["iface_mac"].source: "AA:AA, BB:BB",
+        }
+        interfaces = parse_network_interfaces(row, config)
+        assert len(interfaces) == 2
+        assert interfaces[0]["name"] == "eth0"
+        assert interfaces[0]["cidr"] == "192.168.1.1/24"
+        assert interfaces[1]["name"] == "eth1"
+        assert interfaces[1]["cidr"] == "10.0.0.1/8"
+        assert interfaces[1]["enabled"] is False
+
+    def test_no_interfaces(self, config: NetBoxMappingConfig) -> None:
+        row = {config.csv_columns["iface_names"].source: ""}
+        assert parse_network_interfaces(row, config) == []
+
+    def test_inconsistent_lengths_raises_error(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        row = {
+            config.csv_columns["iface_names"].source: "eth0, eth1",
+            config.csv_columns["iface_ip"].source: "192.168.1.1",  # falta una IP
+        }
+        with pytest.raises(RowValidationError, match="longitudes inconsistentes"):
+            parse_network_interfaces(row, config)
+
+    def test_empty_columns_filled(self, config: NetBoxMappingConfig) -> None:
+        row = {
+            config.csv_columns["iface_names"].source: "eth0, eth1",
+            config.csv_columns["iface_ip"].source: "",  # Completamente vacío
+        }
+        interfaces = parse_network_interfaces(row, config)
+        assert len(interfaces) == 2
+        assert interfaces[0]["ip"] is None
+        assert interfaces[1]["ip"] is None
+
+    def test_partial_ips_with_na(self, config: NetBoxMappingConfig) -> None:
+        row = {
+            config.csv_columns["iface_names"].source: "eth0, eth1",
+            config.csv_columns["iface_ip"].source: "192.168.1.1, N/A",
+            config.csv_columns["iface_pfx"].source: "24, N/A",
+        }
+        interfaces = parse_network_interfaces(row, config)
+        assert len(interfaces) == 2
+        assert interfaces[0]["cidr"] == "192.168.1.1/24"
+        assert interfaces[1]["cidr"] is None
