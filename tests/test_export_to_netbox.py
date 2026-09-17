@@ -14,11 +14,20 @@ import pytest
 
 from export_to_netbox import (
     CastType,
+    ConfigValidationError,
     MockNetBoxRecord,
+    NetBoxMappingConfig,
+    NodeType,
     RowValidationError,
     _generate_fallback_slug,
+    _validate_csv_headers,
     apply_cast,
+    concat_dot,
+    count_machine_names,
+    extract_csv_value,
     get_netbox_object_id,
+    get_node_type_from_row,
+    load_config,
     parse_bool_si_no,
     parse_int,
     parse_int_gb_to_mb,
@@ -248,3 +257,182 @@ class TestGetNetboxObjectId:
         obj = MockNetBoxRecord(id=99, name="test")
         assert get_netbox_object_id(obj) == 99
         assert isinstance(get_netbox_object_id(obj), int)
+
+
+# ============================================================
+# ETAPA 2: EXTRACCIÓN CSV Y CONFIGURACIÓN YAML
+# ============================================================
+
+
+class TestExtractCsvValue:
+    """Verifica la extracción y sanitización de valores del CSV."""
+
+    def test_valor_normal(self, config: NetBoxMappingConfig) -> None:
+        col_name = config.csv_columns["machine_name"].source
+        row = {col_name: "SRV-01"}
+        assert extract_csv_value(row, "machine_name", config) == "SRV-01"
+
+    def test_valor_vacio(self, config: NetBoxMappingConfig) -> None:
+        col_name = config.csv_columns["machine_name"].source
+        row = {col_name: ""}
+        assert extract_csv_value(row, "machine_name", config) == ""
+
+    def test_valor_na_se_convierte_en_vacio(self, config: NetBoxMappingConfig) -> None:
+        col_name = config.csv_columns["machine_name"].source
+        row = {col_name: "N/A"}
+        assert extract_csv_value(row, "machine_name", config) == ""
+
+    def test_campo_requerido_vacio_lanza_error(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        col_name = config.csv_columns["machine_name"].source
+        row = {col_name: " "}
+        with pytest.raises(
+            RowValidationError, match="obligatorio 'machine_name' está vacío"
+        ):
+            extract_csv_value(row, "machine_name", config, required=True)
+
+    def test_alias_inexistente_lanza_error_critico(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        col_name = config.csv_columns["machine_name"].source
+        row = {col_name: "SRV-01"}
+        with pytest.raises(
+            ConfigValidationError, match="El alias 'alias_falso' solicitado"
+        ):
+            extract_csv_value(row, "alias_falso", config)
+
+    def test_columna_con_origen_nulo_retorna_vacio(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        config_copy = config.model_copy(deep=True)
+        col = config_copy.csv_columns["machine_name"].model_copy(
+            update={"source": None}
+        )
+        config_copy.csv_columns["machine_name"] = col
+        row = {"Cualquier_Columna": "SRV-01"}
+        assert extract_csv_value(row, "machine_name", config_copy) == ""
+
+    def test_origen_nulo_y_requerido_lanza_error(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        config_copy = config.model_copy(deep=True)
+        col = config_copy.csv_columns["machine_name"].model_copy(
+            update={"source": None}
+        )
+        config_copy.csv_columns["machine_name"] = col
+        row = {"Cualquier_Columna": "SRV-01"}
+        with pytest.raises(
+            RowValidationError, match="no está mapeado en la configuración"
+        ):
+            extract_csv_value(row, "machine_name", config_copy, required=True)
+
+
+class TestConcatDot:
+    """Verifica la concatenación de campos de texto."""
+
+    def test_partes_validas(self, config: NetBoxMappingConfig) -> None:
+        assert concat_dot(["A", "B", "C"], config) == "A. B. C"
+
+    def test_vacion_filtrados(self, config: NetBoxMappingConfig) -> None:
+        assert concat_dot(["A", "N/A", "", "C"], config) == "A. C"
+
+    def test_todas_vacias(self, config: NetBoxMappingConfig) -> None:
+        assert concat_dot(["", "N/A"], config) == ""
+
+
+class TestGetNodeTypeFromRow:
+    """Verifica la resolución del NodeType desde una fila CSV."""
+
+    def test_tipo_device(self, config: NetBoxMappingConfig) -> None:
+        col_name = config.csv_columns["machine_type"].source
+        row = {col_name: "Dedicada"}
+        assert get_node_type_from_row(row, config) == NodeType.DEVICE
+
+    def test_tipo_vm(self, config: NetBoxMappingConfig) -> None:
+        col_name = config.csv_columns["machine_type"].source
+        row = {col_name: "VM"}
+        assert get_node_type_from_row(row, config) == NodeType.VIRTUAL_MACHINE
+
+    def test_tipo_no_mapeado_lanza_error(self, config: NetBoxMappingConfig) -> None:
+        col_name = config.csv_columns["machine_type"].source
+        row = {col_name: "Desconocido"}
+        with pytest.raises(
+            RowValidationError, match="no está definido en el mapa configurado"
+        ):
+            get_node_type_from_row(row, config)
+
+
+class TestCountMachineNames:
+    """Verifica el contador de nombres de máquinas."""
+
+    def test_conteo_correcto(self, config: NetBoxMappingConfig) -> None:
+        col_name = config.csv_columns["machine_name"].source
+        rows = [
+            {col_name: "SRV-01"},
+            {col_name: "SRV-02"},
+            {col_name: "SRV-01"},
+            {col_name: "SRV-03"},
+        ]
+        counts = count_machine_names(rows, config)
+        assert counts["SRV-01"] == 2
+        assert counts["SRV-02"] == 1
+        assert counts["SRV-03"] == 1
+        assert counts["SRV-04"] == 0
+
+
+class TestValidateCsvHeaders:
+    """Verifica la validación de los encabezados del CSV."""
+
+    def test_headers_validos(self, config: NetBoxMappingConfig) -> None:
+        # Extraemos los requeridos de la configuración cargada
+        headers = [
+            col.source
+            for col in config.csv_columns.values()
+            if col.required and col.source
+        ]
+        # Debería pasar sin lanzar excepciones
+        _validate_csv_headers(headers, config)
+
+    def test_headers_con_extras_permitidos(self, config: NetBoxMappingConfig) -> None:
+        headers = [
+            col.source
+            for col in config.csv_columns.values()
+            if col.required and col.source
+        ]
+        headers.extend(["Columna Extra 1", "Columna Extra 2"])
+        _validate_csv_headers(headers, config)
+
+    def test_faltan_headers_requeridos_lanza_error(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        headers = ["Solo una columna irrelevante"]
+        with pytest.raises(
+            ValueError, match="El CSV no contiene las siguientes columnas obligatorias"
+        ):
+            _validate_csv_headers(headers, config)
+
+
+class TestLoadConfig:
+    """Verifica la carga y validación del archivo YAML de configuración."""
+
+    def test_carga_yaml_real_exitosa(self, yaml_path) -> None:
+        """Verifica que el archivo yaml del proyecto se carga correctamente."""
+        config = load_config(yaml_path)
+        assert isinstance(config, NetBoxMappingConfig)
+        assert len(config.csv_columns) > 0
+
+    def test_yaml_inexistente_lanza_error(self, tmp_path) -> None:
+        """Una ruta falsa lanza ConfigValidationError."""
+        with pytest.raises(
+            ConfigValidationError, match="No se encontró el archivo de mapping"
+        ):
+            load_config(tmp_path / "falso.yaml")
+
+    def test_yaml_invalido_lanza_error(self, tmp_path) -> None:
+        """Un YAML mal formado o que no cumple el esquema lanza ConfigValidationError."""
+        yaml_invalido = tmp_path / "invalido.yaml"
+        yaml_invalido.write_text("csv_columns: [lista_en_lugar_de_dict]")
+
+        with pytest.raises(ConfigValidationError, match="Error de validación"):
+            load_config(yaml_invalido)

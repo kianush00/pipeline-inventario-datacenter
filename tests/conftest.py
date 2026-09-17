@@ -31,6 +31,16 @@ def yaml_path() -> Path:
     return path
 
 
+@pytest.fixture(scope="session", autouse=True)
+def mock_env_vars():
+    """Mockea las variables de entorno requeridas por el YAML antes de cargarlo."""
+    import os
+
+    os.environ["NETBOX_SITE_NAME"] = "Test Site"
+    yield
+    os.environ.pop("NETBOX_SITE_NAME", None)
+
+
 @pytest.fixture(scope="session")
 def config(yaml_path: Path) -> NetBoxMappingConfig:
     """Instancia de configuración cargada desde el YAML real.
