@@ -14,14 +14,23 @@ import pytest
 
 from export_to_netbox import (
     CastType,
+    ChoiceItemConfig,
+    ChoiceSetConfig,
     ConfigValidationError,
+    CustomFieldConfig,
+    FieldMappingConfig,
     MockNetBoxRecord,
     NetBoxMappingConfig,
     NodeType,
     RowValidationError,
+    _extract_raw_source_value,
     _generate_fallback_slug,
+    _resolve_default_or_empty,
+    _resolve_field_value,
     _validate_csv_headers,
+    _validate_select_choice,
     apply_cast,
+    build_payload,
     concat_dot,
     count_machine_names,
     extract_csv_value,
@@ -436,3 +445,206 @@ class TestLoadConfig:
 
         with pytest.raises(ConfigValidationError, match="Error de validación"):
             load_config(yaml_invalido)
+
+
+# ============================================================
+# ETAPA 3: RESOLUCIÓN DE CAMPOS Y PAYLOAD
+# ============================================================
+
+
+class TestResolveDefaultOrEmpty:
+    """Verifica la política de fallback (default > None > error)."""
+
+    def test_with_default(self) -> None:
+        assert (
+            _resolve_default_or_empty("mi_default", is_optional=True, target="campo")
+            == "mi_default"
+        )
+        assert (
+            _resolve_default_or_empty("mi_default", is_optional=False, target="campo")
+            == "mi_default"
+        )
+
+    def test_optional_without_default_returns_none(self) -> None:
+        assert _resolve_default_or_empty(None, is_optional=True, target="campo") is None
+
+    def test_required_without_default_raises_error(self) -> None:
+        with pytest.raises(RowValidationError, match="obligatorio 'campo' está vacío"):
+            _resolve_default_or_empty(None, is_optional=False, target="campo")
+
+
+class TestExtractRawSourceValue:
+    """Verifica la extracción cruda de origen simple o multi-columna."""
+
+    def test_single_source(self) -> None:
+        row = {"ColA": "ValorA"}
+        assert _extract_raw_source_value(row, "ColA") == "ValorA"
+
+    def test_list_source(self) -> None:
+        # Extrae el primer elemento en caso de que sea lista (comportamiento fallback)
+        row = {"ColA": "ValorA", "ColB": "ValorB"}
+        assert _extract_raw_source_value(row, ["ColA", "ColB"]) == "ValorA"
+
+    def test_missing_key_returns_empty(self) -> None:
+        row = {"ColA": "ValorA"}
+        assert _extract_raw_source_value(row, "ColX") == ""
+
+
+class TestValidateSelectChoice:
+    """Verifica la validación contra choice_sets."""
+
+    @pytest.fixture
+    def cf_select(self) -> CustomFieldConfig:
+        return CustomFieldConfig(
+            name="my_cf",
+            label="My CF",
+            type="select",
+            required=False,
+            choice_set=ChoiceSetConfig(
+                name="my_choices",
+                choices=[
+                    ChoiceItemConfig(value="Opcion1", label="Op 1"),
+                    ChoiceItemConfig(value="Opcion2", label="Op 2"),
+                ],
+            ),
+        )
+
+    def test_valid_choice(self, cf_select: CustomFieldConfig) -> None:
+        assert (
+            _validate_select_choice("Opcion1", cf_select, "my_cf", is_optional=False)
+            == "Opcion1"
+        )
+
+    def test_invalid_choice_optional_returns_none(
+        self, cf_select: CustomFieldConfig
+    ) -> None:
+        assert (
+            _validate_select_choice("OpcionX", cf_select, "my_cf", is_optional=True)
+            is None
+        )
+
+    def test_invalid_choice_required_raises_error(
+        self, cf_select: CustomFieldConfig
+    ) -> None:
+        with pytest.raises(
+            RowValidationError,
+            match="Valor inválido 'OpcionX' para el campo requerido 'my_cf'",
+        ):
+            _validate_select_choice("OpcionX", cf_select, "my_cf", is_optional=False)
+
+    def test_non_select_field_is_noop(self) -> None:
+        cf_text = CustomFieldConfig(
+            name="my_cf", label="My CF", type="text", required=False
+        )
+        assert (
+            _validate_select_choice(
+                "CualquierCosa", cf_text, "my_cf", is_optional=False
+            )
+            == "CualquierCosa"
+        )
+
+
+class TestResolveFieldValue:
+    """Verifica el flujo Pipe-and-Filter de resolución de campos."""
+
+    def test_simple_field(self, config: NetBoxMappingConfig) -> None:
+        row = {"SO": "Ubuntu"}
+        field_def = FieldMappingConfig(target="os", source="SO")
+        assert (
+            _resolve_field_value(row, field_def, config, is_optional=True) == "Ubuntu"
+        )
+
+    def test_mapped_field(self, config: NetBoxMappingConfig) -> None:
+        # machine_type ya tiene mapeo en YAML: Dedicada -> device
+        col_name = config.csv_columns["machine_type"].source
+        row = {col_name: "Dedicada"}
+        field_def = FieldMappingConfig(target="tipo", source=col_name)
+        assert (
+            _resolve_field_value(row, field_def, config, is_optional=True) == "device"
+        )
+
+    def test_cast_field(self, config: NetBoxMappingConfig) -> None:
+        row = {"RAM": "8"}
+        field_def = FieldMappingConfig(
+            target="memory", source="RAM", cast=CastType.INT_GB_TO_MB
+        )
+        assert _resolve_field_value(row, field_def, config, is_optional=True) == 8192
+
+    def test_concat_dot_field(self, config: NetBoxMappingConfig) -> None:
+        row = {"Nota1": "Hola", "Nota2": "Mundo"}
+        field_def = FieldMappingConfig(
+            target="comments", source=["Nota1", "Nota2"], transform="concat_dot"
+        )
+        assert (
+            _resolve_field_value(row, field_def, config, is_optional=True)
+            == "Hola. Mundo"
+        )
+
+    def test_empty_with_default(self, config: NetBoxMappingConfig) -> None:
+        row = {"Col": ""}
+        field_def = FieldMappingConfig(target="target", source="Col")
+        assert (
+            _resolve_field_value(
+                row, field_def, config, is_optional=True, default="def_val"
+            )
+            == "def_val"
+        )
+
+    def test_empty_required_raises_error(self, config: NetBoxMappingConfig) -> None:
+        row = {"Col": ""}
+        field_def = FieldMappingConfig(target="target", source="Col")
+        with pytest.raises(RowValidationError, match="obligatorio 'target' está vacío"):
+            _resolve_field_value(row, field_def, config, is_optional=False)
+
+
+class TestBuildPayload:
+    """Verifica la construcción del payload de NetBox."""
+
+    def test_valid_payload(self, config: NetBoxMappingConfig) -> None:
+        row = {"hostname": "SRV-01", "memoria": "8", "rack_u": "10"}
+        native_maps = [
+            FieldMappingConfig(target="name", source="hostname"),
+            FieldMappingConfig(
+                target="memory", source="memoria", cast=CastType.INT_GB_TO_MB
+            ),
+        ]
+
+        # 'inventory_uuid' está definido en el YAML real
+        custom_maps = [FieldMappingConfig(target="inventory_uuid", source="rack_u")]
+
+        payload = build_payload(row, native_maps, custom_maps, config)
+
+        assert payload["name"] == "SRV-01"
+        assert payload["memory"] == 8192
+        assert "custom_fields" in payload
+        assert payload["custom_fields"]["inventory_uuid"] == "10"
+
+    def test_none_fields_are_excluded(self, config: NetBoxMappingConfig) -> None:
+        row = {"hostname": "SRV-01", "memoria": ""}
+        native_maps = [
+            FieldMappingConfig(target="name", source="hostname"),
+            # Al ser vacío y opcional, resolverá a None
+            FieldMappingConfig(target="memory", source="memoria"),
+        ]
+        payload = build_payload(row, native_maps, [], config)
+        assert "name" in payload
+        assert "memory" not in payload
+
+    def test_unique_empty_is_none(self, config: NetBoxMappingConfig) -> None:
+        row = {"serial": ""}
+        native_maps = [
+            FieldMappingConfig(target="serial", source="serial", is_unique=True)
+        ]
+        # Al ser is_unique=True y resolverse como "", el assigner lo pasa a None y lo excluye
+        payload = build_payload(row, native_maps, [], config)
+        assert "serial" not in payload
+
+    def test_custom_map_not_in_definitions_raises_error(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        row = {"hostname": "SRV-01"}
+        custom_maps = [FieldMappingConfig(target="cf_inexistente", source="hostname")]
+        with pytest.raises(
+            ConfigValidationError, match="no está definido en custom_field_definitions"
+        ):
+            build_payload(row, [], custom_maps, config)
