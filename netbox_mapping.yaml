@@ -407,7 +407,7 @@ custom_field_definitions:
 #
 # 'source'      → (Requerido) nombre exacto de la columna en merged_inventory.csv.
 # 'target'      → (Requerido) campo en el API de NetBox.
-# 'is_optional' → (Requerido) Si es true, omite el campo si el valor está vacío.
+# 'required' → (Opcional, Default: false) Si es true, el campo no puede estar vacío.
 #                  Si es false, el valor es obligatorio (Fail-Fast si falta).
 # 'is_unique'   → (Opcional) Si es true, un string vacío se sanitiza a null para
 #                  evitar violaciones de constraint UNIQUE en NetBox.
@@ -426,96 +426,80 @@ node_types:
     native_mappings:
       - source: *col_machine_name
         target: "name"
-        is_optional: false
+        required: true
 
       - source: *col_serial
         target: "serial"
-        is_optional: true
+        required: false
         is_unique: true
 
       - source: *col_asset_tag
         target: "asset_tag"
-        is_optional: true
+        required: false
         is_unique: true
 
       - source: *col_pos_u
         target: "position"
-        is_optional: true
+        required: false
         cast: "int"
 
       - source: [*col_desc, *col_notes]
         target: "description"
         transform: "concat_dot"
-        is_optional: true
+        required: false
 
     custom_mappings:
       - source: *col_inventory_uuid
         target: *cf_inventory_uuid
-        is_optional: true
 
       - source: *col_machine_type
         target: *cf_machine_type
-        is_optional: false
 
       - source: *col_environment
         target: *cf_environment
-        is_optional: true
 
       - source: *col_service_tag
         target: *cf_service_tag
-        is_optional: true
 
       - source: *col_cpu_model
         target: *cf_cpu_model
-        is_optional: true
 
       - source: *col_cpu_cores
         target: *cf_cpu_cores
-        is_optional: true
         cast: "int"
 
       - source: *col_cpu_threads
         target: *cf_cpu_threads
-        is_optional: true
         cast: "int"
 
       - source: *col_cpu_sockets
         target: *cf_cpu_sockets
-        is_optional: true
         cast: "int"
 
       - source: *col_disks
         target: *cf_disks
-        is_optional: true
 
       - source: *col_raid
         target: *cf_raid
-        is_optional: true
 
       - source: *col_bios_version
         target: *cf_bios_version
-        is_optional: true
 
       - source: *col_bios_date
         target: *cf_bios_date
-        is_optional: true
 
       - source: *col_rundeck_node
         target: *cf_rundeck_node
-        is_optional: true
         cast: "bool_si_no"
 
       - source: *col_os_version
         target: *cf_os_version
-        is_optional: true
 
       - source: *col_hypervisor_os
         target: *cf_hypervisor_os
-        is_optional: true
 
       - source: *col_hypervisor_version
         target: *cf_hypervisor_version
-        is_optional: true
 
   virtual_machine:
     status:
@@ -523,57 +507,49 @@ node_types:
     native_mappings:
       - source: *col_machine_name
         target: "name"
-        is_optional: false
+        required: true
 
       - source: *col_ram_gb
         target: "memory"
-        is_optional: true
+        required: false
         cast: "int_gb_to_mb"
 
       - source: *col_disk_cap
         target: "disk"
-        is_optional: true
+        required: false
         cast: "int"
 
       - source: [*col_desc, *col_notes]
         target: "description"
         transform: "concat_dot"
-        is_optional: true
+        required: false
 
     custom_mappings:
       - source: *col_inventory_uuid
         target: *cf_inventory_uuid
-        is_optional: true
 
       - source: *col_machine_type
         target: *cf_machine_type
-        is_optional: false
 
       - source: *col_environment
         target: *cf_environment
-        is_optional: true
 
       - source: *col_cpu_model
         target: *cf_cpu_model
-        is_optional: true
 
       - source: *col_cpu_cores
         target: *cf_cpu_cores
-        is_optional: true
         cast: "int"
 
       - source: *col_disks
         target: *cf_disks
-        is_optional: true
 
       - source: *col_rundeck_node
         target: *cf_rundeck_node
-        is_optional: true
         cast: "bool_si_no"
 
       - source: *col_os_version
         target: *cf_os_version
-        is_optional: true
 
 # ── Valores vacíos ─────────────────────────────────────────
 # Valores vacíos que se consideran equivalentes a None/N/A y

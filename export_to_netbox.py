@@ -349,7 +349,7 @@ class FieldMappingConfig(BaseModel):
 
     source: str | list[str]
     target: str = Field(min_length=1)
-    is_optional: bool = True
+    required: bool = False
     is_unique: bool = False
     cast: CastType | None = None
     transform: Literal["concat_dot"] | None = None
@@ -455,6 +455,44 @@ class NetBoxMappingConfig(BaseModel):
             cf_map[cf.name] = cf
         object.__setattr__(self, "_custom_field_defs_map", cf_map)
 
+    @model_validator(mode="after")
+    def validate_config_cross_references(self) -> "NetBoxMappingConfig":
+        # 1. Validar que exista el rol "Others" (insensible a mayúsculas) para fallback
+        role_names_lower = {r.name.strip().lower() for r in self.device_roles}
+        if "others" not in role_names_lower:
+            raise ValueError(
+                "La lista 'device_roles' debe incluir un rol 'Others' "
+                "para fallback de roles no reconocidos."
+            )
+
+        # 2. Validar que el Custom Field 'machine_type' esté definido en
+        # custom_field_definitions y tenga un mapa
+        cf_names = {cf.name for cf in self.custom_field_definitions}
+        if "machine_type" not in cf_names:
+            raise ValueError(
+                "El Custom Field 'machine_type' es obligatorio dentro de custom_field_definitions."
+            )
+
+        col_def = self.csv_columns.get("machine_type")
+        if not col_def or not col_def.map:
+            raise ValueError(
+                "La columna 'machine_type' debe tener un 'map' configurado en csv_columns."
+            )
+
+        # 3. Validar custom_mappings vs custom_field_definitions
+        for node_type, node_config in [
+            (NodeType.DEVICE, self.node_types.device),
+            (NodeType.VIRTUAL_MACHINE, self.node_types.virtual_machine),
+        ]:
+            for cmap in node_config.custom_mappings:
+                if cmap.target not in cf_names:
+                    raise ValueError(
+                        f"El custom_mapping target '{cmap.target}' en '{node_type}' "
+                        "no está definido en custom_field_definitions."
+                    )
+
+        return self
+
     def get_required_columns(self) -> set[str]:
         """
         Retorna el conjunto de columnas obligatorias configuradas en el YAML.
@@ -524,30 +562,6 @@ class NetBoxMappingConfig(BaseModel):
         if value is None:
             return True
         return str(value).strip() in self._empty_values_set
-
-    @model_validator(mode="after")
-    def validate_config_cross_references(self) -> "NetBoxMappingConfig":
-        # 1. Validar que exista el rol "Others" (insensible a mayúsculas) para fallback
-        role_names_lower = {r.name.strip().lower() for r in self.device_roles}
-        if "others" not in role_names_lower:
-            raise ValueError(
-                "La lista 'device_roles' debe incluir un rol 'Others' "
-                "para fallback de roles no reconocidos."
-            )
-
-        # 2. Validar que el Custom Field 'machine_type' esté definido en custom_field_definitions y tenga un mapa
-        cf_names = {cf.name for cf in self.custom_field_definitions}
-        if "machine_type" not in cf_names:
-            raise ValueError(
-                "El Custom Field 'machine_type' es obligatorio dentro de custom_field_definitions."
-            )
-
-        col_def = self.csv_columns.get("machine_type")
-        if not col_def or not col_def.map:
-            raise ValueError(
-                "La columna 'machine_type' debe tener un 'map' configurado en csv_columns."
-            )
-        return self
 
     def resolve_node_type(self, machine_type: str) -> NodeType:
         """
@@ -1872,18 +1886,27 @@ def _resolve_field_value(
     row: CsvRow,
     field_def: FieldMappingConfig,
     config: NetBoxMappingConfig,
+    is_custom_mapping: bool,
 ) -> FieldValue:
     """
-    Resuelve el valor de un campo según su definición tipada en el YAML.
-    Orquesta las etapas (extracción, mapeo, validación de choices, cast)
+    Interpreta un `FieldMappingConfig` sobre una fila del CSV para devolver el valor final.
+    Maneja concatenaciones y campos simples. Aplica el patrón "Pipe and Filter",
     delegando cada una a una función de responsabilidad única; corta
     temprano (fail-fast) en cuanto una etapa determina el valor final.
     """
     source = field_def.source
     target = field_def.target
-    is_optional = field_def.is_optional
-    custom_field_def = config.get_custom_field_def(target)
-    default = custom_field_def.default if custom_field_def is not None else None
+
+    if is_custom_mapping:
+        custom_field_def = config.get_custom_field_def(target)
+        # Seguro que no es None gracias a validate_config_cross_references
+        assert custom_field_def is not None
+        is_optional = not custom_field_def.required
+        default = custom_field_def.default
+    else:
+        custom_field_def = None
+        is_optional = not field_def.required
+        default = None
 
     # Ruta independiente: multi-columna con concatenación no pasa por
     # map/select/cast, igual que en el comportamiento original.
@@ -1933,12 +1956,12 @@ def build_payload(
     payload: NetBoxPayload = {}
     cf_payload: CustomFieldsPayload = {}
 
-    for maps, target_dict in [
-        (native_maps, payload),
-        (custom_maps, cf_payload),
+    for maps, target_dict, is_custom in [
+        (native_maps, payload, False),
+        (custom_maps, cf_payload, True),
     ]:
         for fd in maps:
-            value = _resolve_field_value(row, fd, config)
+            value = _resolve_field_value(row, fd, config, is_custom_mapping=is_custom)
 
             # Sanitización dinámica de constraints UNIQUE dictadas por el YAML.
             if fd.is_unique and value == "":
