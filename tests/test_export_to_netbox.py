@@ -9,6 +9,8 @@ por lo que se pueden testear directamente sin mocks.
 """
 
 import hashlib
+from collections import Counter
+from typing import Any
 
 import pytest
 
@@ -21,12 +23,19 @@ from export_to_netbox import (
     FieldMappingConfig,
     MockNetBoxRecord,
     NetBoxMappingConfig,
+    NetBoxObject,
     NodeType,
     RowValidationError,
+    SyncStatus,
+    _execute_sync,
     _extract_raw_source_value,
+    _find_existing_object,
     _generate_fallback_slug,
+    _is_name_safely_unique,
     _resolve_default_or_empty,
+    _resolve_device_role,
     _resolve_field_value,
+    _resolve_netbox_status,
     _validate_csv_headers,
     _validate_select_choice,
     apply_cast,
@@ -648,3 +657,233 @@ class TestBuildPayload:
             ConfigValidationError, match="no está definido en custom_field_definitions"
         ):
             build_payload(row, [], custom_maps, config)
+
+
+# ============================================================
+# ETAPA 4: RESOLVERS Y SINCRONIZACIÓN
+# ============================================================
+from unittest.mock import MagicMock
+
+
+class TestResolveNetboxStatus:
+    """Verifica la resolución del estado en NetBox."""
+
+    def test_mapped_status(self, config: NetBoxMappingConfig) -> None:
+        col_name = config.csv_columns["status"].source
+        row = {
+            col_name: "Activo",
+            config.csv_columns["machine_type"].source: "Dedicada",
+        }
+        assert _resolve_netbox_status(row, config) == "active"
+
+    def test_unmapped_status_fallback(self, config: NetBoxMappingConfig) -> None:
+        col_name = config.csv_columns["status"].source
+        row = {col_name: "Desconocido", config.csv_columns["machine_type"].source: "VM"}
+        assert _resolve_netbox_status(row, config) == "staged"
+
+    def test_empty_status_fallback(self, config: NetBoxMappingConfig) -> None:
+        row = {config.csv_columns["machine_type"].source: "Dedicada"}
+        assert _resolve_netbox_status(row, config) == "inventory"
+
+
+class TestResolveDeviceRole:
+    """Verifica la búsqueda y fallback de roles."""
+
+    def test_role_exists(self, config: NetBoxMappingConfig) -> None:
+        col_name = config.csv_columns["role"].source
+        row = {col_name: "DB", config.csv_columns["machine_name"].source: "SRV-01"}
+        cache: dict[str, NetBoxObject] = {"db": MockNetBoxRecord(id=10, name="DB")}
+        assert _resolve_device_role(row, cache, config) == 10
+
+    def test_role_not_exists_uses_others(self, config: NetBoxMappingConfig) -> None:
+        col_name = config.csv_columns["role"].source
+        row = {
+            col_name: "Inexistente",
+            config.csv_columns["machine_name"].source: "SRV-01",
+        }
+        cache: dict[str, NetBoxObject] = {
+            "others": MockNetBoxRecord(id=99, name="Others")
+        }
+        assert _resolve_device_role(row, cache, config) == 99
+
+    def test_others_not_exists_raises_error(self, config: NetBoxMappingConfig) -> None:
+        row = {config.csv_columns["machine_name"].source: "SRV-01"}
+        cache: dict[str, NetBoxObject] = {}
+        with pytest.raises(
+            RowValidationError, match="No existe el DeviceRole 'Others'"
+        ):
+            _resolve_device_role(row, cache, config)
+
+
+class TestFindExistingObject:
+    """Verifica la lógica de búsqueda por UUID y Nombre."""
+
+    def test_found_by_uuid(self, config: NetBoxMappingConfig) -> None:
+        endpoint = MagicMock()
+        mock_record = MockNetBoxRecord(id=5)
+        endpoint.filter.return_value = [mock_record]
+
+        existing, by_uuid, by_name = _find_existing_object(
+            "uuid-123", "SRV-01", endpoint, config
+        )
+
+        assert existing == [mock_record]
+        assert by_uuid is True
+        assert by_name is False
+        endpoint.filter.assert_called_once_with(cf_inventory_uuid="uuid-123")
+
+    def test_found_by_name_when_uuid_not_found(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        endpoint = MagicMock()
+        # Primer llamado (UUID) retorna vacío, segundo llamado (nombre) retorna registro
+        endpoint.filter.side_effect = [[], [MockNetBoxRecord(id=6)]]
+
+        existing, by_uuid, by_name = _find_existing_object(
+            "uuid-123", "SRV-01", endpoint, config
+        )
+
+        assert len(existing) == 1
+        assert existing[0].id == 6
+        assert by_uuid is False
+        assert by_name is True
+        assert endpoint.filter.call_count == 2
+
+    def test_not_found(self, config: NetBoxMappingConfig) -> None:
+        endpoint = MagicMock()
+        endpoint.filter.return_value = []
+
+        existing, by_uuid, by_name = _find_existing_object(
+            "uuid-123", "SRV-01", endpoint, config
+        )
+
+        assert existing == []
+        assert by_uuid is False
+        assert by_name is False
+
+    def test_uuid_empty_searches_by_name(self, config: NetBoxMappingConfig) -> None:
+        endpoint = MagicMock()
+        endpoint.filter.return_value = [MockNetBoxRecord(id=7)]
+
+        existing, by_uuid, by_name = _find_existing_object(
+            "", "SRV-01", endpoint, config
+        )
+
+        assert len(existing) == 1
+        assert existing[0].id == 7
+        assert by_uuid is False
+        assert by_name is True
+        endpoint.filter.assert_called_once_with(name="SRV-01")
+
+
+class TestIsNameSafelyUnique:
+    """Verifica la validación de unicidad de nombres."""
+
+    def test_unique_in_both(self) -> None:
+        endpoint = MagicMock()
+        endpoint.url = "http://test/api/dcim/devices/"
+        existing: list[Any] = [MockNetBoxRecord(id=1)]
+        counts = Counter({"SRV-01": 1})
+        assert _is_name_safely_unique(endpoint, existing, "SRV-01", counts) is True
+
+    def test_duplicate_in_netbox(self) -> None:
+        endpoint = MagicMock()
+        endpoint.url = "http://test/api/dcim/devices/"
+        existing: list[Any] = [MockNetBoxRecord(id=1), MockNetBoxRecord(id=2)]
+        counts = Counter({"SRV-01": 1})
+        assert _is_name_safely_unique(endpoint, existing, "SRV-01", counts) is False
+
+    def test_duplicate_in_csv(self) -> None:
+        endpoint = MagicMock()
+        endpoint.url = "http://test/api/dcim/devices/"
+        existing: list[Any] = [MockNetBoxRecord(id=1)]
+        counts = Counter({"SRV-01": 2})
+        assert _is_name_safely_unique(endpoint, existing, "SRV-01", counts) is False
+
+
+class TestExecuteSync:
+    """Verifica el flujo de creación, actualización y dry-run."""
+
+    def test_create(self) -> None:
+        endpoint = MagicMock()
+        endpoint.url = "http://test/api/dcim/devices/"
+        mock_created = MockNetBoxRecord(id=100)
+        endpoint.create.return_value = mock_created
+
+        status, obj_id = _execute_sync(
+            endpoint, {"name": "SRV-01"}, [], "SRV-01", "uuid-1", dry_run=False
+        )
+        assert status == SyncStatus.CREATED
+        assert obj_id == 100
+        endpoint.create.assert_called_once_with(name="SRV-01")
+
+    def test_update(self) -> None:
+        endpoint = MagicMock()
+        endpoint.url = "http://test/api/dcim/devices/"
+
+        mock_existing = MagicMock()
+        mock_existing.id = 50
+        mock_existing.update.return_value = True  # Hubo cambios
+
+        status, obj_id = _execute_sync(
+            endpoint,
+            {"name": "SRV-01-nuevo"},
+            [mock_existing],
+            "SRV-01",
+            "uuid-1",
+            dry_run=False,
+        )
+        assert status == SyncStatus.UPDATED
+        assert obj_id == 50
+        mock_existing.update.assert_called_once_with({"name": "SRV-01-nuevo"})
+
+    def test_unchanged(self) -> None:
+        endpoint = MagicMock()
+        endpoint.url = "http://test/api/dcim/devices/"
+
+        mock_existing = MagicMock()
+        mock_existing.id = 50
+        mock_existing.update.return_value = False  # Sin cambios
+
+        status, obj_id = _execute_sync(
+            endpoint,
+            {"name": "SRV-01"},
+            [mock_existing],
+            "SRV-01",
+            "uuid-1",
+            dry_run=False,
+        )
+        assert status == SyncStatus.UNCHANGED
+        assert obj_id == 50
+
+    def test_dry_run_create(self) -> None:
+        endpoint = MagicMock()
+        endpoint.url = "http://test/api/dcim/devices/"
+
+        status, obj_id = _execute_sync(
+            endpoint, {"name": "SRV-01"}, [], "SRV-01", "uuid-1", dry_run=True
+        )
+        assert status == SyncStatus.CREATED
+        assert obj_id == 0  # obj_id simulado es 0
+        endpoint.create.assert_not_called()
+
+    def test_dry_run_update(self) -> None:
+        endpoint = MagicMock()
+        endpoint.url = "http://test/api/dcim/devices/"
+
+        mock_existing = MagicMock()
+        mock_existing.id = 50
+        # Eliminar _init_cache para forzar el fallback de _check_record_changes
+        del mock_existing._init_cache
+
+        status, obj_id = _execute_sync(
+            endpoint,
+            {"name": "SRV-01-nuevo"},
+            [mock_existing],
+            "SRV-01",
+            "uuid-1",
+            dry_run=True,
+        )
+        assert status == SyncStatus.UPDATED
+        assert obj_id == 50
+        mock_existing.update.assert_not_called()
