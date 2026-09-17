@@ -27,6 +27,7 @@ from export_to_netbox import (
     NetBoxObject,
     NodeType,
     RowValidationError,
+    SiteConfig,
     SyncStatus,
     _build_interface_cidr,
     _execute_sync,
@@ -46,6 +47,8 @@ from export_to_netbox import (
     build_payload,
     concat_dot,
     count_machine_names,
+    ensure_manufacturer,
+    ensure_site,
     extract_csv_value,
     get_netbox_object_id,
     get_node_type_from_row,
@@ -1035,3 +1038,95 @@ class TestParseNetworkInterfaces:
         assert len(interfaces) == 2
         assert interfaces[0]["cidr"] == "192.168.1.1/24"
         assert interfaces[1]["cidr"] is None
+
+
+# ============================================================
+# ETAPA 6: FUNCIONES ENSURE_* (Sincronización Previa)
+# ============================================================
+from typing import cast
+
+
+class TestEnsureSite:
+    """Verifica la lógica de ensure_site (búsqueda, creación y dry-run)."""
+
+    def test_site_exists(self) -> None:
+        endpoints = MagicMock()
+        mock_site = MockNetBoxRecord(id=1, name="DC1", slug="dc1")
+        endpoints.sites.filter.return_value = [mock_site]
+
+        site_cfg = SiteConfig(name="DC1", slug="dc1")
+        result = ensure_site(cast(Any, endpoints), site_cfg, dry_run=False)
+
+        assert result.id == 1
+        endpoints.sites.filter.assert_called_once_with(name="DC1")
+        endpoints.sites.create.assert_not_called()
+
+    def test_site_created(self) -> None:
+        endpoints = MagicMock()
+        endpoints.sites.filter.return_value = []
+        mock_site = MockNetBoxRecord(id=2, name="DC2", slug="dc2")
+        endpoints.sites.create.return_value = mock_site
+
+        site_cfg = SiteConfig(name="DC2", slug="dc2")
+        result = ensure_site(cast(Any, endpoints), site_cfg, dry_run=False)
+
+        assert result.id == 2
+        endpoints.sites.create.assert_called_once_with(name="DC2", slug="dc2")
+
+    def test_dry_run_create_mock_site(self) -> None:
+        endpoints = MagicMock()
+        endpoints.sites.filter.return_value = []
+
+        site_cfg = SiteConfig(name="DC3", slug="dc3")
+        result = ensure_site(cast(Any, endpoints), site_cfg, dry_run=True)
+
+        assert result.id == 0  # Mock
+        assert result.name == "DC3"
+        endpoints.sites.create.assert_not_called()
+
+
+class TestEnsureManufacturer:
+    """Verifica la lógica de ensure_manufacturer con cache y fallback de slug."""
+
+    def test_found_in_cache(self) -> None:
+        endpoint = MagicMock()
+        cache: dict[str, NetBoxObject] = {"Dell": MockNetBoxRecord(id=5, name="Dell")}
+
+        result = ensure_manufacturer(endpoint, "Dell", cache, dry_run=False)
+        assert result.id == 5
+        endpoint.filter.assert_not_called()
+
+    def test_found_by_name(self) -> None:
+        endpoint = MagicMock()
+        mock_mfg = MockNetBoxRecord(id=6, name="HP")
+        endpoint.filter.return_value = [mock_mfg]
+        cache: dict[str, NetBoxObject] = {}
+
+        result = ensure_manufacturer(endpoint, "HP", cache, dry_run=False)
+        assert result.id == 6
+        assert cache["HP"].id == 6
+        endpoint.filter.assert_called_once_with(name="HP")
+
+    def test_found_by_slug_fallback(self) -> None:
+        endpoint = MagicMock()
+        # filter(name="H.P.") retorna vacío, pero filter(slug="hp") retorna un registro
+        mock_mfg = MockNetBoxRecord(id=7, name="HP")
+        endpoint.filter.side_effect = [[], [mock_mfg]]
+        cache: dict[str, NetBoxObject] = {}
+
+        result = ensure_manufacturer(endpoint, "H.P.", cache, dry_run=False)
+        assert result.id == 7
+        assert cache["H.P."].id == 7
+        assert endpoint.filter.call_count == 2
+
+    def test_created_when_not_found(self) -> None:
+        endpoint = MagicMock()
+        endpoint.filter.return_value = []
+        mock_created = MockNetBoxRecord(id=8, name="Lenovo")
+        endpoint.create.return_value = mock_created
+        cache: dict[str, NetBoxObject] = {}
+
+        result = ensure_manufacturer(endpoint, "Lenovo", cache, dry_run=False)
+        assert result.id == 8
+        assert cache["Lenovo"].id == 8
+        endpoint.create.assert_called_once_with(name="Lenovo", slug="lenovo")
