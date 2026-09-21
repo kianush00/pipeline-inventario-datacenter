@@ -136,13 +136,13 @@ class CastType(str, Enum):
     BOOL_SI_NO = "bool_si_no"
 
 
-SyncResult: TypeAlias = tuple[SyncStatus, int]
+NetBoxObject: TypeAlias = Union[Record, "MockNetBoxRecord"]
+SyncResult: TypeAlias = tuple[SyncStatus, int, NetBoxObject | None]
 CsvRow: TypeAlias = dict[str, str]
 FieldValue: TypeAlias = str | int | float | bool | None
 CustomFieldsPayload: TypeAlias = dict[str, FieldValue]
-NetBoxPayload: TypeAlias = dict[str, Any]
-NetBoxObject: TypeAlias = Union[Record, "MockNetBoxRecord"]
 SyncCounts: TypeAlias = dict[SyncStatus, int]
+NetBoxPayload: TypeAlias = dict[str, Any]
 
 
 class NetworkInterfaceData(TypedDict):
@@ -2330,7 +2330,7 @@ def _execute_sync(
                 machine_name,
                 uuid,
             )
-            return SyncStatus.CREATED, 0
+            return SyncStatus.CREATED, 0, None
 
         existing_id = get_netbox_object_id(existing[0])
         diff = _check_record_changes(existing[0], payload)
@@ -2342,7 +2342,7 @@ def _execute_sync(
                 uuid,
                 list(diff.keys()),
             )
-            return SyncStatus.UPDATED, existing_id
+            return SyncStatus.UPDATED, existing_id, existing[0]
 
         log.info(
             "[DRY-RUN] UNCHANGED %s: %s (UUID=%s)",
@@ -2350,22 +2350,22 @@ def _execute_sync(
             machine_name,
             uuid,
         )
-        return SyncStatus.UNCHANGED, existing_id
+        return SyncStatus.UNCHANGED, existing_id, existing[0]
 
     if not existing:
         obj = cast(Record, endpoint.create(**payload))
         obj_id = get_netbox_object_id(obj)
         log.info("CREATED %s: %s (ID=%d)", node_type, machine_name, obj_id)
-        return SyncStatus.CREATED, obj_id
+        return SyncStatus.CREATED, obj_id, obj
 
     existing_id = get_netbox_object_id(existing[0])
     updated = existing[0].update(payload)
     if updated:
         log.info("UPDATED %s: %s", node_type, machine_name)
-        return SyncStatus.UPDATED, existing_id
+        return SyncStatus.UPDATED, existing_id, existing[0]
 
     log.info("UNCHANGED %s: %s", node_type, machine_name)
-    return SyncStatus.UNCHANGED, existing_id
+    return SyncStatus.UNCHANGED, existing_id, existing[0]
 
 
 def _validate_sync(
@@ -2907,9 +2907,9 @@ def sync_interfaces_for_object(
     node_type: NodeType,
     interfaces: list[NetworkInterfaceData],
     dry_run: bool,
-) -> int:
+) -> tuple[int, list[int]]:
     """Sincroniza interfaces y sus IPs para un Device o VM.
-    Retorna la cantidad de errores encontrados (0 si todo fue exitoso)."""
+    Retorna una tupla: (cantidad de errores, lista de IDs de IPv4 asignadas)."""
     if node_type == NodeType.DEVICE:
         iface_endpoint = endpoints.device_interfaces
         iface_filter = {"device_id": obj_id}
@@ -2923,9 +2923,10 @@ def sync_interfaces_for_object(
     }
 
     errors = 0
+    ipv4_ids: list[int] = []
     for iface_data in interfaces:
         try:
-            _sync_single_interface(
+            _, ip_obj = _sync_single_interface(
                 iface_data,
                 obj_id,
                 iface_endpoint,
@@ -2933,16 +2934,61 @@ def sync_interfaces_for_object(
                 endpoints.ip_addresses,
                 dry_run,
             )
+            if ip_obj is not None:
+                address = getattr(ip_obj, "address", "")
+                if address and ":" not in str(address):
+                    ipv4_ids.append(getattr(ip_obj, "id", 0))
         except NetBoxApiError:
             log.exception("ERROR de API sincronizando interfaz")
             errors += 1
 
-    return errors
+    return errors, ipv4_ids
 
 
 # ============================================================
 # MAIN
 # ============================================================
+
+
+def _assign_primary_ipv4(
+    main_obj: NetBoxObject | None,
+    ipv4_ids: list[int],
+    machine_name: str,
+    dry_run: bool,
+) -> None:
+    """
+    Si existe exactamente 1 dirección IPv4 asignada a las interfaces,
+    la define como IP primaria (primary_ip4) del dispositivo/VM.
+    """
+    if len(ipv4_ids) != 1 or main_obj is None:
+        return
+
+    primary_id = ipv4_ids[0]
+
+    current_primary = getattr(main_obj, "primary_ip4", None)
+    current_primary_id = (
+        getattr(current_primary, "id", None) if current_primary else None
+    )
+
+    if current_primary_id == primary_id:
+        return
+
+    if dry_run:
+        log.info(
+            "[DRY-RUN] Asignaría IP primaria (ID=%s) al nodo '%s'",
+            primary_id,
+            machine_name,
+        )
+        return
+
+    try:
+        cast(Record, main_obj).update({"primary_ip4": primary_id})
+        log.debug("IP primaria actualizada en '%s' (ID=%s)", machine_name, primary_id)
+    except RequestError:
+        log.exception(
+            "Fallo al actualizar IP primaria en '%s'",
+            machine_name,
+        )
 
 
 def _sync_row(
@@ -2970,7 +3016,7 @@ def _sync_row(
 
     try:
         if node_type == NodeType.DEVICE:
-            result, obj_id = sync_device(
+            result, obj_id, main_obj = sync_device(
                 endpoints,
                 row,
                 config,
@@ -2982,7 +3028,7 @@ def _sync_row(
                 dry_run,
             )
         else:
-            result, obj_id = sync_vm(
+            result, obj_id, main_obj = sync_vm(
                 endpoints,
                 row,
                 config,
@@ -3037,7 +3083,7 @@ def _sync_row(
 
     # ── Sincronizar interfaces del objeto ─────────────────
     try:
-        iface_errors = sync_interfaces_for_object(
+        iface_errors, ipv4_ids = sync_interfaces_for_object(
             endpoints,
             obj_id,
             node_type,
@@ -3046,6 +3092,9 @@ def _sync_row(
         )
         if iface_errors > 0:
             counts[SyncStatus.ERROR] += iface_errors
+
+        _assign_primary_ipv4(main_obj, ipv4_ids, machine_name, dry_run)
+
     except Exception:
         log.exception(
             "ERROR inesperado al sincronizar interfaces de '%s'", machine_name

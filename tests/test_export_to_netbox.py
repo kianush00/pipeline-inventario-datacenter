@@ -26,6 +26,7 @@ from export_to_netbox import (
     RowValidationError,
     SiteConfig,
     SyncStatus,
+    _assign_primary_ipv4,
     _build_interface_cidr,
     _execute_sync,
     _extract_raw_source_value,
@@ -844,7 +845,7 @@ class TestExecuteSync:
         mock_created = MockNetBoxRecord(id=100)
         endpoint.create.return_value = mock_created
 
-        status, obj_id = _execute_sync(
+        status, obj_id, _ = _execute_sync(
             endpoint, {"name": "SRV-01"}, [], "SRV-01", "uuid-1", dry_run=False
         )
         assert status == SyncStatus.CREATED
@@ -859,7 +860,7 @@ class TestExecuteSync:
         mock_existing.id = 50
         mock_existing.update.return_value = True  # Hubo cambios
 
-        status, obj_id = _execute_sync(
+        status, obj_id, _ = _execute_sync(
             endpoint,
             {"name": "SRV-01-nuevo"},
             [mock_existing],
@@ -879,7 +880,7 @@ class TestExecuteSync:
         mock_existing.id = 50
         mock_existing.update.return_value = False  # Sin cambios
 
-        status, obj_id = _execute_sync(
+        status, obj_id, _ = _execute_sync(
             endpoint,
             {"name": "SRV-01"},
             [mock_existing],
@@ -894,7 +895,7 @@ class TestExecuteSync:
         endpoint = MagicMock()
         endpoint.url = "http://test/api/dcim/devices/"
 
-        status, obj_id = _execute_sync(
+        status, obj_id, _ = _execute_sync(
             endpoint, {"name": "SRV-01"}, [], "SRV-01", "uuid-1", dry_run=True
         )
         assert status == SyncStatus.CREATED
@@ -910,7 +911,7 @@ class TestExecuteSync:
         # Eliminar _init_cache para forzar el fallback de _check_record_changes
         del mock_existing._init_cache
 
-        status, obj_id = _execute_sync(
+        status, obj_id, _ = _execute_sync(
             endpoint,
             {"name": "SRV-01-nuevo"},
             [mock_existing],
@@ -1178,3 +1179,37 @@ class TestEnsureManufacturer:
         assert result.id == 8
         assert cache["Lenovo"].id == 8
         endpoint.create.assert_called_once_with(name="Lenovo", slug="lenovo")
+
+
+class TestAssignPrimaryIPv4:
+    def test_zero_ips_does_nothing(self) -> None:
+        mock_obj = MagicMock()
+        _assign_primary_ipv4(mock_obj, [], "srv", False)
+        mock_obj.update.assert_not_called()
+
+    def test_multiple_ips_does_nothing(self) -> None:
+        mock_obj = MagicMock()
+        _assign_primary_ipv4(mock_obj, [10, 20], "srv", False)
+        mock_obj.update.assert_not_called()
+
+    def test_one_ip_assigns_primary(self) -> None:
+        mock_obj = MagicMock()
+        mock_obj.primary_ip4 = None
+        _assign_primary_ipv4(mock_obj, [15], "srv", False)
+        mock_obj.update.assert_called_once_with({"primary_ip4": 15})
+
+    def test_idempotent_if_already_assigned(self) -> None:
+        mock_obj = MagicMock()
+        mock_ip = MagicMock()
+        mock_ip.id = 15
+        mock_obj.primary_ip4 = mock_ip
+        _assign_primary_ipv4(mock_obj, [15], "srv", False)
+        mock_obj.update.assert_not_called()
+
+    def test_updates_if_assigned_to_different_ip(self) -> None:
+        mock_obj = MagicMock()
+        mock_ip = MagicMock()
+        mock_ip.id = 10
+        mock_obj.primary_ip4 = mock_ip
+        _assign_primary_ipv4(mock_obj, [15], "srv", False)
+        mock_obj.update.assert_called_once_with({"primary_ip4": 15})
