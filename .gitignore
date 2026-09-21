@@ -29,6 +29,8 @@
 __pycache__/
 *.py[cod]
 *.pyo
+.pytest_cache/
+.ruff_cache/
 
 # Virtual environments
 .venv/
@@ -70,3 +72,11 @@ dist/
 # =========================
 
 .ipynb_checkpoints/
+
+
+# =========================
+# Agents
+# =========================
+.agents/
+.antigravity/
+

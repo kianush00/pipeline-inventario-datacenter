@@ -89,3 +89,8 @@ Antes de dar cualquier modificación por concluida, **como agente DEBES verifica
 - **Creación de nuevos tests:** Cuando generes una nueva implementación de código, debes evaluar crear tus propios tests unitarios para verificar que esa implementación funciona correctamente.
 - **Visión a largo plazo y No Redundancia:** Agrega las nuevas pruebas unitarias al archivo de tests correspondiente para aumentar la cobertura (test coverage) del código, pero **evita crear tests redundantes**. Antes de escribir un test, revisa los existentes para asegurar que el escenario no esté ya cubierto. Añade nuevas pruebas únicamente si aportan un valor real y son convenientes para la mantenibilidad a largo plazo del proyecto.
 - **Imports en Pruebas:** Todos los `import` necesarios para las pruebas deben declararse al inicio del archivo (ámbito global). Prohibido anidar o colocar imports dentro de las funciones de test.
+
+## 9. Metodología Multiagente Híbrida
+
+- **Flujo de Validación:** Al concluir la implementación de una funcionalidad compleja, o cuando consideres que tu tarea está "lista", DEBES asumir proactivamente (o solicitar al usuario que lo haga) el uso de las habilidades `qa-tester` y `code-reviewer`.
+- **Delegación de Responsabilidades:** No asumas que tu propio código es perfecto. Aprovecha el cambio de contexto que otorgan los skills de Antigravity (`.agents/skills/`) para autoevaluar y estresar tu propio código bajo un rol distinto antes de dar el trabajo por finalizado.
