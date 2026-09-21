@@ -134,6 +134,7 @@ class CastType(str, Enum):
     INT = "int"
     INT_GB_TO_MB = "int_gb_to_mb"
     BOOL_SI_NO = "bool_si_no"
+    LOWER = "lower"
 
 
 NetBoxObject: TypeAlias = Union[Record, "MockNetBoxRecord"]
@@ -723,6 +724,8 @@ def apply_cast(value: Any, cast_type: CastType, target: str) -> FieldValue:
             return parse_int_gb_to_mb(value)
         if cast_type == CastType.BOOL_SI_NO:
             return parse_bool_si_no(value)
+        if cast_type == CastType.LOWER:
+            return str(value).lower() if value is not None else value
     except ValueError as e:
         raise RowValidationError(
             f"Valor inválido '{value}' para el campo '{target}'. {e}"
@@ -2226,21 +2229,29 @@ def _find_existing_object(
     - UUID presente + no encontrado por UUID -> buscar por nombre.
     - UUID vacío -> buscar directamente por nombre.
     """
-    existing: list[Record] = []
-    found_by_uuid = False
-    found_by_name = False
+    has_uuid = not config.is_empty(uuid)
 
-    if not config.is_empty(uuid):
-        existing = list(endpoint.filter(cf_inventory_uuid=uuid))
-        found_by_uuid = bool(existing)
+    # 1. Búsqueda por API directa con UUID
+    if has_uuid:
+        existing_by_uuid: list[Record] = list(endpoint.filter(cf_inventory_uuid=uuid))
+        if existing_by_uuid:
+            return existing_by_uuid, True, False
 
-    if not existing:
-        existing_by_name: list[Record] = list(endpoint.filter(name=machine_name))
-        found_by_name = bool(existing_by_name)
-        if found_by_name:
-            existing = existing_by_name
+    # 2. Búsqueda por Nombre (Fallback)
+    existing_by_name: list[Record] = list(endpoint.filter(name=machine_name))
+    if not existing_by_name:
+        return [], False, False
 
-    return existing, found_by_uuid, found_by_name
+    # 3. Inspección local de UUID en los resultados por nombre
+    if has_uuid:
+        for obj in existing_by_name:
+            cf: dict[str, Any] = getattr(obj, "custom_fields", {}) or {}
+            obj_uuid = str(cf.get("inventory_uuid") or "").strip().lower()
+            if obj_uuid == uuid:
+                return [obj], True, False
+
+    # 4. Encontrado únicamente por nombre
+    return existing_by_name, False, True
 
 
 def _is_name_safely_unique(
@@ -2415,7 +2426,7 @@ def _resolve_base_node(
     Resuelve los campos comunes entre device y virtual_machine.
     """
     machine_name = extract_csv_value(row, "machine_name", config, required=True)
-    uuid = extract_csv_value(row, "inventory_uuid", config)
+    uuid = extract_csv_value(row, "inventory_uuid", config).lower()
     machine_type = extract_csv_value(row, "machine_type", config, required=True)
 
     payload = build_payload(row, native_maps, custom_maps, config)
@@ -2959,7 +2970,7 @@ def _assign_primary_ipv4(
     """
     Si existe exactamente 1 dirección IPv4 asignada a las interfaces,
     la define como IP primaria (primary_ip4) del dispositivo/VM.
-    
+
     Retorna True si se asignó exitosamente (o se simuló en dry-run), False de lo contrario.
     """
     if len(ipv4_ids) != 1:

@@ -246,6 +246,10 @@ class TestApplyCast:
     def test_cast_bool_si_no(self) -> None:
         assert apply_cast("si", CastType.BOOL_SI_NO, "is_virtual") is True
 
+    def test_cast_lower(self) -> None:
+        assert apply_cast("MAYUS", CastType.LOWER, "uuid") == "mayus"
+        assert apply_cast(None, CastType.LOWER, "uuid") is None
+
     def test_invalid_cast_raises_row_validation_error(self) -> None:
         """apply_cast envuelve ValueError en RowValidationError con contexto."""
         with pytest.raises(RowValidationError, match="Valor inválido.*cpu_cores"):
@@ -771,6 +775,29 @@ class TestFindExistingObject:
         assert existing[0].id == 6
         assert by_uuid is False
         assert by_name is True
+        assert endpoint.filter.call_count == 2
+
+    def test_found_by_name_but_uuid_matches_case_insensitive(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        endpoint = MagicMock()
+        mock_record = MockNetBoxRecord(
+            id=7, custom_fields={"inventory_uuid": "UUID-123-ABC"}
+        )
+
+        # Primer llamado (UUID en minúsculas) retorna vacío
+        # Segundo llamado (nombre) retorna el registro
+        endpoint.filter.side_effect = [[], [mock_record]]
+
+        # Buscamos con el UUID en minúsculas
+        existing, by_uuid, by_name = _find_existing_object(
+            "uuid-123-abc", "SRV-01", endpoint, config
+        )
+
+        assert len(existing) == 1
+        assert existing[0].id == 7
+        assert by_uuid is True
+        assert by_name is False
         assert endpoint.filter.call_count == 2
 
     def test_not_found(self, config: NetBoxMappingConfig) -> None:

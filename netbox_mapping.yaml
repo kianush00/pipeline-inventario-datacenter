@@ -451,6 +451,7 @@ node_types:
     custom_mappings:
       - source: *col_inventory_uuid
         target: *cf_inventory_uuid
+        cast: lower
 
       - source: *col_machine_type
         target: *cf_machine_type
@@ -527,6 +528,7 @@ node_types:
     custom_mappings:
       - source: *col_inventory_uuid
         target: *cf_inventory_uuid
+        cast: lower
 
       - source: *col_machine_type
         target: *cf_machine_type
