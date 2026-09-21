@@ -50,7 +50,7 @@ Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes prin
 
 - Toda clase, módulo o función crítica debe contar con Docstrings explicativos.
 - No documentes "qué" hace el código línea por línea si es obvio, documenta el "por qué" de las decisiones de negocio.
-- Deja los comentarios y mensajes de usuario/logs en español (tal como el resto del proyecto), pero mantén el código fuente (variables, funciones, clases) en inglés.
+- Deja los comentarios y mensajes de usuario/logs en español (tal como el resto del proyecto), pero mantén el código fuente (variables, funciones, clases) y la documentación técnica (docs/*.md) en inglés.
 
 ## 6. Comunicación y Formato de Respuestas
 

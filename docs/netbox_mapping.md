@@ -1,46 +1,46 @@
-# Contrato de Mapeo NetBox (`netbox_mapping.yaml`)
+# NetBox Mapping Contract (`netbox_mapping.yaml`)
 
-Este documento describe en profundidad el contrato declarativo que gobierna la sincronización entre `merged_inventory.csv` y NetBox. El archivo [`netbox_mapping.yaml`](../netbox_mapping.yaml) es la **fuente única de verdad** para este mapeo.
+This document describes in depth the declarative contract that governs the synchronization between `merged_inventory.csv` and NetBox. The [`netbox_mapping.yaml`](../netbox_mapping.yaml) file is the **single source of truth** for this mapping.
 
 ---
 
-## Estructura General del Archivo
+## General File Structure
 
-El YAML está organizado en las siguientes secciones:
+The YAML is organized into the following sections:
 
-| Sección | Propósito |
+| Section | Purpose |
 | --------- | ----------- |
-| `csv_columns` | Glosario de columnas del CSV consumidas por el exportador |
-| `site` | Definición del Site único de NetBox |
-| `cluster_type` | ClusterType por defecto para agrupación de VMs |
-| `device_roles` | Lista canónica de roles de dispositivo |
-| `custom_field_definitions` | Esquema DDL de los Custom Fields en NetBox |
-| `node_types` | Mapeo DML de campos nativos y custom por tipo de nodo |
-| `empty_values` | Valores que se consideran equivalentes a vacío/null |
+| `csv_columns` | Glossary of CSV columns consumed by the exporter |
+| `site` | Definition of the single NetBox Site |
+| `cluster_type` | Default ClusterType for VM grouping |
+| `device_roles` | Canonical list of device roles |
+| `custom_field_definitions` | DDL schema of the Custom Fields in NetBox |
+| `node_types` | DML mapping of native and custom fields by node type |
+| `empty_values` | Values considered equivalent to empty/null |
 
 ---
 
-## Definición de Columnas del CSV (`csv_columns`)
+## CSV Column Definition (`csv_columns`)
 
-Cada entrada define una clave semántica usada por el script Python con los siguientes subcampos:
+Each entry defines a semantic key used by the Python script with the following subfields:
 
-| Subcampo | Requerido | Descripción |
+| Subfield | Required | Description |
 | ---------- | ----------- | ------------- |
-| `source` | Sí | Nombre textual exacto de la columna en el CSV. Puede incluir un ancla YAML (`&col_id`) para reutilizarlo en secciones inferiores. |
-| `required` | No | Si es `true`, la **presencia del encabezado** en el CSV es obligatoria. El script aborta si falta. No valida que el valor de cada celda esté lleno. |
-| `map` | No | Diccionario de traducción de valores (ej. `"Dedicada" → "device"`). |
+| `source` | Yes | Exact text name of the column in the CSV. Can include a YAML anchor (`&col_id`) to reuse it in lower sections. |
+| `required` | No | If `true`, the **presence of the header** in the CSV is mandatory. The script aborts if it is missing. Does not validate that the cell value is filled. |
+| `map` | No | Value translation dictionary (e.g., `"Dedicada" → "device"`). |
 
-### Formato de Celdas Esperado
+### Expected Cell Format
 
-- **Campos simples (Strings, Números):** Valor directo. Se aplica `.strip()`.
-- **Campos múltiples (Networking):** Lista de valores separados por coma (`,`). El script hace `split(",")` y asocia elementos por índice.
-- **Valores vacíos:** Si el valor coincide con algún elemento de `empty_values`, se trata como `None` y no se envía a NetBox.
+- **Simple fields (Strings, Numbers):** Direct value. `.strip()` is applied.
+- **Multiple fields (Networking):** List of values separated by commas (`,`). The script performs a `split(",")` and associates elements by index.
+- **Empty values:** If the value matches any element in `empty_values`, it is treated as `None` and is not sent to NetBox.
 
 ---
 
 ## Site (`site`)
 
-Define el Site único contra el cual opera el exportador. Si no existe en NetBox, se crea automáticamente.
+Defines the single Site against which the exporter operates. If it does not exist in NetBox, it is created automatically.
 
 ```yaml
 site:
@@ -48,13 +48,13 @@ site:
   slug: "${NETBOX_SITE_NAME}"
 ```
 
-El slug se genera automáticamente a partir del nombre para evitar errores con espacios y caracteres especiales.
+The slug is automatically generated from the name to avoid errors with spaces and special characters.
 
 ---
 
 ## Cluster Type (`cluster_type`)
 
-Las VMs se agrupan en Clusters cuyo nombre coincide con el valor del campo `Cluster` del CSV. El `cluster_type` se crea automáticamente si no existe.
+VMs are grouped into Clusters whose name matches the value of the `Cluster` field in the CSV. The `cluster_type` is created automatically if it does not exist.
 
 ```yaml
 cluster_type:
@@ -65,88 +65,88 @@ cluster_type:
 
 ---
 
-## Roles de Dispositivo (`device_roles`)
+## Device Roles (`device_roles`)
 
-Lista canónica de Device Roles. El valor de la columna `Rol` del CSV debe coincidir con alguno de estos nombres. Se crean automáticamente si no existen. Los colores son valores hexadecimales sin `#`.
+Canonical list of Device Roles. The value of the `Rol` column in the CSV must match one of these names. They are created automatically if they do not exist. The colors are hex values without `#`.
 
-Si el rol del CSV no coincide con ninguno de la lista, se asigna el rol `Others` como fallback.
+If the CSV role does not match any in the list, the `Others` role is assigned as a fallback.
 
 ---
 
-## Custom Fields — Esquema DDL (`custom_field_definitions`)
+## Custom Fields — DDL Schema (`custom_field_definitions`)
 
-Esta sección **define la estructura** de los Custom Fields en la base de datos de NetBox (creación si no existen). **No extrae datos del CSV.**
+This section **defines the structure** of the Custom Fields in the NetBox database (creation if they do not exist). **It does not extract data from the CSV.**
 
-| Subcampo | Requerido | Descripción |
+| Subfield | Required | Description |
 | ---------- | ----------- | ------------- |
-| `name` | Sí | Nombre interno (slug) del custom field en NetBox |
-| `label` | Sí | Nombre descriptivo mostrado en la interfaz web |
-| `type` | Sí | Tipo de dato (ver tabla de tipos soportados) |
-| `required` | Sí | Si es `true`, el campo es obligatorio en el esquema DDL de NetBox |
-| `object_types` | Sí | Lista de modelos NetBox a los que aplica (ej. `dcim.device`) |
-| `default` | No | Valor por defecto a nivel de base de datos |
-| `choice_set` | No | Valores válidos. Obligatorio si `type` es `select` o `multiselect` |
+| `name` | Yes | Internal name (slug) of the custom field in NetBox |
+| `label` | Yes | Descriptive name shown in the web interface |
+| `type` | Yes | Data type (see supported types table) |
+| `required` | Yes | If `true`, the field is mandatory in the NetBox DDL schema |
+| `object_types` | Yes | List of NetBox models it applies to (e.g., `dcim.device`) |
+| `default` | No | Default value at the database level |
+| `choice_set` | No | Valid values. Mandatory if `type` is `select` or `multiselect` |
 
-### Tipos de Custom Field Soportados (NetBox 4.6+)
+### Supported Custom Field Types (NetBox 4.6+)
 
-| Tipo | Descripción |
+| Type | Description |
 | ------ | ------------- |
-| `text` | Texto libre |
-| `longtext` | Texto largo (textarea) |
-| `integer` | Número entero |
-| `decimal` | Número decimal |
-| `boolean` | Verdadero / Falso |
-| `date` | Fecha (`YYYY-MM-DD`) |
-| `datetime` | Fecha y hora |
-| `url` | URL válida |
-| `json` | JSON arbitrario |
-| `select` | Selección única (requiere `choice_set`) |
-| `multiselect` | Selección múltiple (requiere `choice_set`) |
-| `object` | Referencia a otro objeto NetBox |
-| `multiobject` | Referencia múltiple a objetos NetBox |
+| `text` | Free text |
+| `longtext` | Long text (textarea) |
+| `integer` | Integer number |
+| `decimal` | Decimal number |
+| `boolean` | True / False |
+| `date` | Date (`YYYY-MM-DD`) |
+| `datetime` | Date and time |
+| `url` | Valid URL |
+| `json` | Arbitrary JSON |
+| `select` | Single selection (requires `choice_set`) |
+| `multiselect` | Multiple selection (requires `choice_set`) |
+| `object` | Reference to another NetBox object |
+| `multiobject` | Multiple reference to NetBox objects |
 
 ---
 
-## Mapeo DML por Tipo de Nodo (`node_types`)
+## DML Mapping by Node Type (`node_types`)
 
-Define cómo **extraer** datos del CSV y **mapearlos** a campos de la API de NetBox. Se organiza por tipo de nodo (`device` y `virtual_machine`), cada uno con sus propios `native_mappings` y `custom_mappings`.
+Defines how to **extract** data from the CSV and **map** it to fields in the NetBox API. It is organized by node type (`device` and `virtual_machine`), each with its own `native_mappings` and `custom_mappings`.
 
-### Subcampos de cada Mapping
+### Subfields of each Mapping
 
-| Subcampo | Requerido | Descripción |
+| Subfield | Required | Description |
 | ---------- | ----------- | ------------- |
-| `source` | Sí | Nombre exacto de la columna en el CSV. Puede ser una lista para transformaciones. |
-| `target` | Sí | Campo de destino en la API de NetBox |
-| `required` | No | Si es `true`, el valor no puede estar vacío (fail-fast si falta) |
-| `is_unique` | No | Si es `true`, un string vacío se sanitiza a `null` para evitar violaciones UNIQUE |
-| `cast` | No | Función de conversión de tipo |
-| `transform` | No | Operación de estructura (ej. `concat_dot`) |
-| `map` | No | Diccionario de traducción declarado en el YAML |
+| `source` | Yes | Exact name of the column in the CSV. Can be a list for transformations. |
+| `target` | Yes | Target field in the NetBox API |
+| `required` | No | If `true`, the value cannot be empty (fail-fast if missing) |
+| `is_unique` | No | If `true`, an empty string is sanitized to `null` to avoid UNIQUE violations |
+| `cast` | No | Type conversion function |
+| `transform` | No | Structure operation (e.g., `concat_dot`) |
+| `map` | No | Translation dictionary declared in the YAML |
 
-### Funciones de Cast Disponibles
+### Available Cast Functions
 
-| Cast | Comportamiento |
+| Cast | Behavior |
 | ------ | --------------- |
-| `int` | Convierte a entero |
-| `int_gb_to_mb` | Convierte GB (string) a MB (entero) |
-| `bool_si_no` | Convierte "Sí"/"No" a `true`/`false` |
-| `lower` | Convierte a minúsculas (usado para normalización de UUID) |
+| `int` | Converts to integer |
+| `int_gb_to_mb` | Converts GB (string) to MB (integer) |
+| `bool_si_no` | Converts "Sí"/"No" to `true`/`false` |
+| `lower` | Converts to lowercase (used for UUID normalization) |
 
-### Transformaciones
+### Transformations
 
-| Transform | Comportamiento |
+| Transform | Behavior |
 |-----------|----------------|
-| `concat_dot` | Concatena una lista de valores con separador `. ` (punto + espacio) |
+| `concat_dot` | Concatenates a list of values with the separator `. ` (dot + space) |
 
-### Campos NO incluidos en el Mapeo DML
+### Fields NOT included in the DML Mapping
 
-Las claves foráneas como `site`, `role`, `platform`, `rack` y `device_type` son resueltas a objetos/IDs de NetBox por funciones especializadas en el script Python. No forman parte de `native_mappings`.
+Foreign keys like `site`, `role`, `platform`, `rack`, and `device_type` are resolved to NetBox objects/IDs by specialized functions in the Python script. They are not part of `native_mappings`.
 
 ---
 
-## Valores Vacíos (`empty_values`)
+## Empty Values (`empty_values`)
 
-Lista de strings que se consideran equivalentes a `None`/vacío. Si el valor de una celda del CSV coincide exactamente con alguno de estos, se omite en la exportación:
+List of strings that are considered equivalent to `None`/empty. If a CSV cell value matches exactly one of these, it is omitted in the export:
 
 ```yaml
 empty_values:
@@ -162,15 +162,15 @@ empty_values:
 
 ---
 
-## Credenciales
+## Credentials
 
-Las credenciales de NetBox se leen **exclusivamente** desde variables de entorno. **Nunca** deben almacenarse en este archivo:
+NetBox credentials are read **exclusively** from environment variables. They should **never** be stored in this file:
 
-| Variable | Descripción |
+| Variable | Description |
 | ---------- | ------------- |
-| `NETBOX_URL` | URL de la instancia de NetBox |
-| `NETBOX_TOKEN` | Token con permisos write sobre `dcim`, `virtualization`, `ipam`, `extras`, `core` |
-| `NETBOX_VERIFY_SSL` | `true` / `false` (por defecto: `true`) |
-| `NETBOX_SITE_NAME` | Nombre del Site de NetBox |
+| `NETBOX_URL` | URL of the NetBox instance |
+| `NETBOX_TOKEN` | Token with write permissions on `dcim`, `virtualization`, `ipam`, `extras`, `core` |
+| `NETBOX_VERIFY_SSL` | `true` / `false` (default: `true`) |
+| `NETBOX_SITE_NAME` | NetBox Site name |
 
-Ver [Uso y Configuración](usage_and_config.md) para instrucciones completas de configuración.
+See [Usage and Configuration](usage_and_config.md) for complete configuration instructions.

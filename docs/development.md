@@ -1,70 +1,70 @@
-# Desarrollo y Testing
+# Development and Testing
 
-Este documento describe cómo contribuir al proyecto, ejecutar pruebas, y las herramientas de calidad de código utilizadas.
+This document describes how to contribute to the project, run tests, and the code quality tools used.
 
 ---
 
-## Ejecutar Pruebas
+## Run Tests
 
-El repositorio incluye una suite de pruebas unitarias exhaustiva que valida la lógica, los edge cases y las interacciones con la API (mediante mocks). Para ejecutar las pruebas:
+The repository includes a comprehensive unit test suite that validates logic, edge cases, and API interactions (using mocks). To run the tests:
 
 ```bash
 pytest tests/ -v
 ```
 
-Antes de hacer commit de código nuevo o desplegar cambios, asegúrate de que todas las pruebas pasen exitosamente.
+Before committing new code or deploying changes, make sure all tests pass successfully.
 
 ---
 
-## Herramientas de Calidad de Código
+## Code Quality Tools
 
-### Tipado Estático (Pyright)
+### Static Typing (Pyright)
 
 ```bash
-.venv/bin/pyright <archivo>
+.venv/bin/pyright <file>
 ```
 
-Verifica anotaciones de tipo, argumentos faltantes y uso injustificado de `Any`.
+Checks type annotations, missing arguments, and unjustified use of `Any`.
 
 ### Linting (Ruff)
 
 ```bash
-# Detectar y corregir errores automáticamente
-.venv/bin/ruff check <archivo> --fix
+# Automatically detect and fix errors
+.venv/bin/ruff check <file> --fix
 
-# Formatear según PEP 8
-.venv/bin/ruff format <archivo>
+# Format according to PEP 8
+.venv/bin/ruff format <file>
 ```
 
-### Validación de Sintaxis
+### Syntax Validation
 
 ```bash
-.venv/bin/python3 -m py_compile <archivo>
+.venv/bin/python3 -m py_compile <file>
 ```
 
 ---
 
-## Convenciones del Código
+## Code Conventions
 
-- **Tipado fuerte:** Todo el código Python usa anotaciones del módulo `typing`. Se evita `Any` injustificado.
-- **Código fuente en inglés:** Variables, funciones y clases en inglés. Comentarios, logs y mensajes de usuario en español.
-- **Principio de Responsabilidad Única (SRP):** Las funciones deben hacer una sola cosa y hacerla bien.
-- **Early Returns / Fail-Fast:** Se reduce la anidación devolviendo tempranamente en los casos de error.
-- **Idempotencia:** Los scripts que modifican sistemas externos (NetBox) o archivos maestros deben ser estrictamente idempotentes.
+- **Strong typing:** All Python code uses annotations from the `typing` module. Unjustified `Any` is avoided.
+- **Source code in English:** Variables, functions, and classes in English. Comments, logs, and user messages in Spanish.
+- **Single Responsibility Principle (SRP):** Functions should do one thing and do it well.
+- **Early Returns / Fail-Fast:** Nesting is reduced by returning early in error cases.
+- **Idempotency:** Scripts that modify external systems (NetBox) or master files must be strictly idempotent.
 
-Para las directrices completas de ingeniería, consultar `GEMINI.md` y `CLAUDE.md` en la raíz del proyecto.
+For complete engineering guidelines, refer to `GEMINI.md` and `CLAUDE.md` at the root of the project.
 
 ---
 
-## Calidad y Seguridad de Datos
+## Data Quality and Security
 
-El pipeline valida encabezados requeridos, rechaza columnas duplicadas y campos malformados, detecta llaves de merge inválidas o duplicadas, y valida las columnas requeridas del mapping antes de contactar NetBox. Los archivos de salida temporales se reemplazan atómicamente donde lo soporte el script individual.
+The pipeline validates required headers, rejects duplicate columns and malformed fields, detects invalid or duplicate merge keys, and validates the required mapping columns before contacting NetBox. Temporary output files are atomically replaced where supported by the individual script.
 
-Dado que el inventario contiene información de infraestructura, red, hardware y sistemas operativos, se debe restringir el acceso a:
+Given that the inventory contains infrastructure, network, hardware, and operating system information, access must be restricted to:
 
-- Jobs de Rundeck
-- Credenciales de NetBox
-- Hojas de cálculo fuente
-- Archivos generados y logs
+- Rundeck jobs
+- NetBox credentials
+- Source spreadsheets
+- Generated files and logs
 
-Evitar hacer commit de artefactos de ejecución o datos sensibles del inventario.
+Avoid committing execution artifacts or sensitive inventory data.

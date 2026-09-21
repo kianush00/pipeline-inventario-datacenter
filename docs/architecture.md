@@ -1,68 +1,68 @@
-# Arquitectura y Flujo de Datos
+# Architecture and Data Flow
 
-Este documento describe la arquitectura general del **Datacenter Inventory Pipeline**, el modelo de datos que lo sustenta y las decisiones de diseño detrás de cada etapa.
+This document describes the general architecture of the **Datacenter Inventory Pipeline**, the data model that supports it, and the design decisions behind each stage.
 
 ---
 
-## Visión General
+## Overview
 
-El pipeline sigue una secuencia ETL (Extract, Transform, Load) lineal y determinista:
+The pipeline follows a linear and deterministic ETL (Extract, Transform, Load) sequence:
 
 ```text
-Rundeck (Nodos) → Shell Script → Log → Parser → CSV Parseado
+Rundeck (Nodes) → Shell Script → Log → Parser → Parsed CSV
                                                      ↓
-                        Hoja Maestra (ODS/XLSX) → CSV Preparado
+                         Master Sheet (ODS/XLSX) → Prepared CSV
                                                      ↓
-                                              CSV Consolidado (Merge)
+                                              Consolidated CSV (Merge)
                                                      ↓
                                                   NetBox (API)
 ```
 
 <img src="./assets/inventory_pipeline.png" alt="Datacenter inventory pipeline" width="100%">
 
-El archivo fuente del diagrama (`inventory_pipeline.drawio`) se encuentra en `docs/assets/`.
+The diagram source file (`inventory_pipeline.drawio`) is located in `docs/assets/`.
 
 ---
 
-## Modelo de Cruce por UUID
+## UUID Merge Model
 
-El **UUID de inventario** (`inventory_uuid`) es la llave maestra que conecta todas las etapas del pipeline. Se extrae directamente del hardware/BIOS del nodo mediante el script de recolección Bash y se mantiene intacto a lo largo de todo el flujo.
+The **inventory UUID** (`inventory_uuid`) is the master key that connects all stages of the pipeline. It is extracted directly from the node's hardware/BIOS using the Bash collection script and remains intact throughout the entire flow.
 
-### Reglas de Merge (Consolidación)
+### Merge Rules (Consolidation)
 
-El archivo [`rundeck_header_list.txt`](../rundeck_header_list.txt) define el contrato de columnas y las reglas de actualización mediante flags numéricos:
+The [`rundeck_header_list.txt`](../rundeck_header_list.txt) file defines the column contract and update rules using numeric flags:
 
-| Flag | Comportamiento | Ejemplo |
+| Flag | Behavior | Example |
 | ------ | --------------- | --------- |
-| `0` | **Preservar** el valor maestro. Nunca se sobrescribe. | Columnas manuales (Rack, Rol) |
-| `1` | **Actualizar** si el valor parseado no está vacío. | Datos dinámicos (SO, CPU, RAM) |
-| `2` | **Llave de merge**. Debe existir exactamente una. | `UUID` |
+| `0` | **Preserve** the master value. It is never overwritten. | Manual columns (Rack, Role) |
+| `1` | **Update** if the parsed value is not empty. | Dynamic data (OS, CPU, RAM) |
+| `2` | **Merge key**. Exactly one must exist. | `UUID` |
 
-El merge key es actualmente el UUID de máquina. Los parsers resuelven columnas por nombre, por lo que el orden de columnas no necesita coincidir.
+The merge key is currently the machine UUID. Parsers resolve columns by name, so the column order does not need to match.
 
-### Normalización del UUID
+### UUID Normalization
 
-Para garantizar la idempotencia de la sincronización contra NetBox, el pipeline normaliza todos los UUID a **lowercase** antes de cualquier comparación o envío a la API. Esto evita duplicados causados por diferencias de capitalización entre fuentes.
-
----
-
-## Idempotencia
-
-El pipeline está diseñado para ser ejecutado repetidamente con la misma entrada sin generar efectos secundarios:
-
-- **Merge**: Las filas con llaves inválidas o duplicadas se excluyen del merge, preservando la integridad del maestro.
-- **NetBox Export**: La sincronización identifica registros existentes por UUID (primario) o por nombre (fallback). Solo se actualizan campos que realmente cambiaron. Los registros sin cambios se omiten silenciosamente.
-- **Dry-Run**: Todas las operaciones destructivas soportan `--dry-run` para inspección previa.
+To guarantee the idempotency of the synchronization with NetBox, the pipeline normalizes all UUIDs to **lowercase** before any comparison or submission to the API. This prevents duplicates caused by capitalization differences between sources.
 
 ---
 
-## Flujo de Sincronización con NetBox
+## Idempotency
 
-El exportador sigue esta lógica para cada fila del CSV:
+The pipeline is designed to be executed repeatedly with the same input without generating side effects:
 
-1. **Resolución de identidad**: Busca en NetBox por `inventory_uuid`. Si no encuentra, busca por nombre de máquina.
-2. **Validación de unicidad**: Si la coincidencia es solo por nombre, verifica que el nombre sea único tanto en el CSV como en NetBox.
-3. **Construcción de payload**: Los campos se mapean según el contrato definido en `netbox_mapping.yaml`, aplicando casteos y transformaciones.
-4. **Detección de cambios**: Compara el payload contra el estado actual del registro. Solo emite una actualización si hay diferencias reales.
-5. **Sincronización de dependencias**: Sites, Manufacturers, Device Types, Platforms, Roles, Clusters, Custom Fields, Interfaces e IPs se crean o resuelven como prerequisitos.
-6. **Asignación de IP primaria**: Si un Device o VM posee exactamente una IP válida, se asigna automáticamente como IPv4 primaria.
+- **Merge**: Rows with invalid or duplicate keys are excluded from the merge, preserving the integrity of the master.
+- **NetBox Export**: The synchronization identifies existing records by UUID (primary) or by name (fallback). Only fields that actually changed are updated. Records without changes are silently skipped.
+- **Dry-Run**: All destructive operations support `--dry-run` for prior inspection.
+
+---
+
+## NetBox Synchronization Flow
+
+The exporter follows this logic for each row in the CSV:
+
+1. **Identity resolution**: Searches in NetBox by `inventory_uuid`. If not found, searches by machine name.
+2. **Uniqueness validation**: If the match is only by name, verifies that the name is unique both in the CSV and in NetBox.
+3. **Payload construction**: Fields are mapped according to the contract defined in `netbox_mapping.yaml`, applying casts and transformations.
+4. **Change detection**: Compares the payload against the current state of the record. An update is only issued if there are actual differences.
+5. **Dependency synchronization**: Sites, Manufacturers, Device Types, Platforms, Roles, Clusters, Custom Fields, Interfaces, and IPs are created or resolved as prerequisites.
+6. **Primary IP assignment**: If a Device or VM has exactly one valid IP, it is automatically assigned as the primary IPv4.

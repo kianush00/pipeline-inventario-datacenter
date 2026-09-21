@@ -1,141 +1,141 @@
-# Componentes del Pipeline
+# Pipeline Components
 
-Este documento describe cada script del pipeline, su propósito, entradas, salidas y dependencias.
+This document describes each script in the pipeline, its purpose, inputs, outputs, and dependencies.
 
 ---
 
-## Recolección Rundeck
+## Rundeck Collection
 
 ### `asset_information.sh`
 
-Script Bash ejecutado en cada nodo objetivo por Rundeck. Recolecta:
+Bash script executed on each target node by Rundeck. Collects:
 
-- Identidad de la máquina (UUID, hostname, serial)
-- Sistema operativo y versión
-- Tipo de virtualización
-- Interfaces de red (nombre, estado, IP, máscara, MAC)
-- CPU (modelo, cores, threads, sockets)
-- Memoria RAM
-- BIOS (versión, fecha)
-- DMI y metadatos de hardware
-- Almacenamiento (discos, RAID, capacidad)
+- Machine identity (UUID, hostname, serial)
+- Operating system and version
+- Virtualization type
+- Network interfaces (name, state, IP, mask, MAC)
+- CPU (model, cores, threads, sockets)
+- RAM memory
+- BIOS (version, date)
+- DMI and hardware metadata
+- Storage (disks, RAID, capacity)
 
-Su salida está destinada a ser guardada como el resultado de un job de Rundeck (archivo `.log`).
+Its output is intended to be saved as the result of a Rundeck job (`.log` file).
 
 ---
 
-## Contrato de Esquema
+## Schema Contract
 
 ### `rundeck_header_list.txt`
 
-Define el contrato de columnas para la recolección, el parseo, la preparación del maestro y el merge. Cada entrada utiliza el formato:
+Defines the column contract for collection, parsing, master preparation, and merging. Each entry uses the format:
 
 ```text
 COLUMN_NAME|FLAG
 ```
 
-Donde `FLAG` controla el comportamiento de merge:
+Where `FLAG` controls the merge behavior:
 
-- `0`: Preservar el valor maestro sin sobrescribir.
-- `1`: Permitir actualización con valores no vacíos del parseo.
-- `2`: Llave de merge (debe existir exactamente una).
+- `0`: Preserve the master value without overwriting.
+- `1`: Allow update with non-empty values from parsing.
+- `2`: Merge key (exactly one must exist).
 
-Ver [Arquitectura](architecture.md) para más detalle sobre las reglas de merge.
+See [Architecture](architecture.md) for more details on the merge rules.
 
 ---
 
-## Parser de Salida
+## Output Parser
 
 ### `parse_job_output.py`
 
-Convierte la salida cruda de Rundeck en un CSV normalizado.
+Converts the raw Rundeck output into a normalized CSV.
 
-| Aspecto | Detalle |
+| Aspect | Detail |
 | --------- | --------- |
-| **Entrada** | Archivo `.log` de salida de Rundeck |
-| **Salida** | `parsed_job_output.csv` |
-| **Validaciones** | Valida claves contra `rundeck_header_list.txt`, rechaza campos malformados o duplicados |
-| **Valores faltantes** | Se completan con `N/A` |
-| **Líneas inválidas** | Se ignoran silenciosamente |
+| **Input** | Rundeck output `.log` file |
+| **Output** | `parsed_job_output.csv` |
+| **Validations** | Validates keys against `rundeck_header_list.txt`, rejects malformed or duplicate fields |
+| **Missing values** | Filled with `N/A` |
+| **Invalid lines** | Silently ignored |
 
 ---
 
-## Preparación del Maestro
+## Master Preparation
 
 ### `prepare_master_inventory.py`
 
-Acepta una hoja de cálculo maestra (ODS o XLSX) y la convierte a un CSV limpio para la etapa de merge.
+Accepts a master spreadsheet (ODS or XLSX) and converts it to a clean CSV for the merge stage.
 
-| Aspecto | Detalle |
+| Aspect | Detail |
 | --------- | --------- |
-| **Entrada** | Hoja de cálculo maestra (`.ods` / `.xlsx`) |
-| **Salida** | `prepared_master_inventory.csv` |
-| **Dependencia externa** | LibreOffice (para conversión ODS/XLSX → CSV) |
-| **Comportamiento** | Localiza y valida el encabezado real, preserva columnas adicionales |
+| **Input** | Master spreadsheet (`.ods` / `.xlsx`) |
+| **Output** | `prepared_master_inventory.csv` |
+| **External dependency** | LibreOffice (for ODS/XLSX → CSV conversion) |
+| **Behavior** | Locates and validates the actual header, preserves additional columns |
 
 ---
 
-## Consolidación (Merge)
+## Consolidation (Merge)
 
 ### `merge_inventories.py`
 
-Superpone el inventario parseado sobre el maestro preparado usando la columna marcada con flag `2` (UUID).
+Overlays the parsed inventory onto the prepared master using the column marked with flag `2` (UUID).
 
-| Aspecto | Detalle |
+| Aspect | Detail |
 | --------- | --------- |
-| **Entradas** | `parsed_job_output.csv` + `prepared_master_inventory.csv` |
-| **Salida** | `merged_inventory.csv` |
-| **Preservación** | Mantiene todas las filas y columnas extra del maestro |
-| **Actualización** | Solo actualiza campos con flag `1` |
-| **Seguridad** | Nunca sobrescribe la llave de merge. Excluye filas con llaves inválidas o duplicadas |
+| **Inputs** | `parsed_job_output.csv` + `prepared_master_inventory.csv` |
+| **Output** | `merged_inventory.csv` |
+| **Preservation** | Keeps all extra rows and columns from the master |
+| **Update** | Only updates fields with flag `1` |
+| **Security** | Never overwrites the merge key. Excludes rows with invalid or duplicate keys |
 
 ---
 
-## Actualización del Maestro (Opcional)
+## Master Update (Optional)
 
 ### `update_master_inventory.py`
 
-Escribe los valores consolidados de vuelta a una copia de la hoja de cálculo maestra original.
+Writes the consolidated values back to a copy of the original master spreadsheet.
 
-| Aspecto | Detalle |
+| Aspect | Detail |
 | --------- | --------- |
-| **Entrada** | `merged_inventory.csv` + hoja maestra original |
-| **Salida** | Copia actualizada de la hoja maestra (misma extensión) |
-| **Seguridad** | La hoja maestra original **nunca** se modifica |
-| **Dependencia** | LibreOffice (para archivos ODS) |
+| **Input** | `merged_inventory.csv` + original master spreadsheet |
+| **Output** | Updated copy of the master spreadsheet (same extension) |
+| **Security** | The original master spreadsheet is **never** modified |
+| **Dependency** | LibreOffice (for ODS files) |
 
 ---
 
-## Exportación a NetBox
+## NetBox Export
 
 ### `export_to_netbox.py`
 
-Etapa ETL downstream. Lee el CSV consolidado y crea o actualiza Devices y Virtual Machines en NetBox, junto con todas las entidades dependientes.
+Downstream ETL stage. Reads the consolidated CSV and creates or updates Devices and Virtual Machines in NetBox, along with all dependent entities.
 
-| Aspecto | Detalle |
+| Aspect | Detail |
 | --------- | --------- |
-| **Entrada** | `merged_inventory.csv` + `netbox_mapping.yaml` |
-| **Salida** | Sincronización directa con NetBox vía API REST |
-| **Idempotencia** | Identifica registros por UUID (primario) o nombre (fallback) |
-| **Dry-Run** | Soporta `--dry-run` para inspección sin escritura |
-| **Scope** | Opera contra un **único Site** definido por `NETBOX_SITE_NAME` |
+| **Input** | `merged_inventory.csv` + `netbox_mapping.yaml` |
+| **Output** | Direct synchronization with NetBox via REST API |
+| **Idempotency** | Identifies records by UUID (primary) or name (fallback) |
+| **Dry-Run** | Supports `--dry-run` for inspection without writing |
+| **Scope** | Operates against a **single Site** defined by `NETBOX_SITE_NAME` |
 
-**Entidades sincronizadas:**
+**Synchronized entities:**
 
 - Sites, Cluster Types, Manufacturers, Device Types
 - Platforms, Racks, Clusters, Device Roles
-- Custom Fields, Interfaces, Direcciones IP
-- Asignación automática de IPv4 primaria (cuando existe exactamente una IP)
+- Custom Fields, Interfaces, IP Addresses
+- Automatic primary IPv4 assignment (when exactly one IP exists)
 
-**Códigos de salida:**
+**Exit codes:**
 
-- `0`: Sin errores a nivel de fila.
-- `1`: Al menos una fila produjo un error.
+- `0`: No errors at the row level.
+- `1`: At least one row produced an error.
 
 ---
 
-## Módulo Base
+## Base Module
 
 ### `base_inventory.py`
 
-Módulo compartido que provee utilidades comunes reutilizadas por los scripts del pipeline (parseo de argumentos, lectura de archivos de configuración, validaciones transversales).
+Shared module that provides common utilities reused by the pipeline scripts (argument parsing, configuration file reading, transversal validations).
