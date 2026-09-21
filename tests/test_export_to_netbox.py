@@ -1,11 +1,5 @@
 """
 Pruebas unitarias para export_to_netbox.py
-==========================================
-
-Etapa 1: Funciones puras de utilidad.
-
-Estas funciones no dependen de I/O externo (pynetbox, API, filesystem),
-por lo que se pueden testear directamente sin mocks.
 """
 
 import hashlib

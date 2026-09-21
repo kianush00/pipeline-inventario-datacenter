@@ -166,6 +166,16 @@ Use `--verbose` with the exporter to enable DEBUG logging:
 python export_to_netbox.py merged_inventory.csv --dry-run --verbose
 ```
 
+## Testing
+
+The repository includes a comprehensive unit test suite to validate the logic, edge cases, and API interactions (via mocks). To run the tests, execute `pytest` against the `tests/` directory from within the virtual environment:
+
+```bash
+pytest tests/ -v
+```
+
+Before committing new code or deploying changes, ensure that all tests pass successfully.
+
 ## NetBox configuration
 
 The exporter requires these core environment variables:

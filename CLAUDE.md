@@ -82,3 +82,9 @@ Antes de dar cualquier modificación por concluida, **como agente DEBES verifica
      - Linux/macOS: `.venv/bin/python3 -m py_compile <archivo_modificado>`
      - Windows: `.\.venv\Scripts\python -m py_compile <archivo_modificado>`
    - Si se cuenta con datos de prueba o fixtures, verifica la consistencia con el flag `--dry-run` antes de confirmar la solución.
+
+## 8. Cobertura de Pruebas Unitarias (Testing)
+
+- **Ejecución obligatoria:** Al final de todo el proceso (luego de haber realizado implementaciones o refactorizaciones de código), DEBES ejecutar siempre la suite de pruebas ubicada en el directorio `tests/` (por ejemplo, ejecutando `pytest tests/`) para verificar que no has roto ninguna funcionalidad existente.
+- **Creación de nuevos tests:** Cuando generes una nueva implementación de código, debes evaluar crear tus propios tests unitarios para verificar que esa implementación funciona correctamente.
+- **Visión a largo plazo y No Redundancia:** Agrega las nuevas pruebas unitarias al archivo de tests correspondiente para aumentar la cobertura (test coverage) del código, pero **evita crear tests redundantes**. Antes de escribir un test, revisa los existentes para asegurar que el escenario no esté ya cubierto. Añade nuevas pruebas únicamente si aportan un valor real y son convenientes para la mantenibilidad a largo plazo del proyecto.
