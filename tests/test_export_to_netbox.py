@@ -10,9 +10,11 @@ por lo que se pueden testear directamente sin mocks.
 
 import hashlib
 from collections import Counter
-from typing import Any
+from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
+from pynetbox.core.query import RequestError  # type: ignore
 
 from export_to_netbox import (
     CastType,
@@ -62,10 +64,6 @@ from export_to_netbox import (
     slugify,
 )
 
-# ============================================================
-# slugify
-# ============================================================
-
 
 class TestSlugify:
     """Verifica la generación de slugs válidos para NetBox."""
@@ -101,10 +99,8 @@ class TestSlugify:
         """Caracteres acentuados (válidos en NetBox) se preservan."""
         assert slugify("Producción") == "producción"
 
-
-# ============================================================
-# _generate_fallback_slug
-# ============================================================
+    def test_slugify_accents_and_symbols(self) -> None:
+        assert slugify("  --H.P.!!__  ") == "hp"
 
 
 class TestGenerateFallbackSlug:
@@ -128,10 +124,43 @@ class TestGenerateFallbackSlug:
         b = _generate_fallback_slug("base", "Nombre B")
         assert a != b
 
+    def test_generate_fallback_slug(self) -> None:
+        base = "srv-01"
+        fallback = _generate_fallback_slug(base, "SRV-01")
+        assert fallback.startswith("srv-01-")
+        assert len(fallback) == 7 + 4  # 'srv-01-' + 4 chars md5
 
-# ============================================================
-# parse_int
-# ============================================================
+    def test_success_on_retry(self) -> None:
+
+        endpoint = MagicMock()
+        mock_obj = MockNetBoxRecord(id=10, name="SRV", slug="srv-1234")
+
+        # Falla la primera, funciona la segunda
+        endpoint.create.side_effect = [
+            RequestError(MagicMock(status_code=400, reason="Collision")),
+            mock_obj,
+        ]
+
+        result = create_with_fallback_slug(
+            endpoint, "Device", "SRV", name="SRV", slug="srv"
+        )
+        assert result.id == 10
+        assert endpoint.create.call_count == 2
+        # Verifica que la segunda llamada uso un slug diferente
+        call_kwargs = endpoint.create.call_args_list[1][1]
+        assert call_kwargs["slug"] != "srv"
+        assert call_kwargs["slug"].startswith("srv-")
+
+    def test_failure_on_retry(self) -> None:
+
+        endpoint = MagicMock()
+        # Falla siempre
+        endpoint.create.side_effect = RequestError(
+            MagicMock(status_code=400, reason="Persistent Collision")
+        )
+
+        with pytest.raises(NetBoxApiError, match="Imposible crear Device 'SRV'"):
+            create_with_fallback_slug(endpoint, "Device", "SRV", name="SRV", slug="srv")
 
 
 class TestParseInt:
@@ -157,11 +186,6 @@ class TestParseInt:
             parse_int("3.14")
 
 
-# ============================================================
-# parse_int_gb_to_mb
-# ============================================================
-
-
 class TestParseIntGbToMb:
     """Verifica la conversión de GB a MB (NetBox espera MB para RAM)."""
 
@@ -184,10 +208,9 @@ class TestParseIntGbToMb:
         """0 GB = 0 MB."""
         assert parse_int_gb_to_mb("0") == 0
 
-
-# ============================================================
-# parse_bool_si_no
-# ============================================================
+    def test_parse_float_string_raises_error(self) -> None:
+        with pytest.raises(ValueError):
+            parse_int_gb_to_mb("invalid_number")
 
 
 class TestParseBoolSiNo:
@@ -214,11 +237,6 @@ class TestParseBoolSiNo:
     def test_with_spaces(self) -> None:
         """El strip() interno tolera espacios."""
         assert parse_bool_si_no("  si  ") is True
-
-
-# ============================================================
-# apply_cast
-# ============================================================
 
 
 class TestApplyCast:
@@ -261,11 +279,6 @@ class TestApplyCastEdgeCases:
         assert apply_cast("1.5", CastType.INT_GB_TO_MB, "memory") == 1536
 
 
-# ============================================================
-# get_netbox_object_id
-# ============================================================
-
-
 class TestGetNetboxObjectId:
     """Verifica la extracción segura del ID de un objeto NetBox."""
 
@@ -285,11 +298,6 @@ class TestGetNetboxObjectId:
         obj = MockNetBoxRecord(id=99, name="test")
         assert get_netbox_object_id(obj) == 99
         assert isinstance(get_netbox_object_id(obj), int)
-
-
-# ============================================================
-# ETAPA 2: EXTRACCIÓN CSV Y CONFIGURACIÓN YAML
-# ============================================================
 
 
 class TestExtractCsvValue:
@@ -390,6 +398,12 @@ class TestGetNodeTypeFromRow:
         ):
             get_node_type_from_row(row, config)
 
+    def test_missing_key_in_row(self, config: NetBoxMappingConfig) -> None:
+        with pytest.raises(
+            RowValidationError, match="El campo 'machine_type' está vacío."
+        ):
+            get_node_type_from_row({}, config)
+
 
 class TestCountMachineNames:
     """Verifica el contador de nombres de máquinas."""
@@ -464,11 +478,6 @@ class TestLoadConfig:
 
         with pytest.raises(ConfigValidationError, match="Error de validación"):
             load_config(yaml_invalido)
-
-
-# ============================================================
-# ETAPA 3: RESOLUCIÓN DE CAMPOS Y PAYLOAD
-# ============================================================
 
 
 class TestResolveDefaultOrEmpty:
@@ -668,11 +677,21 @@ class TestBuildPayload:
         ):
             build_payload(row, [], custom_maps, config)
 
+    def test_custom_fields_nested(self, config: NetBoxMappingConfig) -> None:
+        # Usando campos reales del mapping (vCPUs y Tipo de maquina)
+        native_map = [FieldMappingConfig(source="Nombre", target="name")]
+        custom_map = [
+            FieldMappingConfig(source="vCPUs", target="cpu_cores"),
+            FieldMappingConfig(source="Tipo_maquina", target="machine_type"),
+        ]
+        row = {"Nombre": "SRV", "vCPUs": "4", "Tipo_maquina": "Dedicada"}
 
-# ============================================================
-# ETAPA 4: RESOLVERS Y SINCRONIZACIÓN
-# ============================================================
-from unittest.mock import MagicMock
+        payload = build_payload(row, native_map, custom_map, config)
+
+        assert payload["name"] == "SRV"
+        assert "custom_fields" in payload
+        assert payload["custom_fields"]["cpu_cores"] == "4"
+        assert payload["custom_fields"]["machine_type"] == "Dedicada"
 
 
 class TestResolveNetboxStatus:
@@ -784,6 +803,17 @@ class TestFindExistingObject:
         assert by_uuid is False
         assert by_name is True
         endpoint.filter.assert_called_once_with(name="SRV-01")
+
+    def test_multiple_matches_returns_first(self, config: NetBoxMappingConfig) -> None:
+        endpoint = MagicMock()
+        endpoint.filter.return_value = [
+            MockNetBoxRecord(id=1, name="SRV"),
+            MockNetBoxRecord(id=2, name="SRV"),
+        ]
+
+        result, _, _ = _find_existing_object("", "SRV", endpoint, config)
+        assert len(result) == 2
+        assert result[0].id == 1
 
 
 class TestIsNameSafelyUnique:
@@ -898,10 +928,26 @@ class TestExecuteSync:
         assert obj_id == 50
         mock_existing.update.assert_not_called()
 
+    def test_execute_sync_record_update_error(self) -> None:
+        endpoint = MagicMock()
+        mock_existing = MagicMock()
+        mock_existing.id = 50
+        # Simula cambio (para que haga update) y que update() falle
 
-# ============================================================
-# ETAPA 5: PARSEO DE INTERFACES DE RED
-# ============================================================
+        mock_existing.update.side_effect = RequestError(
+            MagicMock(status_code=400, reason="NetBox Reject")
+        )
+        del mock_existing._init_cache
+
+        with pytest.raises(RequestError):
+            _execute_sync(
+                endpoint,
+                {"name": "SRV-nuevo"},
+                [mock_existing],
+                "SRV",
+                "uuid",
+                dry_run=False,
+            )
 
 
 class TestValidateInterfaceIp:
@@ -1041,11 +1087,17 @@ class TestParseNetworkInterfaces:
         assert interfaces[0]["cidr"] == "192.168.1.1/24"
         assert interfaces[1]["cidr"] is None
 
-
-# ============================================================
-# ETAPA 6: FUNCIONES ENSURE_* (Sincronización Previa)
-# ============================================================
-from typing import cast
+    def test_missing_status_key_filled_with_default(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        # Fila donde la columna de status ni siquiera existe en el dict (ej. N/A en pandas/DictReader)
+        row = {
+            config.csv_columns["iface_names"].source: "eth0",
+            config.csv_columns["iface_ip"].source: "1.1.1.1",
+        }
+        interfaces = parse_network_interfaces(row, config)
+        assert len(interfaces) == 1
+        assert interfaces[0]["enabled"] is True  # Por default
 
 
 class TestEnsureSite:
@@ -1132,155 +1184,3 @@ class TestEnsureManufacturer:
         assert result.id == 8
         assert cache["Lenovo"].id == 8
         endpoint.create.assert_called_once_with(name="Lenovo", slug="lenovo")
-
-
-# ============================================================
-# ETAPA 7: EDGE CASES Y COBERTURA CRÍTICA
-# ============================================================
-
-
-class TestSlugifyEdgeCases:
-    """Verifica casos extremos al normalizar slugs."""
-
-    def test_slugify_accents_and_symbols(self) -> None:
-        assert slugify("  --H.P.!!__  ") == "hp"
-
-
-class TestParseIntGbToMbEdgeCases:
-    """Verifica errores en parseos numéricos."""
-
-    def test_parse_float_string_raises_error(self) -> None:
-        with pytest.raises(ValueError):
-            parse_int_gb_to_mb("invalid_number")
-
-
-class TestGetNodeTypeEdgeCases:
-    """Verifica ausencia total de llaves requeridas en la fila."""
-
-    def test_missing_key_in_row(self, config: NetBoxMappingConfig) -> None:
-        # Fila sin la clave "Tipo de maquina"
-        with pytest.raises(
-            RowValidationError, match="El campo 'machine_type' está vacío."
-        ):
-            get_node_type_from_row({}, config)
-
-
-class TestBuildPayloadEdgeCases:
-    """Verifica el anidamiento correcto de custom_fields."""
-
-    def test_custom_fields_nested(self, config: NetBoxMappingConfig) -> None:
-        # Usando campos reales del mapping (vCPUs y Tipo de maquina)
-        native_map = [FieldMappingConfig(source="Nombre", target="name")]
-        custom_map = [
-            FieldMappingConfig(source="vCPUs", target="cpu_cores"),
-            FieldMappingConfig(source="Tipo_maquina", target="machine_type"),
-        ]
-        row = {"Nombre": "SRV", "vCPUs": "4", "Tipo_maquina": "Dedicada"}
-
-        payload = build_payload(row, native_map, custom_map, config)
-
-        assert payload["name"] == "SRV"
-        assert "custom_fields" in payload
-        assert payload["custom_fields"]["cpu_cores"] == "4"
-        assert payload["custom_fields"]["machine_type"] == "Dedicada"
-
-
-class TestFindExistingObjectMultiple:
-    """Verifica comportamiento cuando NetBox devuelve más de un registro."""
-
-    def test_multiple_matches_returns_first(self, config: NetBoxMappingConfig) -> None:
-        endpoint = MagicMock()
-        endpoint.filter.return_value = [
-            MockNetBoxRecord(id=1, name="SRV"),
-            MockNetBoxRecord(id=2, name="SRV"),
-        ]
-
-        result, _, _ = _find_existing_object("", "SRV", endpoint, config)
-        assert len(result) == 2
-        assert result[0].id == 1
-
-
-class TestExecuteSyncFailures:
-    """Verifica burbujeo de excepciones en pynetbox.Record.update."""
-
-    def test_execute_sync_record_update_error(self) -> None:
-        endpoint = MagicMock()
-        mock_existing = MagicMock()
-        mock_existing.id = 50
-        # Simula cambio (para que haga update) y que update() falle
-        from pynetbox.core.query import RequestError  # type: ignore
-
-        mock_existing.update.side_effect = RequestError(
-            MagicMock(status_code=400, reason="NetBox Reject")
-        )
-        del mock_existing._init_cache
-
-        with pytest.raises(RequestError):
-            _execute_sync(
-                endpoint,
-                {"name": "SRV-nuevo"},
-                [mock_existing],
-                "SRV",
-                "uuid",
-                dry_run=False,
-            )
-
-
-class TestParseNetworkInterfacesEdgeCases:
-    """Verifica ausencia total de una columna opcional en el CSV."""
-
-    def test_missing_status_key_filled_with_default(
-        self, config: NetBoxMappingConfig
-    ) -> None:
-        # Fila donde la columna de status ni siquiera existe en el dict (ej. N/A en pandas/DictReader)
-        row = {
-            config.csv_columns["iface_names"].source: "eth0",
-            config.csv_columns["iface_ip"].source: "1.1.1.1",
-        }
-        interfaces = parse_network_interfaces(row, config)
-        assert len(interfaces) == 1
-        assert interfaces[0]["enabled"] is True  # Por default
-
-
-class TestCreateWithFallbackSlug:
-    """Verifica reintentos automáticos por colisión de slugs."""
-
-    def test_generate_fallback_slug(self) -> None:
-        base = "srv-01"
-        fallback = _generate_fallback_slug(base, "SRV-01")
-        assert fallback.startswith("srv-01-")
-        assert len(fallback) == 7 + 4  # 'srv-01-' + 4 chars md5
-
-    def test_success_on_retry(self) -> None:
-        from pynetbox.core.query import RequestError  # type: ignore
-
-        endpoint = MagicMock()
-        mock_obj = MockNetBoxRecord(id=10, name="SRV", slug="srv-1234")
-
-        # Falla la primera, funciona la segunda
-        endpoint.create.side_effect = [
-            RequestError(MagicMock(status_code=400, reason="Collision")),
-            mock_obj,
-        ]
-
-        result = create_with_fallback_slug(
-            endpoint, "Device", "SRV", name="SRV", slug="srv"
-        )
-        assert result.id == 10
-        assert endpoint.create.call_count == 2
-        # Verifica que la segunda llamada uso un slug diferente
-        call_kwargs = endpoint.create.call_args_list[1][1]
-        assert call_kwargs["slug"] != "srv"
-        assert call_kwargs["slug"].startswith("srv-")
-
-    def test_failure_on_retry(self) -> None:
-        from pynetbox.core.query import RequestError  # type: ignore
-
-        endpoint = MagicMock()
-        # Falla siempre
-        endpoint.create.side_effect = RequestError(
-            MagicMock(status_code=400, reason="Persistent Collision")
-        )
-
-        with pytest.raises(NetBoxApiError, match="Imposible crear Device 'SRV'"):
-            create_with_fallback_slug(endpoint, "Device", "SRV", name="SRV", slug="srv")

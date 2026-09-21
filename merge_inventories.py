@@ -74,6 +74,7 @@ from base_inventory import (
 # VALIDAR Y RESOLVER CLAVE DE UNIÓN
 # ============================================================
 
+
 def resolve_key_column(
     rundeck_header_list: list[tuple[str, int]],
 ) -> str:
@@ -85,11 +86,7 @@ def resolve_key_column(
     Retorna:
         nombre de la columna con FLAG 2.
     """
-    key_columns = [
-        name
-        for name, flag in rundeck_header_list
-        if flag == 2
-    ]
+    key_columns = [name for name, flag in rundeck_header_list if flag == 2]
 
     if len(key_columns) != 1:
         error(
@@ -105,6 +102,7 @@ def resolve_key_column(
 # VALIDAR CLAVE DE UNIÓN
 # ============================================================
 
+
 def is_invalid_key(value: str) -> bool:
     """
     Retorna True si el valor no puede utilizarse como clave
@@ -118,6 +116,7 @@ def is_invalid_key(value: str) -> bool:
 # ============================================================
 # RESOLVER POSICIONES EN UN HEADER
 # ============================================================
+
 
 def resolve_positions(
     rundeck_header_list: list[tuple[str, int]],
@@ -172,6 +171,7 @@ def resolve_positions(
 # LEER CSV COMPLETO
 # ============================================================
 
+
 def load_csv_data(
     csv_path: Path,
 ) -> tuple[str, list[str], list[list[str]]]:
@@ -197,10 +197,7 @@ def load_csv_data(
         header_fields = split_quoted_csv_line(header_line)
 
         if header_fields is None:
-            error(
-                f"El header del CSV tiene comillas desbalanceadas:\n"
-                f"  {csv_path}"
-            )
+            error(f"El header del CSV tiene comillas desbalanceadas:\n  {csv_path}")
 
         rows: list[list[str]] = []
 
@@ -216,7 +213,7 @@ def load_csv_data(
                 print(
                     f"[ERROR] Línea {line_number} de "
                     f"{csv_path.name}: comillas desbalanceadas.",
-                    file=sys.stderr
+                    file=sys.stderr,
                 )
                 continue
 
@@ -228,6 +225,7 @@ def load_csv_data(
 # ============================================================
 # VALIDAR ESTRUCTURA DE FILAS
 # ============================================================
+
 
 def validate_rows(
     rows: list[list[str]],
@@ -248,7 +246,7 @@ def validate_rows(
                 f"[ERROR] Línea {row_number} de {csv_path.name}: "
                 f"se esperaban {expected_columns} campos, "
                 f"pero se encontraron {len(fields)}.",
-                file=sys.stderr
+                file=sys.stderr,
             )
             continue
 
@@ -260,6 +258,7 @@ def validate_rows(
 # ============================================================
 # CONSTRUIR MAPA DEL INVENTARIO PARSEADO
 # ============================================================
+
 
 def build_parsed_data(
     rows: list[list[str]],
@@ -277,7 +276,7 @@ def build_parsed_data(
     duplicated_keys: set[str] = set()
 
     for fields in rows:
-        key = strip_quotes(fields[key_idx])
+        key = strip_quotes(fields[key_idx]).lower()
 
         if is_invalid_key(key):
             continue
@@ -290,7 +289,7 @@ def build_parsed_data(
                 f"[WARNING] Clave duplicada en el inventario "
                 f"parseado: '{key}'. Las filas con esta clave "
                 "no serán fusionadas.",
-                file=sys.stderr
+                file=sys.stderr,
             )
             del parsed_data[key]
             duplicated_keys.add(key)
@@ -305,6 +304,7 @@ def build_parsed_data(
 # VALIDAR UNICIDAD DE CLAVES EN EL INVENTARIO MAESTRO
 # ============================================================
 
+
 def find_parent_duplicated_keys(
     rows: list[list[str]],
     key_idx: int,
@@ -318,7 +318,7 @@ def find_parent_duplicated_keys(
     duplicated_keys: set[str] = set()
 
     for fields in rows:
-        key = strip_quotes(fields[key_idx])
+        key = strip_quotes(fields[key_idx]).lower()
 
         if is_invalid_key(key):
             continue
@@ -332,7 +332,7 @@ def find_parent_duplicated_keys(
         print(
             f"[WARNING] Clave duplicada en el inventario maestro: "
             f"'{key}'. Las filas con esta clave no serán fusionadas.",
-            file=sys.stderr
+            file=sys.stderr,
         )
 
     return duplicated_keys
@@ -341,6 +341,7 @@ def find_parent_duplicated_keys(
 # ============================================================
 # MAIN
 # ============================================================
+
 
 def main() -> None:
     if len(sys.argv) < 3:
@@ -509,14 +510,8 @@ def main() -> None:
     print(f"Posición de clave en el maestro   : {key_parent_idx + 1}")
     print(f"Posición de clave en el parseado  : {key_parsed_idx + 1}")
     print(f"Claves válidas en el parseado     : {len(parsed_data)}")
-    print(
-        f"Claves duplicadas en el parseado  : "
-        f"{len(parsed_duplicated_keys)}"
-    )
-    print(
-        f"Claves duplicadas en el maestro   : "
-        f"{len(parent_duplicated_keys)}"
-    )
+    print(f"Claves duplicadas en el parseado  : {len(parsed_duplicated_keys)}")
+    print(f"Claves duplicadas en el maestro   : {len(parent_duplicated_keys)}")
 
     # --------------------------------------------------------
     # Crear archivo temporal en el mismo directorio que la
@@ -547,7 +542,7 @@ def main() -> None:
             # en memoria.
             # ------------------------------------------------
             for line_number, fields in enumerate(parent_rows, start=2):
-                key = strip_quotes(fields[key_parent_idx])
+                key = strip_quotes(fields[key_parent_idx]).lower()
 
                 # ------------------------------------------------
                 # Clave inválida:
@@ -574,7 +569,7 @@ def main() -> None:
                         f"[WARNING] Línea {line_number} del inventario maestro: "
                         f"la clave '{key}' no existe en el inventario "
                         "parseado. La fila se conservará sin fusionar.",
-                        file=sys.stderr
+                        file=sys.stderr,
                     )
                     out_f.write(",".join(fields) + "\n")
                     continue
