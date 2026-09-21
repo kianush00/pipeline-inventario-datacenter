@@ -14,6 +14,8 @@ Managing datacenter infrastructure across physical servers, hypervisors, and vir
 
 This repository provides an end-to-end **Data Center Inventory ETL Pipeline** designed to bridge that gap. It automatically gathers hardware and system metadata from target nodes using **Rundeck**, cleanses and normalizes raw outputs, merges them deterministically against a master spreadsheet (source of truth), and idempotently synchronizes the consolidated inventory into **NetBox**.
 
+This project is intentionally designed and optimized for small to medium-sized datacenters, comfortably scaling to manage infrastructure on the order of hundreds or thousands of nodes.
+
 ## Key Features
 
 * **Automated Data Collection:** Leverages Rundeck and shell collection agents (`asset_information.sh`) to query live OS, CPU, RAM, BIOS, network interfaces, and storage data.
@@ -43,7 +45,7 @@ python export_to_netbox.py merged_inventory.csv --dry-run
 ## Documentation
 
 | Document | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | [Architecture](docs/architecture.md) | Data flow, merge model, UUID normalization, and idempotency design |
 | [Components](docs/components.md) | Technical reference for each pipeline script |
 | [NetBox Mapping](docs/netbox_mapping.md) | Full specification of `netbox_mapping.yaml` (DDL, DML, casts, transforms) |
