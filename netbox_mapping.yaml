@@ -7,7 +7,6 @@
 # Documentación completa: docs/netbox_mapping.md
 # Credenciales: se leen desde variables de entorno (ver docs/usage_and_config.md).
 
-
 csv_columns:
   machine_name:
     source: &col_machine_name "Nombre maquina"
@@ -473,8 +472,10 @@ empty_values:
   - "N/A"
   - ""
   - "None"
-  - "n/a"
-  - "none"
+  - "Not Settable"
+  - "Not Applicable"
+  - "Not Available"
+  - "Unknown"
   - "-----"
   - "------"
   - "-------"

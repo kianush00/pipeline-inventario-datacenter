@@ -135,8 +135,8 @@ Defines how to **extract** data from the CSV and **map** it to fields in the Net
 ### Transformations
 
 | Transform | Behavior |
-|-----------|----------------|
-| `concat_dot` | Concatenates a list of values with the separator `. ` (dot + space) |
+| ----------- | ---------------- |
+| `concat_dot` | Concatenates a list of values with the separator `.` (dot + space) |
 
 ### Fields NOT included in the DML Mapping
 
@@ -146,15 +146,17 @@ Foreign keys like `site`, `role`, `platform`, `rack`, and `device_type` are reso
 
 ## Empty Values (`empty_values`)
 
-List of strings that are considered equivalent to `None`/empty. If a CSV cell value matches exactly one of these, it is omitted in the export:
+List of strings that are considered equivalent to `None`/empty. If a CSV cell value matches one of these (case-insensitive), it is omitted in the export:
 
 ```yaml
 empty_values:
   - "N/A"
   - ""
   - "None"
-  - "n/a"
-  - "none"
+  - "Not Settable"
+  - "Not Applicable"
+  - "Not Available"
+  - "Unknown"
   - "-----"
   - "------"
   - "-------"

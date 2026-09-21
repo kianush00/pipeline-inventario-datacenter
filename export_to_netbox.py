@@ -445,10 +445,11 @@ class NetBoxMappingConfig(BaseModel):
 
     def model_post_init(self, __context: Any, /) -> None:
         """Inicializa los valores vacíos y el mapa indexado de Custom Fields O(1)."""
+        empty_vals_lower = {v.lower() for v in self.empty_values}
         object.__setattr__(
             self,
             "_empty_values_set",
-            frozenset(self.empty_values) | {""},
+            frozenset(empty_vals_lower) | {""},
         )
 
         cf_map: dict[str, CustomFieldConfig] = {}
@@ -562,7 +563,7 @@ class NetBoxMappingConfig(BaseModel):
         """Determina si un valor es considerado vacío según empty_values."""
         if value is None:
             return True
-        return str(value).strip() in self._empty_values_set
+        return str(value).strip().lower() in self._empty_values_set
 
     def resolve_node_type(self, machine_type: str) -> NodeType:
         """

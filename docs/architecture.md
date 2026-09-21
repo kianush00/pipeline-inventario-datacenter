@@ -18,7 +18,7 @@ Rundeck (Nodes) → Shell Script → Log → Parser → Parsed CSV
                                                   NetBox (API)
 ```
 
-<img src="./assets/inventory_pipeline.png" alt="Datacenter inventory pipeline" width="100%">
+![Datacenter inventory pipeline](./assets/inventory_pipeline.png)
 
 The diagram source file (`inventory_pipeline.drawio`) is located in `docs/assets/`.
 
