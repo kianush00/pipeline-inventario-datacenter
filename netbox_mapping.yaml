@@ -4,38 +4,9 @@
 # Leído exclusivamente por export_to_netbox.py.
 # No depende de rundeck_header_list.txt.
 #
-# ── Credenciales ─────────────────────────────────────────────
-# Se leen desde variables de entorno (nunca en este archivo):
-#   NETBOX_URL            → URL de NetBox
-#   NETBOX_TOKEN          → token con permisos write sobre
-#                           dcim, virtualization, ipam, extras, core
-#   NETBOX_VERIFY_SSL     → "true" / "false" (por defecto: true)
-#   NETBOX_SITE_NAME      → nombre del Site de NetBox
+# Documentación completa: docs/netbox_mapping.md
+# Credenciales: se leen desde variables de entorno (ver docs/usage_and_config.md).
 
-# ── Definición de columnas del CSV ─────────────────────────────
-# Glosario centralizado de todos los campos del
-# archivo merged_inventory.csv que utiliza el exportador.
-#
-# Cada entrada define:
-#   - Una clave semántica (ej. machine_name) usada en el script Python.
-#   - Un subcampo `source` con el nombre textual exacto de la columna en el CSV.
-#     Puede incluir un ancla YAML (&col_id) para reutilizarlo en el mapeo inferior.
-#   - Un subcampo opcional `required: true` si la columna es obligatoria.
-#
-# Formato de celdas esperado (Input Format):
-# - Campos simples (Strings, Números): El valor directo. Se le aplicará .strip()
-# - Campos múltiples (ej. Interfaces, IP, MAC): Lista de valores separados por coma (,).
-#   El script hace split(",") y asocia los elementos según su índice.
-# - Valores nulos/vacíos: Si el valor de la celda coincide con algún elemento de
-#   la lista `empty_values` (al final de este archivo), se tratará como "vacío" (N/A)
-#   y no se enviará a NetBox, salvo que sea obligatorio.
-#
-# ── Columnas obligatorias del CSV (Presencia en cabecera) ────
-# Las columnas con el subcampo `required: true` son aquellas cuya presencia
-# en el encabezado del CSV es indispensable (bloqueante).
-# Esto valida la *existencia del encabezado* en el CSV, no que el *valor de la celda*
-# deba estar obligatoriamente lleno en todas las filas.
-# Si alguna falta en el encabezado, el script aborta inmediatamente.
 
 csv_columns:
   machine_name:
@@ -140,28 +111,18 @@ csv_columns:
   iface_mac:
     source: "MAC"
 
-# ── Site único ───────────────────────────────────────────────
-# Si no existe en NetBox, el script lo crea automáticamente.
-# Para evitar errores con espacios y caracteres especiales, el slug
-# se procesa a partir del nombre.
+# ── Site único (se crea automáticamente si no existe) ────────
 site:
   name: "${NETBOX_SITE_NAME}"
   slug: "${NETBOX_SITE_NAME}"
 
-# ── ClusterType ──────────────────────────────────────────────
-# Las VMs se agrupan en un Cluster cuyo nombre coincide con el
-# valor del campo 'Cluster' en el CSV.
-# El cluster_type se crea automáticamente si no existe.
+# ── ClusterType (se crea automáticamente si no existe) ───────
 cluster_type:
   default:
     name: "Hipervisor"
     slug: "hipervisor"
 
-# ── Roles de dispositivo ─────────────────────────────────────
-# Lista canónica de Device Roles utilizados por Devices y VMs.
-# El valor de 'Rol' del CSV debe coincidir con uno de estos nombres.
-# Los roles se crean automáticamente si no existen.
-# Los colores son valores hexadecimales sin '#'.
+# ── Roles de dispositivo (colores hex sin '#') ──────────────
 device_roles:
   - name: "Hypervisor"
     slug: "hypervisor"
@@ -230,37 +191,7 @@ device_roles:
     slug: "others"
     color: "9e9e9e"
 
-# ── Definiciones de Custom Fields (Esquema DDL) ──────────────
-# El script garantiza que estos custom fields existen en NetBox.
-# Esta sección DEFINE la estructura de los campos en la base de datos
-# de NetBox (creación si no existen). NO extrae datos del CSV.
-#
-# Significado de los campos:
-# 'name'         → (Requerido) Nombre interno (slug) del custom field en NetBox.
-# 'label'        → (Requerido) Nombre descriptivo mostrado en la interfaz web.
-# 'type'         → (Requerido) Tipo de dato (ver lista de soportados abajo).
-# 'required'     → (Requerido) Si es true, el campo será obligatorio en el esquema
-#                    interno (DDL) de NetBox. NO afecta el parseo ni la validación del CSV.
-# 'object_types' → (Requerido) Lista de modelos NetBox a los que aplica
-#                    (ej. "dcim.device", "virtualization.virtualmachine").
-# 'default'      → (Opcional) Valor por defecto a nivel de base de datos.
-# 'choice_set'   → (Opcional) Define los valores válidos. Obligatorio si type="selection".
-#
-# Tipos de Custom Field soportados por NetBox 4.6+:
-#   text           → Texto libre
-#   longtext       → Texto largo (textarea)
-#   integer        → Número entero
-#   decimal        → Número decimal
-#   boolean        → Verdadero/Falso
-#   date           → Fecha (YYYY-MM-DD)
-#   datetime       → Fecha y hora
-#   url            → URL válida
-#   json           → JSON arbitrario
-#   select         → Selección única (requiere choice_set)
-#   multiselect    → Selección múltiple (requiere choice_set)
-#   object         → Referencia a otro objeto NetBox
-#   multiobject    → Referencia múltiple a objetos NetBox
-
+# ── Custom Fields (Esquema DDL, ver docs/netbox_mapping.md) ──
 custom_field_definitions:
   - name: &cf_machine_type "machine_type"
     label: "Tipo de maquina"
@@ -401,24 +332,7 @@ custom_field_definitions:
     object_types:
       - "dcim.device"
 
-# ── Mapeo de Campos Nativos de Device (DCIM) ─────────────────
-# Sección DML: define cómo EXTRAER datos del CSV y MAPEARLOS a
-# campos nativos de la API de NetBox para objetos Device.
-#
-# 'source'      → (Requerido) nombre exacto de la columna en merged_inventory.csv.
-# 'target'      → (Requerido) campo en el API de NetBox.
-# 'required' → (Opcional, Default: false) Si es true, el campo no puede estar vacío.
-#                  Si es false, el valor es obligatorio (Fail-Fast si falta).
-# 'is_unique'   → (Opcional) Si es true, un string vacío se sanitiza a null para
-#                  evitar violaciones de constraint UNIQUE en NetBox.
-# 'cast'        → (Opcional) Funciones de conversión permitidas: int, int_gb_to_mb, bool_si_no.
-# 'transform'   → (Opcional) Operaciones de estructura: concat_dot (concatena lista con '.').
-# 'map'         → (Opcional) Diccionario declarado en este yaml para traducir valores.
-#
-# NOTA: Claves foráneas como 'site', 'role', 'platform', 'rack' y
-# 'device_type' son resueltas a objetos/IDs NetBox por sus respectivas
-# funciones especializadas en el script, por lo que no forman parte de esta lista.
-
+# ── Mapeo DML por tipo de nodo (ver docs/netbox_mapping.md) ──
 node_types:
   device:
     status:
@@ -553,9 +467,7 @@ node_types:
       - source: *col_os_version
         target: *cf_os_version
 
-# ── Valores vacíos ─────────────────────────────────────────
-# Valores vacíos que se consideran equivalentes a None/N/A y
-# se omiten en la exportación.
+# ── Valores equivalentes a vacío/null ──────────────────────
 
 empty_values:
   - "N/A"
