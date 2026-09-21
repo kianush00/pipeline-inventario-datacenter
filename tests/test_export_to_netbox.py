@@ -1184,18 +1184,21 @@ class TestEnsureManufacturer:
 class TestAssignPrimaryIPv4:
     def test_zero_ips_does_nothing(self) -> None:
         mock_obj = MagicMock()
-        _assign_primary_ipv4(mock_obj, [], "srv", False)
+        res = _assign_primary_ipv4(mock_obj, [], "srv", False)
+        assert res is False
         mock_obj.update.assert_not_called()
 
     def test_multiple_ips_does_nothing(self) -> None:
         mock_obj = MagicMock()
-        _assign_primary_ipv4(mock_obj, [10, 20], "srv", False)
+        res = _assign_primary_ipv4(mock_obj, [10, 20], "srv", False)
+        assert res is False
         mock_obj.update.assert_not_called()
 
     def test_one_ip_assigns_primary(self) -> None:
         mock_obj = MagicMock()
         mock_obj.primary_ip4 = None
-        _assign_primary_ipv4(mock_obj, [15], "srv", False)
+        res = _assign_primary_ipv4(mock_obj, [15], "srv", False)
+        assert res is True
         mock_obj.update.assert_called_once_with({"primary_ip4": 15})
 
     def test_idempotent_if_already_assigned(self) -> None:
@@ -1203,7 +1206,8 @@ class TestAssignPrimaryIPv4:
         mock_ip = MagicMock()
         mock_ip.id = 15
         mock_obj.primary_ip4 = mock_ip
-        _assign_primary_ipv4(mock_obj, [15], "srv", False)
+        res = _assign_primary_ipv4(mock_obj, [15], "srv", False)
+        assert res is False
         mock_obj.update.assert_not_called()
 
     def test_updates_if_assigned_to_different_ip(self) -> None:
@@ -1211,5 +1215,6 @@ class TestAssignPrimaryIPv4:
         mock_ip = MagicMock()
         mock_ip.id = 10
         mock_obj.primary_ip4 = mock_ip
-        _assign_primary_ipv4(mock_obj, [15], "srv", False)
+        res = _assign_primary_ipv4(mock_obj, [15], "srv", False)
+        assert res is True
         mock_obj.update.assert_called_once_with({"primary_ip4": 15})

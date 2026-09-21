@@ -2951,17 +2951,19 @@ def sync_interfaces_for_object(
 
 
 def _assign_primary_ipv4(
-    main_obj: NetBoxObject | None,
+    main_obj: NetBoxObject,
     ipv4_ids: list[int],
     machine_name: str,
     dry_run: bool,
-) -> None:
+) -> bool:
     """
     Si existe exactamente 1 dirección IPv4 asignada a las interfaces,
     la define como IP primaria (primary_ip4) del dispositivo/VM.
+    
+    Retorna True si se asignó exitosamente (o se simuló en dry-run), False de lo contrario.
     """
-    if len(ipv4_ids) != 1 or main_obj is None:
-        return
+    if len(ipv4_ids) != 1:
+        return False
 
     primary_id = ipv4_ids[0]
 
@@ -2971,7 +2973,7 @@ def _assign_primary_ipv4(
     )
 
     if current_primary_id == primary_id:
-        return
+        return False
 
     if dry_run:
         log.info(
@@ -2979,16 +2981,18 @@ def _assign_primary_ipv4(
             primary_id,
             machine_name,
         )
-        return
+        return True
 
     try:
         cast(Record, main_obj).update({"primary_ip4": primary_id})
         log.debug("IP primaria actualizada en '%s' (ID=%s)", machine_name, primary_id)
+        return True
     except RequestError:
         log.exception(
             "Fallo al actualizar IP primaria en '%s'",
             machine_name,
         )
+        return False
 
 
 def _sync_row(
@@ -3093,7 +3097,8 @@ def _sync_row(
         if iface_errors > 0:
             counts[SyncStatus.ERROR] += iface_errors
 
-        _assign_primary_ipv4(main_obj, ipv4_ids, machine_name, dry_run)
+        if main_obj is not None:
+            _assign_primary_ipv4(main_obj, ipv4_ids, machine_name, dry_run)
 
     except Exception:
         log.exception(
