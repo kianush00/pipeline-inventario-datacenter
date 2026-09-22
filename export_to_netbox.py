@@ -414,6 +414,7 @@ class CsvColumnDef(BaseModel):
     source: str = Field(min_length=1)
     required: bool = False
     map: dict[str, Any] | None = None
+    cluster_host_types: list[str] | None = None
 
 
 class NetBoxMappingConfig(BaseModel):
@@ -2506,8 +2507,16 @@ def sync_device(
     if payload.get("position") is not None and "face" not in payload:
         payload["face"] = "front"
 
+    # Determinar si el dispositivo es un hipervisor (host de cluster) según YAML
+    machine_type_col = config.csv_columns.get("machine_type")
+    is_hypervisor = (
+        machine_type_col is not None
+        and machine_type_col.cluster_host_types is not None
+        and machine_type in machine_type_col.cluster_host_types
+    )
+
     # Cluster para hipervisores.
-    if machine_type == "Hipervisor":
+    if is_hypervisor:
         cluster_id = _resolve_cluster(
             endpoints.clusters,
             row,

@@ -18,6 +18,8 @@ csv_columns:
       "Dedicada": "device"
       "Hipervisor": "device"
       "VM": "virtual_machine"
+    cluster_host_types:
+      - "Hipervisor"
   os:
     source: "SO Host"
   status:
