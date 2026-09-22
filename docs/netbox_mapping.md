@@ -128,6 +128,7 @@ Defines how to **extract** data from the CSV and **map** it to fields in the Net
 | Cast | Behavior |
 | ------ | --------------- |
 | `int` | Converts to integer |
+| `float` | Converts to float (decimal) |
 | `int_gb_to_mb` | Converts GB (string) to MB (integer) |
 | `bool_si_no` | Converts "Sí"/"No" to `true`/`false` |
 | `lower` | Converts to lowercase (used for UUID normalization) |

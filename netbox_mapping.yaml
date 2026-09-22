@@ -255,7 +255,6 @@ custom_field_definitions:
     required: false
     object_types:
       - "dcim.device"
-      - "virtualization.virtualmachine"
 
   - name: &cf_cpu_threads "cpu_threads"
     label: "Threads CPU"
@@ -423,6 +422,11 @@ node_types:
         target: "name"
         required: true
 
+      - source: *col_cpu_cores
+        target: "vcpus"
+        required: false
+        cast: "float"
+
       - source: *col_ram_gb
         target: "memory"
         required: false
@@ -451,10 +455,6 @@ node_types:
 
       - source: *col_cpu_model
         target: *cf_cpu_model
-
-      - source: *col_cpu_cores
-        target: *cf_cpu_cores
-        cast: "int"
 
       - source: *col_disks
         target: *cf_disks

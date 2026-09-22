@@ -53,6 +53,7 @@ from export_to_netbox import (
     get_node_type_from_row,
     load_config,
     parse_bool_si_no,
+    parse_float,
     parse_int,
     parse_int_gb_to_mb,
     parse_network_interfaces,
@@ -179,6 +180,23 @@ class TestParseInt:
         """Un float como '3.14' no es un entero válido."""
         with pytest.raises(ValueError, match="No es un número entero válido"):
             parse_int("3.14")
+
+
+class TestParseFloat:
+    """Verifica la conversión robusta de valores a decimales."""
+
+    def test_valid_float(self) -> None:
+        assert parse_float("3.14") == 3.14
+
+    def test_integer_to_float(self) -> None:
+        assert parse_float("42") == 42.0
+
+    def test_float_with_spaces(self) -> None:
+        assert parse_float("  -2.5  ") == -2.5
+
+    def test_invalid_value_raises_error(self) -> None:
+        with pytest.raises(ValueError, match="No es un número decimal válido"):
+            parse_float("abc")
 
 
 class TestParseIntGbToMb:
