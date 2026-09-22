@@ -1031,11 +1031,31 @@ class TestExecuteSync:
         )
         del mock_existing._init_cache
 
-        with pytest.raises(RequestError):
+        with pytest.raises(
+            NetBoxApiError, match="Error al actualizar NodeType.VIRTUAL_MACHINE 'SRV'"
+        ):
             _execute_sync(
                 endpoint,
                 {"name": "SRV-nuevo"},
                 [mock_existing],
+                "SRV",
+                "uuid",
+                dry_run=False,
+            )
+
+    def test_execute_sync_record_create_error(self) -> None:
+        endpoint = MagicMock()
+        endpoint.create.side_effect = RequestError(
+            MagicMock(status_code=400, reason="NetBox Reject")
+        )
+
+        with pytest.raises(
+            NetBoxApiError, match="Error al crear NodeType.VIRTUAL_MACHINE 'SRV'"
+        ):
+            _execute_sync(
+                endpoint,
+                {"name": "SRV"},
+                [],
                 "SRV",
                 "uuid",
                 dry_run=False,

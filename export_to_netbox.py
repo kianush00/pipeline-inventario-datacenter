@@ -1281,7 +1281,7 @@ def _sync_device_type_u_height(
             target_height_val,
         )
         return existing_dt
-    except Exception as e:
+    except RequestError as e:
         raise NetBoxApiError(
             f"Error actualizando u_height de DeviceType '{model}': {e}"
         ) from e
@@ -1520,7 +1520,7 @@ def _sync_single_device_role(
                 try:
                     role_obj.update({"vm_role": True})
                     log.info("DeviceRole actualizado para permitir VM: %s", name)
-                except Exception as e:
+                except RequestError as e:
                     raise NetBoxApiError(
                         f"Error actualizando DeviceRole '{name}': {e}"
                     ) from e
@@ -1548,7 +1548,7 @@ def _sync_single_device_role(
         log.info("DeviceRole creado: %s", name)
         device_roles_cache[key] = obj
         return obj
-    except Exception as e:
+    except RequestError as e:
         raise ConfigValidationError(f"Error creando DeviceRole '{name}': {e}") from e
 
 
@@ -1666,7 +1666,7 @@ def _ensure_choice_set(
                     order_alphabetically=False,
                 ),
             )
-        except Exception as e:
+        except RequestError as e:
             raise ConfigValidationError(
                 f"Error al crear Choice Set '{choice_set_name}': {e}"
             ) from e
@@ -1696,7 +1696,7 @@ def _ensure_choice_set(
             }
         )
         log.info("Choice Set actualizado: %s", choice_set_name)
-    except Exception as e:
+    except RequestError as e:
         raise ConfigValidationError(
             f"Error al actualizar Choice Set '{choice_set_name}': {e}"
         ) from e
@@ -1753,7 +1753,7 @@ def _ensure_custom_field(
         existing_cfs[name] = created_cf
         log.info("Custom field creado: %s", name)
         return created_cf
-    except Exception as e:
+    except RequestError as e:
         raise ConfigValidationError(f"Error al crear custom field '{name}': {e}") from e
 
 
@@ -2404,13 +2404,19 @@ def _execute_sync(
         return SyncStatus.UNCHANGED, existing_id, existing[0]
 
     if not existing:
-        obj = cast(Record, endpoint.create(**payload))
+        try:
+            obj = cast(Record, endpoint.create(**payload))
+        except RequestError as e:
+            raise NetBoxApiError(f"Error al crear {node_type} '{machine_name}': {e}") from e
         obj_id = get_netbox_object_id(obj)
         log.info("CREATED %s: %s (ID=%d)", node_type, machine_name, obj_id)
         return SyncStatus.CREATED, obj_id, obj
 
     existing_id = get_netbox_object_id(existing[0])
-    updated = existing[0].update(payload)
+    try:
+        updated = existing[0].update(payload)
+    except RequestError as e:
+        raise NetBoxApiError(f"Error al actualizar {node_type} '{machine_name}': {e}") from e
     if updated:
         log.info("UPDATED %s: %s", node_type, machine_name)
         return SyncStatus.UPDATED, existing_id, existing[0]
@@ -2873,7 +2879,7 @@ def _assign_ip(
                 }
             )
             return unassigned_ip
-        except Exception as e:
+        except RequestError as e:
             raise NetBoxApiError(f"Error actualizando IP libre {cidr}: {e}") from e
 
     # 3. Todas las IPs existentes están ocupadas por otros nodos. Crear una nueva.
@@ -2898,7 +2904,7 @@ def _assign_ip(
                 assigned_object_id=iface_obj.id,
             ),
         )
-    except Exception as e:
+    except RequestError as e:
         raise NetBoxApiError(f"Error creando IP {cidr}: {e}") from e
 
 
@@ -2943,7 +2949,7 @@ def _sync_single_interface(
                 cast(Record, existing_ifaces[name]).update(payload)
             else:
                 existing_ifaces[name] = cast(Record, iface_endpoint.create(**payload))
-        except Exception as e:
+        except RequestError as e:
             raise NetBoxApiError(f"Error procesando interfaz '{name}': {e}") from e
 
     ip_obj = None
