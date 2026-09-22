@@ -46,7 +46,9 @@ from export_to_netbox import (
     concat_dot,
     count_machine_names,
     create_with_fallback_slug,
+    ensure_cluster,
     ensure_manufacturer,
+    ensure_rack,
     ensure_site,
     extract_csv_value,
     get_netbox_object_id,
@@ -595,29 +597,37 @@ class TestValidateSelectChoice:
         )
 
     def test_multiselect_valid_single(self, cf_multiselect: CustomFieldConfig) -> None:
-        assert (
-            _validate_select_choice("Opcion1", cf_multiselect, "my_cf_multi", is_optional=False)
-            == ["Opcion1"]
-        )
+        assert _validate_select_choice(
+            "Opcion1", cf_multiselect, "my_cf_multi", is_optional=False
+        ) == ["Opcion1"]
 
-    def test_multiselect_valid_multiple(self, cf_multiselect: CustomFieldConfig) -> None:
-        assert (
-            _validate_select_choice("Opcion1, Opcion3", cf_multiselect, "my_cf_multi", is_optional=False)
-            == ["Opcion1", "Opcion3"]
-        )
+    def test_multiselect_valid_multiple(
+        self, cf_multiselect: CustomFieldConfig
+    ) -> None:
+        assert _validate_select_choice(
+            "Opcion1, Opcion3", cf_multiselect, "my_cf_multi", is_optional=False
+        ) == ["Opcion1", "Opcion3"]
 
-    def test_multiselect_invalid_optional_returns_none(self, cf_multiselect: CustomFieldConfig) -> None:
+    def test_multiselect_invalid_optional_returns_none(
+        self, cf_multiselect: CustomFieldConfig
+    ) -> None:
         assert (
-            _validate_select_choice("Opcion1, Invalida", cf_multiselect, "my_cf_multi", is_optional=True)
+            _validate_select_choice(
+                "Opcion1, Invalida", cf_multiselect, "my_cf_multi", is_optional=True
+            )
             is None
         )
 
-    def test_multiselect_invalid_required_raises_error(self, cf_multiselect: CustomFieldConfig) -> None:
+    def test_multiselect_invalid_required_raises_error(
+        self, cf_multiselect: CustomFieldConfig
+    ) -> None:
         with pytest.raises(
             RowValidationError,
             match="Valores inválidos '\\['Invalida'\\]' para el campo requerido 'my_cf_multi'",
         ):
-            _validate_select_choice("Opcion1, Invalida", cf_multiselect, "my_cf_multi", is_optional=False)
+            _validate_select_choice(
+                "Opcion1, Invalida", cf_multiselect, "my_cf_multi", is_optional=False
+            )
 
     def test_non_select_field_is_noop(self) -> None:
         cf_text = CustomFieldConfig(
@@ -1266,6 +1276,46 @@ class TestEnsureManufacturer:
         assert result.id == 8
         assert cache["Lenovo"].id == 8
         endpoint.create.assert_called_once_with(name="Lenovo", slug="lenovo")
+
+
+class TestEnsureRack:
+    """Verifica que ensure_rack capture RequestError al crear."""
+
+    def test_ensure_rack_request_error(self) -> None:
+        endpoint = MagicMock()
+        endpoint.filter.return_value = []
+        # Simulamos que la creación falla
+        endpoint.create.side_effect = RequestError(
+            MagicMock(status_code=400, reason="Bad Request")
+        )
+
+        site_mock = MockNetBoxRecord(id=1, name="Site1")
+        cache: dict[tuple[int, str], NetBoxObject] = {}
+
+        with pytest.raises(NetBoxApiError, match="No se pudo crear el Rack 'Rack1'"):
+            ensure_rack(endpoint, "Rack1", site_mock, cache, dry_run=False)
+
+
+class TestEnsureCluster:
+    """Verifica que ensure_cluster capture RequestError al crear."""
+
+    def test_ensure_cluster_request_error(self) -> None:
+        endpoint = MagicMock()
+        endpoint.filter.return_value = []
+        endpoint.create.side_effect = RequestError(
+            MagicMock(status_code=400, reason="Bad Request")
+        )
+
+        cluster_type_mock = MockNetBoxRecord(id=2, name="Type1")
+        site_mock = MockNetBoxRecord(id=1, name="Site1")
+        cache: dict[tuple[int, str], NetBoxObject] = {}
+
+        with pytest.raises(
+            NetBoxApiError, match="No se pudo crear el Cluster 'Cluster1'"
+        ):
+            ensure_cluster(
+                endpoint, "Cluster1", cluster_type_mock, site_mock, cache, dry_run=False
+            )
 
 
 class TestAssignPrimaryIPv4:

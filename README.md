@@ -69,6 +69,7 @@ python3 export_to_netbox.py merged_inventory.csv --dry-run
 ├── rundeck_header_list.txt       # Column schema and merge flags
 ├── requirements.txt
 ├── conftest.py
+├── .agents/skills/               # AI agent specialized skills
 ├── tests/                        # Unit test suite (pytest)
 ├── docs/                         # Project documentation
 │   ├── architecture.md

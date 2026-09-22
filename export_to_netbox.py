@@ -1441,7 +1441,10 @@ def ensure_rack(
         cache[cache_key] = obj
         return obj
 
-    obj = cast(Record, racks_endpoint.create(name=name, site=site_id))
+    try:
+        obj = cast(Record, racks_endpoint.create(name=name, site=site_id))
+    except RequestError as e:
+        raise NetBoxApiError(f"No se pudo crear el Rack '{name}': {e}") from e
     log.info("Rack creado: %s", name)
     cache[cache_key] = obj
     return obj
@@ -1475,14 +1478,17 @@ def ensure_cluster(
         cache[cache_key] = obj
         return obj
 
-    obj = cast(
-        Record,
-        clusters_endpoint.create(
-            name=name,
-            type=cluster_type_id,
-            site=site_id,
-        ),
-    )
+    try:
+        obj = cast(
+            Record,
+            clusters_endpoint.create(
+                name=name,
+                type=cluster_type_id,
+                site=site_id,
+            ),
+        )
+    except RequestError as e:
+        raise NetBoxApiError(f"No se pudo crear el Cluster '{name}': {e}") from e
     log.info("Cluster creado: %s", name)
     cache[cache_key] = obj
     return obj
