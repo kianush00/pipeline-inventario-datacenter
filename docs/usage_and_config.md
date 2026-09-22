@@ -22,8 +22,8 @@ Create and activate a local virtual environment from the root of the repository:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python3 -m pip install --upgrade pip
+python3 -m pip install -r requirements.txt
 ```
 
 Activate the environment again when a new terminal is opened:
@@ -72,22 +72,22 @@ Run the stages from the root of the repository with the virtual environment acti
 
 ```bash
 # 1. Parse the Rundeck job output
-python parse_job_output.py job_output.log parsed_job_output.csv
+python3 parse_job_output.py job_output.log [parsed_job_output.csv]
 
 # 2. Prepare the master spreadsheet
-python prepare_master_inventory.py master_inventory.ods prepared_master_inventory.csv
+python3 prepare_master_inventory.py master_inventory.ods [prepared_master_inventory.csv]
 
 # 3. Consolidate the parsed inventory with the master
-python merge_inventories.py parsed_job_output.csv prepared_master_inventory.csv merged_inventory.csv
+python3 merge_inventories.py parsed_job_output.csv prepared_master_inventory.csv [merged_inventory.csv]
 
 # 4. (Optional) Update a copy of the master sheet
-python update_master_inventory.py merged_inventory.csv master_inventory.ods master_inventory_updated.ods
+python3 update_master_inventory.py merged_inventory.csv master_inventory.ods [master_inventory_updated.ods]
 
 # 5. Preview the synchronization with NetBox
-python export_to_netbox.py merged_inventory.csv --dry-run
+python3 export_to_netbox.py merged_inventory.csv --dry-run
 
 # 6. Apply the synchronization to NetBox
-python export_to_netbox.py merged_inventory.csv
+python3 export_to_netbox.py merged_inventory.csv
 ```
 
 ### Additional Exporter Options
@@ -95,11 +95,11 @@ python export_to_netbox.py merged_inventory.csv
 Each script supports optional paths for its input and output files as described in its help text. The mapping path is optional; by default, `export_to_netbox.py` loads `netbox_mapping.yaml` from the script's directory. A custom mapping can be provided as the second positional argument:
 
 ```bash
-python export_to_netbox.py merged_inventory.csv custom_netbox_mapping.yaml --dry-run
+python3 export_to_netbox.py merged_inventory.csv [custom_netbox_mapping.yaml] --dry-run
 ```
 
 Use `--verbose` to enable DEBUG logging:
 
 ```bash
-python export_to_netbox.py merged_inventory.csv --dry-run --verbose
+python3 export_to_netbox.py merged_inventory.csv --dry-run --verbose
 ```

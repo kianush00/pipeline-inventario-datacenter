@@ -70,6 +70,7 @@ SUPPORTED_EXTENSIONS = {".ods", ".xlsx"}
 # NORMALIZACIÓN Y CONVERSIÓN DE VALORES
 # ============================================================
 
+
 def normalize_value(value) -> str:
     """
     Normaliza un valor (proveniente de una celda del spreadsheet o
@@ -126,6 +127,7 @@ def column_letter(index0: int) -> str:
 # LIBREOFFICE: CONVERSIÓN GENÉRICA ENTRE FORMATOS
 # ============================================================
 
+
 def convert_with_libreoffice(
     libreoffice: str,
     input_path: Path,
@@ -135,8 +137,10 @@ def convert_with_libreoffice(
     command = [
         libreoffice,
         "--headless",
-        "--convert-to", target_format,
-        "--outdir", str(out_dir),
+        "--convert-to",
+        target_format,
+        "--outdir",
+        str(out_dir),
         str(input_path),
     ]
     result = subprocess.run(
@@ -164,6 +168,7 @@ def convert_with_libreoffice(
 # ============================================================
 # LOCALIZAR HEADER Y CONTAR FILAS DE DATOS EN EL MAESTRO
 # ============================================================
+
 
 def find_header_row_number(ws: Worksheet, merged_header: list[str]) -> int | None:
     """
@@ -212,6 +217,7 @@ def count_master_data_rows(ws: Worksheet, header_row_number: int, n_cols: int) -
 # ============================================================
 # ACTUALIZAR UN ARCHIVO XLSX (EDICIÓN DIRECTA)
 # ============================================================
+
 
 def get_active_worksheet(wb: Workbook) -> Worksheet:
     """Obtiene la hoja de cálculo activa de un libro de trabajo."""
@@ -264,9 +270,7 @@ def update_xlsx(
 
     print(f"Fila de header detectada en el maestro : {header_row_number}")
 
-    master_data_rows = count_master_data_rows(
-        ws, header_row_number, n_cols
-    )
+    master_data_rows = count_master_data_rows(ws, header_row_number, n_cols)
 
     if master_data_rows != len(merged_rows):
         error(
@@ -289,7 +293,7 @@ def update_xlsx(
             new_norm = normalize_value(new_value_str)
 
             if current_norm == new_norm:
-                continue    # No hay cambio, no sobrescribir.
+                continue  # No hay cambio, no sobrescribir.
 
             cell.value = coerce_for_cell(new_value_str)
 
@@ -305,16 +309,14 @@ def update_xlsx(
 # REPORTE DE CAMBIOS
 # ============================================================
 
+
 def print_change_report(
     changes: dict[str, list[str]],
     merged_header: list[str],
 ) -> None:
     print()
     if not changes:
-        print(
-            "No se detectaron cambios respecto al spreadsheet "
-            "maestro previo."
-        )
+        print("No se detectaron cambios respecto al spreadsheet maestro previo.")
         return
 
     print("Columnas modificadas:")
@@ -332,6 +334,7 @@ def print_change_report(
 # ============================================================
 # MAIN
 # ============================================================
+
 
 def main() -> None:
     if len(sys.argv) < 3:
@@ -372,8 +375,7 @@ def main() -> None:
     output_path = (
         Path(sys.argv[3])
         if len(sys.argv) >= 4
-        else master_path.parent
-        / f"{master_path.stem}_updated{master_path.suffix}"
+        else master_path.parent / f"{master_path.stem}_updated{master_path.suffix}"
     )
 
     if output_path.suffix.lower() != ext:
@@ -407,9 +409,7 @@ def main() -> None:
     # --------------------------------------------------------
     # Cargar inventario fusionado.
     # --------------------------------------------------------
-    _header_line, header_fields_raw, rows_raw = load_csv_data(
-        merged_csv_path
-    )
+    _header_line, header_fields_raw, rows_raw = load_csv_data(merged_csv_path)
     merged_header = [strip_quotes(f) for f in header_fields_raw]
     n_cols = len(merged_header)
 
@@ -417,10 +417,10 @@ def main() -> None:
     merged_rows = [[strip_quotes(v) for v in row] for row in rows_raw]
 
     print()
-    print(f"Inventario fusionado             : {merged_csv_path}")
-    print(f"Spreadsheet maestro               : {master_path}")
-    print(f"Spreadsheet de salida             : {output_path}")
-    print(f"Columnas en inventario fusionado : {n_cols}")
+    print(f"Inventario fusionado                   : {merged_csv_path}")
+    print(f"Spreadsheet maestro                    : {master_path}")
+    print(f"Spreadsheet de salida                  : {output_path}")
+    print(f"Columnas en inventario fusionado       : {n_cols}")
     print(f"Filas de datos en inventario fusionado : {len(merged_rows)}")
 
     # --------------------------------------------------------
@@ -449,10 +449,7 @@ def main() -> None:
                 libreoffice = find_libreoffice()
 
                 print()
-                print(
-                    "Convirtiendo copia del maestro a XLSX "
-                    "(edición intermedia)..."
-                )
+                print("Convirtiendo copia del maestro a XLSX (edición intermedia)...")
                 xlsx_tmp = convert_with_libreoffice(
                     libreoffice, master_path, "xlsx", tmp_dir
                 )

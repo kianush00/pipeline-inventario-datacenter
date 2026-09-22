@@ -34,10 +34,10 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 # Run the pipeline
-python parse_job_output.py job_output.log parsed_job_output.csv
-python prepare_master_inventory.py master_inventory.ods prepared_master_inventory.csv
-python merge_inventories.py parsed_job_output.csv prepared_master_inventory.csv merged_inventory.csv
-python export_to_netbox.py merged_inventory.csv --dry-run
+python3 parse_job_output.py job_output.log [parsed_job_output.csv]
+python3 prepare_master_inventory.py master_inventory.ods [prepared_master_inventory.csv]
+python3 merge_inventories.py parsed_job_output.csv prepared_master_inventory.csv [merged_inventory.csv]
+python3 export_to_netbox.py merged_inventory.csv --dry-run
 ```
 
 ---

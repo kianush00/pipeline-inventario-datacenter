@@ -91,7 +91,13 @@ Antes de dar cualquier modificación por concluida, **como agente DEBES verifica
 - **Visión a largo plazo y No Redundancia:** Agrega las nuevas pruebas unitarias al archivo de tests correspondiente para aumentar la cobertura (test coverage) del código, pero **evita crear tests redundantes**. Antes de escribir un test, revisa los existentes para asegurar que el escenario no esté ya cubierto. Añade nuevas pruebas únicamente si aportan un valor real y son convenientes para la mantenibilidad a largo plazo del proyecto.
 - **Imports en Pruebas:** Todos los `import` necesarios para las pruebas deben declararse al inicio del archivo (ámbito global). Prohibido anidar o colocar imports dentro de las funciones de test.
 
-## 9. Metodología Multiagente Híbrida
+## 9. Metodología de Revisión Especializada y Cambio de Rol (Skills)
 
-- **Flujo de Validación:** Al concluir la implementación de una funcionalidad compleja, o cuando consideres que tu tarea está "lista", DEBES asumir proactivamente (o solicitar al usuario que lo haga) el uso de las habilidades `qa-tester` y `code-reviewer`.
-- **Delegación de Responsabilidades:** No asumas que tu propio código es perfecto. Aprovecha el cambio de contexto que otorgan los skills de Antigravity (`.agents/skills/`) para autoevaluar y estresar tu propio código bajo un rol distinto antes de dar el trabajo por finalizado.
+Para prevenir la ceguera de confirmación, **como agente NO debes dar por concluido un cambio sin ejecutar una fase de revisión crítica**:
+
+- **Criterio de Activación Obligatoria:** Si la tarea modifica lógica de parseo, contratos de datos (`netbox_mapping.yaml`), estructuras de base de datos/API en `export_to_netbox.py`, o supera las 30 líneas modificadas, el uso de las skills es **estrictamente obligatorio**.
+- **Mecanismo de Ejecución:**
+  1. **Fase de Implementación:** Desarrolla el código siguiendo los estándares 1 al 8.
+  2. **Fase de QA/Test (`qa-tester`):** Carga y ejecuta las directivas ubicadas en `.agents/skills/qa-tester/` (o invoca el skill correspondiente). Evalúa edge cases (valores nulos, arrays desalineados, fallos de API) y añade los tests unitarios faltantes en `tests/`.
+  3. **Fase de Auditoría de Código (`code-reviewer`):** Carga y ejecuta las directivas ubicadas en `.agents/skills/code-reviewer/`. Audita el diff final bajo una postura adversaria y crítica buscando code smells, tipos frágiles, fugas de memoria o quiebres de consistencia arquitectónica.
+- **Transparencia en la Respuesta:** En el reporte final al usuario, debes incluir explícitamente un bloque que resuma los hallazgos o aprobaciones emitidas tras pasar por los skills de `qa-tester` y `code-reviewer`.
