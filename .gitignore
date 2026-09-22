@@ -77,6 +77,10 @@ dist/
 # =========================
 # Agents
 # =========================
-.agents/
 .antigravity/
+.agents/*
+
+# Permitir exclusivamente el versionado de skills
+!.agents/skills/
+!.agents/skills/**
 
