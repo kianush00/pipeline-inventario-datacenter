@@ -720,16 +720,16 @@ class TestResolveNetboxStatus:
             col_name: "Activo",
             config.csv_columns["machine_type"].source: "Dedicada",
         }
-        assert _resolve_netbox_status(row, config) == "active"
+        assert _resolve_netbox_status(row, config, NodeType.DEVICE) == "active"
 
     def test_unmapped_status_fallback(self, config: NetBoxMappingConfig) -> None:
         col_name = config.csv_columns["status"].source
         row = {col_name: "Desconocido", config.csv_columns["machine_type"].source: "VM"}
-        assert _resolve_netbox_status(row, config) == "staged"
+        assert _resolve_netbox_status(row, config, NodeType.VIRTUAL_MACHINE) == "staged"
 
     def test_empty_status_fallback(self, config: NetBoxMappingConfig) -> None:
         row = {config.csv_columns["machine_type"].source: "Dedicada"}
-        assert _resolve_netbox_status(row, config) == "inventory"
+        assert _resolve_netbox_status(row, config, NodeType.DEVICE) == "inventory"
 
 
 class TestResolveDeviceRole:

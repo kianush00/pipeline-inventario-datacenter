@@ -2016,14 +2016,15 @@ def build_payload(
 # ============================================================
 
 
-def _resolve_netbox_status(row: CsvRow, config: NetBoxMappingConfig) -> str:
+def _resolve_netbox_status(
+    row: CsvRow, config: NetBoxMappingConfig, node_type: NodeType
+) -> str:
     """
     Resuelve el status NetBox a partir de la columna 'Estado'.
 
     Si el valor no existe en status_map, se aplica el fallback
     correspondiente al tipo de nodo.
     """
-    node_type: NodeType = get_node_type_from_row(row, config)
     status_csv = extract_csv_value(row, "status", config)
 
     status_mapped = config.map_value("status", status_csv, strict=False)
@@ -2425,6 +2426,7 @@ def _validate_sync(
 
 
 def _resolve_base_node(
+    node_type: NodeType,
     endpoints: NetBoxEndpoints,
     row: CsvRow,
     config: NetBoxMappingConfig,
@@ -2450,7 +2452,7 @@ def _resolve_base_node(
         payload["platform"] = platform_id
 
     payload["role"] = _resolve_device_role(row, caches.device_roles, config)
-    payload["status"] = _resolve_netbox_status(row, config)
+    payload["status"] = _resolve_netbox_status(row, config, node_type)
     payload["site"] = get_netbox_object_id(site)
 
     return {
@@ -2484,6 +2486,7 @@ def sync_device(
 
     # Resolvemos los campos base
     base = _resolve_base_node(
+        NodeType.DEVICE,
         endpoints,
         row,
         config,
@@ -2576,6 +2579,7 @@ def sync_vm(
 
     # Resolvemos los campos base
     base = _resolve_base_node(
+        NodeType.VIRTUAL_MACHINE,
         endpoints,
         row,
         config,
