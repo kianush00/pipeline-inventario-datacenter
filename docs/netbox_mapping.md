@@ -34,7 +34,7 @@ Each entry defines a semantic key used by the Python script with the following s
 ### Expected Cell Format
 
 - **Simple fields (Strings, Numbers):** Direct value. `.strip()` is applied.
-- **Multiple fields (Networking):** List of values separated by commas (`,`). The script performs a `split(",")` and associates elements by index.
+- **Multiple fields (Networking & `multiselect` Custom Fields):** List of values separated by commas (`,`).
 - **Empty values:** If the value matches any element in `empty_values`, it is treated as `None` and is not sent to NetBox.
 
 ---

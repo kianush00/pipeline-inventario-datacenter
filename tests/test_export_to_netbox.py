@@ -577,6 +577,48 @@ class TestValidateSelectChoice:
         ):
             _validate_select_choice("OpcionX", cf_select, "my_cf", is_optional=False)
 
+    @pytest.fixture
+    def cf_multiselect(self) -> CustomFieldConfig:
+        return CustomFieldConfig(
+            name="my_cf_multi",
+            label="My CF Multi",
+            type="multiselect",
+            required=False,
+            choice_set=ChoiceSetConfig(
+                name="multi_choices",
+                choices=[
+                    ChoiceItemConfig(value="Opcion1", label="Op 1"),
+                    ChoiceItemConfig(value="Opcion2", label="Op 2"),
+                    ChoiceItemConfig(value="Opcion3", label="Op 3"),
+                ],
+            ),
+        )
+
+    def test_multiselect_valid_single(self, cf_multiselect: CustomFieldConfig) -> None:
+        assert (
+            _validate_select_choice("Opcion1", cf_multiselect, "my_cf_multi", is_optional=False)
+            == ["Opcion1"]
+        )
+
+    def test_multiselect_valid_multiple(self, cf_multiselect: CustomFieldConfig) -> None:
+        assert (
+            _validate_select_choice("Opcion1, Opcion3", cf_multiselect, "my_cf_multi", is_optional=False)
+            == ["Opcion1", "Opcion3"]
+        )
+
+    def test_multiselect_invalid_optional_returns_none(self, cf_multiselect: CustomFieldConfig) -> None:
+        assert (
+            _validate_select_choice("Opcion1, Invalida", cf_multiselect, "my_cf_multi", is_optional=True)
+            is None
+        )
+
+    def test_multiselect_invalid_required_raises_error(self, cf_multiselect: CustomFieldConfig) -> None:
+        with pytest.raises(
+            RowValidationError,
+            match="Valores inválidos '\\['Invalida'\\]' para el campo requerido 'my_cf_multi'",
+        ):
+            _validate_select_choice("Opcion1, Invalida", cf_multiselect, "my_cf_multi", is_optional=False)
+
     def test_non_select_field_is_noop(self) -> None:
         cf_text = CustomFieldConfig(
             name="my_cf", label="My CF", type="text", required=False

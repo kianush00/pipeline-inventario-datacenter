@@ -141,7 +141,7 @@ class CastType(str, Enum):
 NetBoxObject: TypeAlias = Union[Record, "MockNetBoxRecord"]
 SyncResult: TypeAlias = tuple[SyncStatus, int, NetBoxObject | None]
 CsvRow: TypeAlias = dict[str, str]
-FieldValue: TypeAlias = str | int | float | bool | None
+FieldValue: TypeAlias = str | int | float | bool | list[str] | None
 CustomFieldsPayload: TypeAlias = dict[str, FieldValue]
 SyncCounts: TypeAlias = dict[SyncStatus, int]
 NetBoxPayload: TypeAlias = dict[str, Any]
@@ -337,9 +337,9 @@ class CustomFieldConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_choice_set_if_select(self) -> "CustomFieldConfig":
-        if self.type == "select" and not self.choice_set:
+        if self.type in ("select", "multiselect") and not self.choice_set:
             raise ValueError(
-                "Los campos de tipo 'select' deben definir un 'choice_set'."
+                "Los campos de tipo 'select' o 'multiselect' deben definir un 'choice_set'."
             )
         return self
 
@@ -1872,16 +1872,36 @@ def _validate_select_choice(
 ) -> FieldValue:
     """
     Valida value contra choice_set cuando el Custom Field es de tipo
-    'select'. No-op para cualquier otro tipo de campo.
+    'select' o 'multiselect'. No-op para cualquier otro tipo de campo.
     """
     if not (
         custom_field_def
-        and custom_field_def.type == "select"
+        and custom_field_def.type in ("select", "multiselect")
         and custom_field_def.choice_set
     ):
         return value
 
     valid_choices = [c.value for c in custom_field_def.choice_set.choices]
+
+    if custom_field_def.type == "multiselect":
+        parts = [p.strip() for p in str(value).split(",") if p.strip()]
+        invalid_parts = [p for p in parts if p not in valid_choices]
+
+        if not invalid_parts:
+            return parts
+
+        log.warning(
+            "Valores %s no son válidos para el Custom Field multiselect '%s'. Opciones válidas: %s.",
+            invalid_parts,
+            target,
+            valid_choices,
+        )
+        if is_optional:
+            return None
+        raise RowValidationError(
+            f"Valores inválidos '{invalid_parts}' para el campo requerido '{target}'."
+        )
+
     if value in valid_choices:
         return value
 
