@@ -659,12 +659,12 @@ class TestResolveFieldValue:
         )
 
     def test_mapped_field(self, config: NetBoxMappingConfig) -> None:
-        # machine_type ya tiene mapeo en YAML: Dedicada -> device
+        # machine_type ya tiene mapeo en YAML: Dedicada -> dedicated
         col_name = config.csv_columns["machine_type"].source
         row = {col_name: "Dedicada"}
         field_def = FieldMappingConfig(target="tipo", source=col_name)
         assert (
-            _resolve_field_value(row, field_def, config, is_optional=True) == "device"
+            _resolve_field_value(row, field_def, config, is_optional=True) == "dedicated"
         )
 
     def test_cast_field(self, config: NetBoxMappingConfig) -> None:
@@ -758,16 +758,16 @@ class TestBuildPayload:
         native_map = [FieldMappingConfig(source="Nombre", target="name")]
         custom_map = [
             FieldMappingConfig(source="vCPUs", target="cpu_cores"),
-            FieldMappingConfig(source="Tipo_maquina", target="machine_type"),
+            FieldMappingConfig(source="Tipo de maquina", target="machine_type"),
         ]
-        row = {"Nombre": "SRV", "vCPUs": "4", "Tipo_maquina": "Dedicada"}
+        row = {"Nombre": "SRV", "vCPUs": "4", "Tipo de maquina": "Dedicada"}
 
         payload = build_payload(row, native_map, custom_map, config)
 
         assert payload["name"] == "SRV"
         assert "custom_fields" in payload
         assert payload["custom_fields"]["cpu_cores"] == "4"
-        assert payload["custom_fields"]["machine_type"] == "Dedicada"
+        assert payload["custom_fields"]["machine_type"] == "dedicated"
 
 
 class TestResolveNetboxStatus:

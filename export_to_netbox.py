@@ -415,6 +415,7 @@ class CsvColumnDef(BaseModel):
     required: bool = False
     map: dict[str, Any] | None = None
     cluster_host_types: list[str] | None = None
+    virtual_machine_types: list[str] = Field(default_factory=list)
 
 
 class NetBoxMappingConfig(BaseModel):
@@ -520,22 +521,6 @@ class NetBoxMappingConfig(BaseModel):
                 return col_def
         return None
 
-    def map_value(self, alias: str, value: str, strict: bool = True) -> Any:
-        """
-        Aplica el mapa de transformación de la columna identificada por su `alias`.
-        Si la columna no tiene mapa, devuelve el `value` original.
-        Si la columna tiene mapa y el valor no existe en él:
-            - Si strict=True, levanta RowValidationError.
-            - Si strict=False, devuelve None.
-        """
-        col_def = self.csv_columns.get(alias)
-        return self._apply_map(col_def, value, f"columna '{alias}'", strict)
-
-    def map_value_by_source(self, source: str, value: str, strict: bool = True) -> Any:
-        """Igual que map_value, pero busca la columna por su nombre exacto (source) en el CSV."""
-        col_def = self.get_column_def_by_source(source)
-        return self._apply_map(col_def, value, f"columna de origen '{source}'", strict)
-
     def _apply_map(
         self, col_def: CsvColumnDef | None, value: str, identifier: str, strict: bool
     ) -> Any:
@@ -553,6 +538,22 @@ class NetBoxMappingConfig(BaseModel):
             f"El valor '{value}' de la {identifier} no está definido en el mapa configurado."
         )
 
+    def map_value(self, alias: str, value: str, strict: bool = True) -> Any:
+        """
+        Aplica el mapa de transformación de la columna identificada por su `alias`.
+        Si la columna no tiene mapa, devuelve el `value` original.
+        Si la columna tiene mapa y el valor no existe en él:
+            - Si strict=True, levanta RowValidationError.
+            - Si strict=False, devuelve None.
+        """
+        col_def = self.csv_columns.get(alias)
+        return self._apply_map(col_def, value, f"columna '{alias}'", strict)
+
+    def map_value_by_source(self, source: str, value: str, strict: bool = True) -> Any:
+        """Igual que map_value, pero busca la columna por su nombre exacto (source) en el CSV."""
+        col_def = self.get_column_def_by_source(source)
+        return self._apply_map(col_def, value, f"columna de origen '{source}'", strict)
+
     def get_custom_field_def(self, target: str) -> CustomFieldConfig | None:
         """Retorna la definición de un Custom Field en O(1) por nombre de target."""
         return self._custom_field_defs_map.get(target)
@@ -569,20 +570,21 @@ class NetBoxMappingConfig(BaseModel):
 
     def resolve_node_type(self, machine_type: str) -> NodeType:
         """
-        Resuelve el NodeType ('device' o 'virtual_machine') a partir de un machine_type.
-        Lanza RowValidationError si el mapeo es inválido.
+        Resuelve el NodeType ('device' o 'virtual_machine') basándose en las listas
+        semánticas de virtual_machine_types.
+        Lanza RowValidationError si el campo está vacío.
         """
         if not machine_type:
             raise RowValidationError("El campo 'machine_type' está vacío.")
 
-        node_type = self.map_value("machine_type", machine_type, strict=True)
+        mapped_type = self.map_value("machine_type", machine_type, strict=True)
 
-        try:
-            return NodeType(node_type)
-        except ValueError:
-            raise ValueError(
-                f"El mapeo de machine_type resolvió '{node_type}', el cual no es un NodeType válido."
-            )
+        col_def = self.csv_columns.get("machine_type")
+        vm_types = col_def.virtual_machine_types if col_def else []
+
+        if mapped_type in vm_types:
+            return NodeType.VIRTUAL_MACHINE
+        return NodeType.DEVICE
 
 
 # ===========================================================

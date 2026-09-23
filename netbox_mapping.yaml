@@ -15,13 +15,17 @@ csv_columns:
     source: &col_machine_type "Tipo de maquina"
     required: true
     map:
-      "Dedicada": "device"
-      "device": "device"
-      "Hipervisor": "device"
-      "VM": "virtual_machine"
-      "virtual_machine": "virtual_machine"
+      "Dedicada": "dedicated"
+      "dedicated": "dedicated"
+      "Hipervisor": "hypervisor"
+      "hypervisor": "hypervisor"
+      "VM": "vm"
+      "vm": "vm"
     cluster_host_types:
-      - "Hipervisor"
+      - "hypervisor"
+    virtual_machine_types:
+      - "vm"
+
   os:
     source: "SO Host"
   status:
@@ -216,11 +220,11 @@ custom_field_definitions:
     choice_set:
       name: "Machine Type"
       choices:
-        - value: "Dedicada"
+        - value: "dedicated"
           label: "Dedicada"
-        - value: "Hipervisor"
+        - value: "hypervisor"
           label: "Hipervisor"
-        - value: "VM"
+        - value: "vm"
           label: "VM"
 
   - name: &cf_environment "environment"
