@@ -247,6 +247,10 @@ class TestParseIntGbToMb:
         """0.5 GB = 512 MB."""
         assert parse_int_gb_to_mb("0.5") == 512
 
+    def test_gb_decimal_comma(self) -> None:
+        """Soporta formato hispano: 7,8 GB = 7987 MB."""
+        assert parse_int_gb_to_mb("7,8") == 7987
+
     def test_with_spaces(self) -> None:
         assert parse_int_gb_to_mb("  16  ") == 16384
 

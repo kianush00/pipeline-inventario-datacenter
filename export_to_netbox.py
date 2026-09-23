@@ -719,7 +719,7 @@ def parse_float_to_int(value: Any) -> int:
 def parse_int_gb_to_mb(value: Any) -> int:
     """Convierte GB (string/float) a MB (entero). NetBox espera MB para memory."""
     try:
-        gb = float(str(value).strip())
+        gb = float(str(value).strip().replace(',', '.'))
         return round(gb * 1024)
     except (ValueError, TypeError) as e:
         raise ValueError("No es un valor numérico válido.") from e
