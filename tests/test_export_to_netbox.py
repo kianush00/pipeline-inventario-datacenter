@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 from pynetbox.core.query import RequestError  # type: ignore
 
+import export_to_netbox
 from export_to_netbox import (
     CastType,
     ChoiceItemConfig,
@@ -38,6 +39,7 @@ from export_to_netbox import (
     _resolve_device_role,
     _resolve_field_value,
     _resolve_netbox_status,
+    _sync_device_type_u_height,
     _validate_csv_headers,
     _validate_interface_ip,
     _validate_select_choice,
@@ -1380,3 +1382,97 @@ class TestAssignPrimaryIPv4:
         res = _assign_primary_ipv4(mock_obj, [15], "srv", False)
         assert res is True
         mock_obj.update.assert_called_once_with({"primary_ip4": 15})
+
+
+class TestSyncDeviceTypeUHeight:
+    """Verifica la sincronización de u_height en DeviceTypes."""
+
+    def test_sync_no_update_needed(self) -> None:
+        existing = MagicMock()
+        existing.u_height = 1.5
+        # fractional target height matches
+        _ = _sync_device_type_u_height(existing, "Model A", 1.5, False)
+        existing.update.assert_not_called()
+
+    def test_sync_update_needed(self) -> None:
+        existing = MagicMock()
+        existing.u_height = 1.0
+        # update to fractional
+        _ = _sync_device_type_u_height(existing, "Model B", 1.5, False)
+        existing.update.assert_called_once_with({"u_height": 1.5})
+
+
+class TestResolveDeviceTypeUHeight:
+    """QA Tester verification para extracción de alturas fraccionarias."""
+
+    def test_fractional_u_height(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Mock dependencias para aislar _resolve_device_type
+        monkeypatch.setattr(
+            export_to_netbox, "ensure_manufacturer", lambda *args, **kwargs: MagicMock()
+        )
+
+        mock_ensure_device_type = MagicMock()
+        monkeypatch.setattr(
+            export_to_netbox, "ensure_device_type", mock_ensure_device_type
+        )
+
+        def mock_extract(
+            row: dict[str, Any], key: str, config: Any, *args: Any, **kwargs: Any
+        ) -> Any:
+            if key == "alt_u":
+                return row.get(key)
+            return "mocked"
+
+        monkeypatch.setattr(export_to_netbox, "extract_csv_value", mock_extract)
+        monkeypatch.setattr(export_to_netbox, "get_netbox_object_id", lambda x: 1)
+
+        row = {"manufacturer": "Dell", "model": "R740", "alt_u": "1.5"}
+        export_to_netbox._resolve_device_type(
+            endpoints=MagicMock(),
+            row=row,
+            caches=MagicMock(),
+            config=MagicMock(),
+            dry_run=False,
+        )
+
+        # Verificar que ensure_device_type recibe el argumento u_height como un float=1.5
+        mock_ensure_device_type.assert_called_once()
+        args, _ = mock_ensure_device_type.call_args
+        # ensure_device_type(device_types_endpoint, manufacturer, model, u_height, cache, dry_run)
+        assert args[3] == 1.5
+        assert isinstance(args[3], float)
+
+    def test_empty_u_height_defaults_to_1_0(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            export_to_netbox, "ensure_manufacturer", lambda *args, **kwargs: MagicMock()
+        )
+        mock_ensure_device_type = MagicMock()
+        monkeypatch.setattr(
+            export_to_netbox, "ensure_device_type", mock_ensure_device_type
+        )
+
+        def mock_extract(
+            row: dict[str, Any], key: str, config: Any, *args: Any, **kwargs: Any
+        ) -> Any:
+            if key == "alt_u":
+                return ""  # Simulamos celda vacía
+            return "mocked"
+
+        monkeypatch.setattr(export_to_netbox, "extract_csv_value", mock_extract)
+        monkeypatch.setattr(export_to_netbox, "get_netbox_object_id", lambda x: 1)
+
+        row = {"alt_u": ""}
+        export_to_netbox._resolve_device_type(
+            endpoints=MagicMock(),
+            row=row,
+            caches=MagicMock(),
+            config=MagicMock(),
+            dry_run=False,
+        )
+
+        mock_ensure_device_type.assert_called_once()
+        args, _ = mock_ensure_device_type.call_args
+        assert args[3] == 1.0
+        assert isinstance(args[3], float)

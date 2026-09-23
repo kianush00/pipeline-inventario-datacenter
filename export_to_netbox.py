@@ -1258,14 +1258,14 @@ def ensure_manufacturer(
 def _sync_device_type_u_height(
     existing_dt: Record,
     model: str,
-    target_height: int,
+    target_height: float,
     dry_run: bool,
 ) -> Record:
     """
     Sincroniza la altura en U del modelo de servidor.
     Retorna el objeto DeviceType modificado (o intacto).
     """
-    target_height_val = target_height or 1
+    target_height_val = target_height or 1.0
     current_height = float(getattr(existing_dt, "u_height", 1) or 1)
 
     if current_height == float(target_height_val):
@@ -1299,11 +1299,11 @@ def _create_device_type(
     model: str,
     slug: str,
     manufacturer_id: int,
-    u_height: int,
+    u_height: float,
     manufacturer_name: str,
 ) -> Record:
     """Intenta crear el DeviceType, manejando colisiones de slug."""
-    u_height_val = u_height or 1
+    u_height_val = u_height or 1.0
     return create_with_fallback_slug(
         endpoint,
         "DeviceType",
@@ -1319,7 +1319,7 @@ def ensure_device_type(
     device_types_endpoint: Endpoint,
     manufacturer: NetBoxObject,
     model: str,
-    u_height: int,
+    u_height: float,
     cache: dict[tuple[str, str], NetBoxObject],
     dry_run: bool,
 ) -> NetBoxObject:
@@ -2151,10 +2151,10 @@ def _resolve_device_type(
 
     raw_u_height = extract_csv_value(row, "alt_u", config)
     if not raw_u_height:
-        u_height = 1
+        u_height = 1.0
     else:
         try:
-            u_height = parse_int(raw_u_height) or 1
+            u_height = parse_float(raw_u_height) or 1.0
         except ValueError:
             raise RowValidationError(
                 f"Valor numérico inválido '{raw_u_height}' para 'alt_u'."
