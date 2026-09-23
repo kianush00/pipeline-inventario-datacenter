@@ -836,8 +836,15 @@ def resolve_mapping_path(args_mapping: str | None) -> Path:
 def count_machine_names(
     rows: list[CsvRow], config: NetBoxMappingConfig
 ) -> Counter[str]:
-    """Genera un conteo de las ocurrencias de nombres de máquinas en el CSV."""
-    return Counter(extract_csv_value(row, "machine_name", config) for row in rows)
+    """Genera un conteo de las ocurrencias de nombres de máquinas en el CSV (ignorando vacíos)."""
+    counts = Counter[str]()
+    for row in rows:
+        val = extract_csv_value(row, "machine_name", config)
+        if isinstance(val, str):
+            name = val.strip()
+            if name:
+                counts[name] += 1
+    return counts
 
 
 # ============================================================
@@ -2407,7 +2414,9 @@ def _execute_sync(
         try:
             obj = cast(Record, endpoint.create(**payload))
         except RequestError as e:
-            raise NetBoxApiError(f"Error al crear {node_type} '{machine_name}': {e}") from e
+            raise NetBoxApiError(
+                f"Error al crear {node_type} '{machine_name}': {e}"
+            ) from e
         obj_id = get_netbox_object_id(obj)
         log.info("CREATED %s: %s (ID=%d)", node_type, machine_name, obj_id)
         return SyncStatus.CREATED, obj_id, obj
@@ -2416,7 +2425,9 @@ def _execute_sync(
     try:
         updated = existing[0].update(payload)
     except RequestError as e:
-        raise NetBoxApiError(f"Error al actualizar {node_type} '{machine_name}': {e}") from e
+        raise NetBoxApiError(
+            f"Error al actualizar {node_type} '{machine_name}': {e}"
+        ) from e
     if updated:
         log.info("UPDATED %s: %s", node_type, machine_name)
         return SyncStatus.UPDATED, existing_id, existing[0]

@@ -434,12 +434,17 @@ class TestCountMachineNames:
             {col_name: "SRV-02"},
             {col_name: "SRV-01"},
             {col_name: "SRV-03"},
+            {col_name: ""},
+            {col_name: "   "},
+            {},  # None from get
         ]
         counts = count_machine_names(rows, config)
         assert counts["SRV-01"] == 2
         assert counts["SRV-02"] == 1
         assert counts["SRV-03"] == 1
         assert counts["SRV-04"] == 0
+        assert counts[""] == 0
+        assert counts["   "] == 0
 
 
 class TestValidateCsvHeaders:
