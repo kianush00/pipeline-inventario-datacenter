@@ -1371,9 +1371,12 @@ def ensure_device_type(
     if key in cache:
         return cache[key]
 
-    results: list[Record] = list(
-        device_types_endpoint.filter(model=model, manufacturer_id=manufacturer_id)
-    )
+    if manufacturer_id == 0:
+        results = []
+    else:
+        results = list(
+            device_types_endpoint.filter(model=model, manufacturer_id=manufacturer_id)
+        )
     if results:
         existing_dt = _sync_device_type_u_height(results[0], model, u_height, dry_run)
         cache[key] = existing_dt
@@ -1476,7 +1479,10 @@ def ensure_rack(
     if cache_key in cache:
         return cache[cache_key]
 
-    results: list[Record] = list(racks_endpoint.filter(name=name, site_id=site_id))
+    if site_id == 0:
+        results = []
+    else:
+        results = list(racks_endpoint.filter(name=name, site_id=site_id))
     if results:
         cache[cache_key] = results[0]
         return results[0]
@@ -1511,7 +1517,10 @@ def ensure_cluster(
     if cache_key in cache:
         return cache[cache_key]
 
-    results: list[Record] = list(clusters_endpoint.filter(name=name, site_id=site_id))
+    if site_id == 0:
+        results = []
+    else:
+        results = list(clusters_endpoint.filter(name=name, site_id=site_id))
     if results:
         cache[cache_key] = results[0]
         return results[0]
@@ -2241,9 +2250,12 @@ def _resolve_host_device(
         return dev_id
 
     try:
-        host_devices: list[Record] = list(
-            devices_endpoint.filter(name=host_name_csv, site_id=site_id)
-        )
+        if site_id == 0:
+            host_devices = []
+        else:
+            host_devices = list(
+                devices_endpoint.filter(name=host_name_csv, site_id=site_id)
+            )
         if not host_devices:
             log.warning(
                 "ADVERTENCIA (%s): El dispositivo host '%s' no se encontró en el site. "
@@ -3026,7 +3038,10 @@ def sync_interfaces_for_object(
         iface_endpoint = endpoints.vm_interfaces
         iface_filter = {"virtual_machine_id": obj_id}
 
-    filtered_ifaces: list[Record] = list(iface_endpoint.filter(**iface_filter))
+    if obj_id == 0:
+        filtered_ifaces = []
+    else:
+        filtered_ifaces = list(iface_endpoint.filter(**iface_filter))
     existing_ifaces: dict[str, NetBoxObject] = {
         str(iface.name): iface for iface in filtered_ifaces
     }
