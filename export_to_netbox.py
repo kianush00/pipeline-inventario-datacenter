@@ -741,18 +741,19 @@ def parse_bool_si_no(value: Any) -> bool:
 def apply_cast(value: Any, cast_type: CastType, target: str) -> FieldValue:
     """Aplica un cast específico a un valor según la definición del campo."""
     try:
-        if cast_type == CastType.INT:
-            return parse_int(value)
-        if cast_type == CastType.FLOAT:
-            return parse_float(value)
-        if cast_type == CastType.FLOAT_TO_INT:
-            return parse_float_to_int(value)
-        if cast_type == CastType.INT_GB_TO_MB:
-            return parse_int_gb_to_mb(value)
-        if cast_type == CastType.BOOL_SI_NO:
-            return parse_bool_si_no(value)
-        if cast_type == CastType.LOWER:
-            return str(value).lower() if value is not None else value
+        match cast_type:
+            case CastType.INT:
+                return parse_int(value)
+            case CastType.FLOAT:
+                return parse_float(value)
+            case CastType.FLOAT_TO_INT:
+                return parse_float_to_int(value)
+            case CastType.INT_GB_TO_MB:
+                return parse_int_gb_to_mb(value)
+            case CastType.BOOL_SI_NO:
+                return parse_bool_si_no(value)
+            case CastType.LOWER:
+                return str(value).lower() if value is not None else value
     except ValueError as e:
         raise RowValidationError(
             f"Valor inválido '{value}' para el campo '{target}'. {e}"
