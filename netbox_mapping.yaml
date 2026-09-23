@@ -16,8 +16,10 @@ csv_columns:
     required: true
     map:
       "Dedicada": "device"
+      "device": "device"
       "Hipervisor": "device"
       "VM": "virtual_machine"
+      "virtual_machine": "virtual_machine"
     cluster_host_types:
       - "Hipervisor"
   os:
@@ -26,12 +28,19 @@ csv_columns:
     source: "Estado"
     map:
       "Activo": "active"
+      "active": "active"
       "Planificado": "planned"
+      "planned": "planned"
       "En preparación": "staged"
+      "staged": "staged"
       "Fallido": "failed"
+      "failed": "failed"
       "En inventario": "inventory"
+      "inventory": "inventory"
       "En baja": "decommissioning"
+      "decommissioning": "decommissioning"
       "Fuera de línea": "offline"
+      "offline": "offline"
   role:
     source: "Rol"
   manufacturer:
@@ -74,8 +83,11 @@ csv_columns:
     source: &col_environment "Entorno"
     map:
       "Producción": "production"
+      "production": "production"
       "Certificación": "certification"
+      "certification": "certification"
       "Desarrollo": "development"
+      "development": "development"
   service_tag:
     source: &col_service_tag "Service Tag"
   cpu_model:

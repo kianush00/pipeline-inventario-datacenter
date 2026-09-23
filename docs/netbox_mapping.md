@@ -28,7 +28,7 @@ Each entry defines a semantic key used by the Python script with the following s
 | ---------- | ----------- | ------------- |
 | `source` | Yes | Exact text name of the column in the CSV. Can include a YAML anchor (`&col_id`) to reuse it in lower sections. |
 | `required` | No | If `true`, the **presence of the header** in the CSV is mandatory. The script aborts if it is missing. Does not validate that the cell value is filled. |
-| `map` | No | Value translation dictionary (e.g., `"Dedicada" → "device"`). |
+| `map` | No | Value translation dictionary (e.g., `"Dedicada" → "device"`). Se recomienda incluir mapeos de identidad (e.g., `"active" → "active"`) para soportar CSVs que ya contengan los valores nativos de NetBox en inglés. |
 | `cluster_host_types` | No | List of strings defining which exact CSV values for this column indicate the device acts as a cluster host (hypervisor). |
 
 ### Expected Cell Format
