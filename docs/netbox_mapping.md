@@ -37,6 +37,51 @@ Each entry defines a semantic key used by the Python script with the following s
 - **Multiple fields (Networking & `multiselect` Custom Fields):** List of values separated by commas (`,`).
 - **Empty values:** If the value matches any element in `empty_values`, it is treated as `None` and is not sent to NetBox.
 
+### Defined Aliases Glossary (`csv_columns`)
+
+This table acts as a data dictionary of the fields the script expects to extract. Example values apply to both physical and virtual cases.
+
+| Internal Alias (`key`) | Typical Source (`source`) | Description (Business Semantics) | Example Values |
+| ---------------------- | ------------------------- | -------------------------------- | -------------- |
+| `machine_name` | `Nombre maquina` | Hostname or main label of the device/VM. Required. | `srv-web-01`, `db-prod-sql` |
+| `machine_type` | `Tipo de maquina` | Defines if the node is a physical server, hypervisor, or virtual machine. | `Dedicada`, `VM`, `Hipervisor` |
+| `role` | `Rol` | Network function or role of the device in the infrastructure. | `Web Server`, `Database Server` |
+| `desc` | `Descripcion` | Brief free text to describe the node. | `Primary DB server` |
+| `cluster_name` | `Cluster` | Name of the cluster the node belongs to. | `Cluster-VMware-01`, `KVM-Pool-B` |
+| `host_device` | `Dispositivo Host` | (For VMs) Name of the physical server running the VM. | `hyper-node-05` |
+| `rack` | `Rack` | Name of the physical rack where it is located. | `Rack-A1`, `Fila-2-R4` |
+| `pos_u` | `Posicion (U)` | Physical position or lowest bay number within the rack. | `12`, `25` |
+| `alt_u` | `Altura (U)` | Total U height the device occupies in the rack (usually 1, 2, or fractional). | `1.0`, `1.5`, `2.0` |
+| `os` | `SO Host` | Base operating system of the node. | `Ubuntu`, `Windows Server 2022` |
+| `os_ver` | `Version SO Host` | Specific OS version. | `22.04 LTS`, `2019 Standard` |
+| `hypervisor_os` | `SO Hipervisor` | Base hypervisor operating system (e.g. ESXi, Proxmox). | `VMware ESXi`, `Proxmox VE` |
+| `hypervisor_ver` | `Version SO Hipervisor` | Hypervisor OS build or version. | `7.0.3`, `8.1.1` |
+| `iface_names` | `Interfaces` | Comma-separated list of network interface names. | `eth0, eth1`, `vmnic0` |
+| `iface_status` | `Interfaces estado` | Comma-separated list of link statuses for each interface. | `up, down` |
+| `iface_ip` | `IP` | List of associated IP addresses (primary and secondaries). | `10.0.0.10, 192.168.1.5` |
+| `iface_pfx` | `Red IP` | List of CIDR prefixes or subnets associated with each IP. | `192.168.1.0/26` |
+| `iface_mac` | `MAC` | List of MAC addresses corresponding to the interfaces. | `aa:bb:cc:dd:ee:ff` |
+| `cpu_model` | `CPU Modelo` | Commercial name of the processor. | `Intel Xeon Gold 6230` |
+| `cores` | `Cores` | Number of physical (Device) or virtual (VM) cores. | `16`, `32` |
+| `threads` | `Threads` | Total number of threads of the physical CPU. | `32`, `64` |
+| `sockets` | `Sockets` | Number of sockets or physical CPUs mounted on the motherboard. | `2`, `4` |
+| `ram_gb` | `RAM (GB)` | Total RAM memory expressed in Gigabytes. | `128`, `256` |
+| `disks` | `Discos` | Raw breakdown of the disk configuration. | `2x SSD 512GB, 4x HDD 4TB` |
+| `disk_cap` | `Capacidad visible (GB)` | Total visible storage capacity. | `1024`, `500` |
+| `raid` | `RAID` | Configured RAID level. | `RAID 1`, `RAID 5` |
+| `manufacturer` | `Marca` | Hardware brand or manufacturer. | `Dell`, `HP`, `Cisco` |
+| `model` | `Modelo` | Specific hardware model. | `PowerEdge R740`, `ProLiant DL380` |
+| `serial` | `Serial Number` | Physical serial number for general hardware (non-Dell). | `ABC12345` |
+| `service_tag` | `Service Tag` | Conventionally reserved for the Service Tag of Dell equipment. | `ST-442-XY` |
+| `asset_tag` | `Nro Inventario` | Internal inventory plate or number. | `INV-9876` |
+| `inventory_uuid` | `UUID` | Unique and deterministic identifier of the node (ideally extracted from DMI or virtual system). | `564d...e2f1` |
+| `bios_ver` | `Version BIOS` | Current BIOS/UEFI firmware version. | `2.14.0` |
+| `bios_date` | `Fecha BIOS` | Release or update date of the BIOS. | `2023-01-15` |
+| `status` | `Estado` | Lifecycle status (active, offline, decommissioning). | `Activo`, `offline`, `En baja` |
+| `environment` | `Entorno` | Deployment environment (Production, QA, Development). | `Producción`, `Desarrollo` |
+| `rundeck_node` | `Nodo Rundeck` | Indicates if the node was discovered via Rundeck (boolean). | `Sí`, `No` |
+| `notes` | `Notas` | Extensive notes or additional audit metadata (flexible placement). | `Replace disks in Q3` |
+
 ---
 
 ## Site (`site`)
