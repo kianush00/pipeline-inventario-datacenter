@@ -896,6 +896,30 @@ def load_config(mapping_path: Path) -> NetBoxMappingConfig:
         )
 
 
+def load_dotenv(env_path: Path | None = None) -> None:
+    """
+    Carga variables de entorno desde un archivo .env si existe.
+    No sobrescribe variables que ya estén definidas en el entorno.
+    """
+    if env_path is None:
+        env_path = Path(__file__).resolve().parent / ".env"
+
+    if not env_path.is_file():
+        return
+
+    with env_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, val = line.split("=", 1)
+                key = key.strip()
+                val = val.strip().strip("'\"")
+                if key not in os.environ:
+                    os.environ[key] = val
+
+
 def load_env() -> tuple[str, str, bool]:
     """
     Carga las variables de entorno requeridas para la conexión con NetBox.
@@ -3238,6 +3262,9 @@ def main() -> None:
 
     if args.dry_run:
         log.info("Modo DRY-RUN activado. No se modificará NetBox.")
+
+    # ── Cargar variables de entorno desde .env si existe ────
+    load_dotenv()
 
     # ── Cargar configuración ─────────────────────────────────
     mapping_path = resolve_mapping_path(args.mapping)
