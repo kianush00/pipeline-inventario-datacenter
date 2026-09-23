@@ -133,6 +133,7 @@ class NodeType(str, Enum):
 class CastType(str, Enum):
     INT = "int"
     FLOAT = "float"
+    FLOAT_TO_INT = "float_to_int"
     INT_GB_TO_MB = "int_gb_to_mb"
     BOOL_SI_NO = "bool_si_no"
     LOWER = "lower"
@@ -706,6 +707,15 @@ def parse_float(value: Any) -> float:
         raise ValueError("No es un número decimal válido.") from e
 
 
+def parse_float_to_int(value: Any) -> int:
+    """Convierte un número (potencialmente float) a su entero más cercano."""
+    try:
+        val_float = float(str(value).strip().replace(',', '.'))
+        return round(val_float)
+    except (ValueError, TypeError) as e:
+        raise ValueError("No es un valor numérico válido.") from e
+
+
 def parse_int_gb_to_mb(value: Any) -> int:
     """Convierte GB (string/float) a MB (entero). NetBox espera MB para memory."""
     try:
@@ -735,6 +745,8 @@ def apply_cast(value: Any, cast_type: CastType, target: str) -> FieldValue:
             return parse_int(value)
         if cast_type == CastType.FLOAT:
             return parse_float(value)
+        if cast_type == CastType.FLOAT_TO_INT:
+            return parse_float_to_int(value)
         if cast_type == CastType.INT_GB_TO_MB:
             return parse_int_gb_to_mb(value)
         if cast_type == CastType.BOOL_SI_NO:

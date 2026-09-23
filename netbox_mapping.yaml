@@ -25,7 +25,6 @@ csv_columns:
       - "hypervisor"
     virtual_machine_types:
       - "vm"
-
   os:
     source: "SO Host"
   status:
@@ -453,7 +452,7 @@ node_types:
       - source: *col_disk_cap
         target: "disk"
         required: false
-        cast: "int"
+        cast: "float_to_int"
 
       - source: [*col_desc, *col_notes]
         target: "description"

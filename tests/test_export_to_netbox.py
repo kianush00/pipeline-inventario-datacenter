@@ -58,6 +58,7 @@ from export_to_netbox import (
     load_config,
     parse_bool_si_no,
     parse_float,
+    parse_float_to_int,
     parse_int,
     parse_int_gb_to_mb,
     parse_network_interfaces,
@@ -201,6 +202,38 @@ class TestParseFloat:
     def test_invalid_value_raises_error(self) -> None:
         with pytest.raises(ValueError, match="No es un número decimal válido"):
             parse_float("abc")
+
+
+class TestParseFloatToInt:
+    """Verifica la conversión robusta de floats a enteros más cercanos."""
+
+    def test_float_string_dot(self) -> None:
+        """Punto decimal se redondea correctamente."""
+        assert parse_float_to_int("50.5") == 50
+        assert parse_float_to_int("50.6") == 51
+
+    def test_float_string_comma(self) -> None:
+        """Coma decimal se soporta y redondea."""
+        assert parse_float_to_int("50,5") == 50
+        assert parse_float_to_int("50,6") == 51
+
+    def test_integer_string(self) -> None:
+        """Strings enteros se mantienen intactos."""
+        assert parse_float_to_int("42") == 42
+
+    def test_with_spaces(self) -> None:
+        """Espacios alrededor se limpian."""
+        assert parse_float_to_int("  10.2  ") == 10
+
+    def test_invalid_value_raises_error(self) -> None:
+        """Strings no numéricos lanzan ValueError."""
+        with pytest.raises(ValueError, match="No es un valor numérico válido"):
+            parse_float_to_int("cincuenta")
+
+    def test_none_value(self) -> None:
+        """None lanza ValueError."""
+        with pytest.raises(ValueError, match="No es un valor numérico válido"):
+            parse_float_to_int(None)
 
 
 class TestParseIntGbToMb:

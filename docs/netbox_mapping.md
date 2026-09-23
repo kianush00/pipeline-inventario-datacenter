@@ -176,6 +176,7 @@ Defines how to **extract** data from the CSV and **map** it to fields in the Net
 | ------ | --------------- |
 | `int` | Converts to integer |
 | `float` | Converts to float (decimal) |
+| `float_to_int` | Converts decimal float strings to nearest integer (useful for disk gigabytes) |
 | `int_gb_to_mb` | Converts GB (string) to MB (integer) |
 | `bool_si_no` | Converts "Sí"/"No" to `true`/`false` |
 | `lower` | Converts to lowercase (used for UUID normalization) |
