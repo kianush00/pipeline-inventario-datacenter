@@ -3,9 +3,6 @@ export_to_netbox.py
 ===================
 Exporta el inventario fusionado (merged_inventory.csv) a NetBox 4.x.
 
-Dependencias:
-    pip install pydantic>=2.0.0 pynetbox>=7.3.0 PyYAML>=6.0
-
 Variables de entorno requeridas:
     NETBOX_URL        → https://netbox.miempresa.com
     NETBOX_TOKEN      → token con permisos write sobre
@@ -701,7 +698,7 @@ def parse_int(value: Any) -> int:
 
 def _to_float(value: Any) -> float:
     """Intenta parsear un valor a float, normalizando comas a puntos."""
-    return float(str(value).strip().replace(',', '.'))
+    return float(str(value).strip().replace(",", "."))
 
 
 def parse_float(value: Any) -> float:
@@ -2773,6 +2770,19 @@ def _build_interface_cidr(ip_val: str, pfx_val: str, name: str) -> str:
         ) from e
 
 
+def _sanitize_mac_address(mac_raw: str, name: str) -> str:
+    """Valida y formatea una MAC a su forma estándar (AA:BB:CC:DD:EE:FF)."""
+    cleaned = re.sub(r"[^a-fA-F0-9]", "", mac_raw)
+
+    if len(cleaned) != 12:
+        raise FieldParseError(
+            f"MAC '{mac_raw}' en interfaz '{name}' no es válida (esperado 12 hex)."
+        )
+
+    pairs = [cleaned[i : i + 2] for i in range(0, 12, 2)]
+    return ":".join(pairs).upper()
+
+
 def _parse_single_network_interface(
     name: str,
     status_raw: str,
@@ -2799,6 +2809,12 @@ def _parse_single_network_interface(
             ip_val = _validate_interface_ip(ip_val, name)
             if pfx_val:
                 cidr = _build_interface_cidr(ip_val, pfx_val, name)
+        except FieldParseError as e:
+            raise RowValidationError(str(e)) from e
+
+    if mac_val:
+        try:
+            mac_val = _sanitize_mac_address(mac_val, name)
         except FieldParseError as e:
             raise RowValidationError(str(e)) from e
 

@@ -39,6 +39,7 @@ from export_to_netbox import (
     _resolve_device_role,
     _resolve_field_value,
     _resolve_netbox_status,
+    _sanitize_mac_address,
     _sync_device_type_u_height,
     _validate_csv_headers,
     _validate_interface_ip,
@@ -704,7 +705,8 @@ class TestResolveFieldValue:
         row = {col_name: "Dedicada"}
         field_def = FieldMappingConfig(target="tipo", source=col_name)
         assert (
-            _resolve_field_value(row, field_def, config, is_optional=True) == "dedicated"
+            _resolve_field_value(row, field_def, config, is_optional=True)
+            == "dedicated"
         )
 
     def test_cast_field(self, config: NetBoxMappingConfig) -> None:
@@ -1148,6 +1150,33 @@ class TestBuildInterfaceCidr:
             _build_interface_cidr("192.168.1.5", "33", "eth0")  # /33 no existe en IPv4
 
 
+class TestSanitizeMacAddress:
+    """Verifica el saneamiento y validación de direcciones MAC."""
+
+    def test_valid_macs(self) -> None:
+        # Formato canónico
+        assert _sanitize_mac_address("AA:BB:CC:DD:EE:FF", "eth0") == "AA:BB:CC:DD:EE:FF"
+        # Formato Windows (guiones)
+        assert _sanitize_mac_address("aa-bb-cc-dd-ee-ff", "eth0") == "AA:BB:CC:DD:EE:FF"
+        # Formato Cisco (puntos)
+        assert _sanitize_mac_address("aabb.ccdd.eeff", "eth0") == "AA:BB:CC:DD:EE:FF"
+        # Sin separadores
+        assert _sanitize_mac_address("AABBCCDDEEFF", "eth0") == "AA:BB:CC:DD:EE:FF"
+
+    def test_invalid_macs(self) -> None:
+        # Basura (no hexa)
+        with pytest.raises(FieldParseError, match="no es válida"):
+            _sanitize_mac_address("N/A", "eth0")
+
+        # Demasiado corta
+        with pytest.raises(FieldParseError, match="no es válida"):
+            _sanitize_mac_address("AA:BB:CC:DD:EE", "eth0")
+
+        # Demasiado larga
+        with pytest.raises(FieldParseError, match="no es válida"):
+            _sanitize_mac_address("AA:BB:CC:DD:EE:FF:11", "eth0")
+
+
 class TestParseSingleNetworkInterface:
     """Verifica el parseo de una única interfaz."""
 
@@ -1201,7 +1230,9 @@ class TestParseNetworkInterfaces:
             config.csv_columns["iface_status"].source: "up, down",
             config.csv_columns["iface_ip"].source: "192.168.1.1, 10.0.0.1",
             config.csv_columns["iface_pfx"].source: "24, 8",
-            config.csv_columns["iface_mac"].source: "AA:AA, BB:BB",
+            config.csv_columns[
+                "iface_mac"
+            ].source: "AA:AA:AA:AA:AA:AA, BB:BB:BB:BB:BB:BB",
         }
         interfaces = parse_network_interfaces(row, config)
         assert len(interfaces) == 2
