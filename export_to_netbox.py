@@ -3160,6 +3160,8 @@ def _sync_row(
                 csv_name_counts,
                 dry_run,
             )
+            site_id = get_netbox_object_id(site)
+            caches.host_devices[(site_id, machine_name)] = obj_id
         else:
             result, obj_id, main_obj = sync_vm(
                 endpoints,
