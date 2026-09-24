@@ -1604,11 +1604,11 @@ def _sync_single_device_role(
                 vm_role=True,
             ),
         )
-        log.info("DeviceRole creado: %s", name)
-        device_roles_cache[key] = obj
-        return obj
     except RequestError as e:
         raise ConfigValidationError(f"Error creando DeviceRole '{name}': {e}") from e
+    log.info("DeviceRole creado: %s", name)
+    device_roles_cache[key] = obj
+    return obj
 
 
 def ensure_all_device_roles(
@@ -1770,11 +1770,12 @@ def _ensure_custom_field(
 
     try:
         created_cf = cast(Record, custom_fields_endpoint.create(**create_kwargs))
-        existing_cfs[name] = created_cf
-        log.info("Custom field creado: %s", name)
-        return created_cf
     except RequestError as e:
         raise ConfigValidationError(f"Error al crear custom field '{name}': {e}") from e
+
+    existing_cfs[name] = created_cf
+    log.info("Custom field creado: %s", name)
+    return created_cf
 
 
 def ensure_custom_fields(
@@ -2942,6 +2943,7 @@ def _assign_ip(
                     "assigned_object_id": iface_obj.id,
                 }
             )
+            log.info("IP libre reasignada: %s", cidr)
             return unassigned_ip
         except RequestError as e:
             raise NetBoxApiError(f"Error actualizando IP libre {cidr}: {e}") from e
@@ -2959,7 +2961,7 @@ def _assign_ip(
         )
 
     try:
-        return cast(
+        obj = cast(
             Record,
             ip_addresses_endpoint.create(
                 address=cidr,
@@ -2970,6 +2972,9 @@ def _assign_ip(
         )
     except RequestError as e:
         raise NetBoxApiError(f"Error creando IP {cidr}: {e}") from e
+
+    log.info("IP creada y asignada: %s", cidr)
+    return obj
 
 
 def _sync_single_interface(
@@ -3011,8 +3016,10 @@ def _sync_single_interface(
         try:
             if is_existing:
                 cast(Record, existing_ifaces[name]).update(payload)
+                log.info("Interfaz actualizada: %s", name)
             else:
                 existing_ifaces[name] = cast(Record, iface_endpoint.create(**payload))
+                log.info("Interfaz creada: %s", name)
         except RequestError as e:
             raise NetBoxApiError(f"Error procesando interfaz '{name}': {e}") from e
 
