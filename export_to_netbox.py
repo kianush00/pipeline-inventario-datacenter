@@ -1636,45 +1636,6 @@ def ensure_all_device_roles(
 # ============================================================
 
 
-def _get_object_type_id(
-    ots_endpoint: Endpoint,
-    object_type: str,
-    ot_cache: dict[str, int],
-) -> int:
-    """Obtiene el ID de Object Type en NetBox para un app_label.model dado."""
-    if object_type in ot_cache:
-        return ot_cache[object_type]
-
-    if "." not in object_type:
-        raise ConfigValidationError(
-            f"Formato de Object Type inválido: {object_type}. Se esperaba 'app_label.model'."
-        )
-
-    app_label, model = object_type.split(".", 1)
-
-    try:
-        results: list[Record] = list(
-            ots_endpoint.filter(
-                app_label=app_label,
-                model=model,
-            )
-        )
-    except Exception as e:
-        raise ConfigValidationError(
-            f"Error consultando Object Type '{object_type}' en '/api/core/object-types/': {e}"
-        ) from e
-
-    if not results:
-        raise ConfigValidationError(
-            f"Object Type '{object_type}' no encontrado en NetBox. "
-            "Verifique que esté correctamente escrito en el YAML."
-        )
-
-    ot_id = get_netbox_object_id(results[0])
-    ot_cache[object_type] = ot_id
-    return ot_id
-
-
 def _get_choice_set_choices(choices: list[ChoiceItemConfig]) -> list[list[str]]:
     """Obtiene las opciones de un choice set, ya sea de tipo lista de listas o iterable."""
     return [[choice.value, choice.label] for choice in choices]
@@ -1765,7 +1726,7 @@ def _ensure_custom_field(
     custom_fields_endpoint: Endpoint,
     existing_cfs: dict[str, Record],
     cf_def: CustomFieldConfig,
-    ot_ids: list[int],
+    object_types: list[str],
     choice_set_id: int | None,
     dry_run: bool,
 ) -> NetBoxObject:
@@ -1795,7 +1756,7 @@ def _ensure_custom_field(
         "label": cf_def.label or name,
         "type": cf_def.type,
         "required": cf_def.required,
-        "object_types": ot_ids,
+        "object_types": object_types,
     }
 
     if choice_set_id is not None:
@@ -1849,24 +1810,12 @@ def ensure_custom_fields(
         str(ch_set.name): ch_set for ch_set in choice_sets
     }
 
-    # Construir mapa nombre → ID de Object Type.
-    ot_cache: dict[str, int] = {}
-
     # Obtener lista unificada de definiciones de Custom Field O(1).
     cf_definitions: list[CustomFieldConfig] = cfg.get_all_custom_field_defs()
 
     ensured_cfs: dict[str, NetBoxObject] = {}
 
     for cf_def in cf_definitions:
-        ot_ids: list[int] = [
-            _get_object_type_id(
-                endpoints.object_types,
-                ot,
-                ot_cache,
-            )
-            for ot in cf_def.object_types
-        ]
-
         choice_set_id: int | None = None
         choice_set_cfg: ChoiceSetConfig | None = cf_def.choice_set
 
@@ -1883,7 +1832,7 @@ def ensure_custom_fields(
             endpoints.custom_fields,
             existing_cfs,
             cf_def,
-            ot_ids,
+            cf_def.object_types,
             choice_set_id,
             dry_run,
         )
