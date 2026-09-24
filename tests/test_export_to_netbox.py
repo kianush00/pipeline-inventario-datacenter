@@ -196,6 +196,9 @@ class TestParseFloat:
     def test_integer_to_float(self) -> None:
         assert parse_float("42") == 42.0
 
+    def test_float_with_comma(self) -> None:
+        assert parse_float("3,14") == 3.14
+
     def test_float_with_spaces(self) -> None:
         assert parse_float("  -2.5  ") == -2.5
 

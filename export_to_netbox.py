@@ -699,10 +699,15 @@ def parse_int(value: Any) -> int:
         raise ValueError("No es un número entero válido.") from e
 
 
+def _to_float(value: Any) -> float:
+    """Intenta parsear un valor a float, normalizando comas a puntos."""
+    return float(str(value).strip().replace(',', '.'))
+
+
 def parse_float(value: Any) -> float:
     """Convierte un valor a float, o lanza ValueError si no es convertible."""
     try:
-        return float(str(value).strip())
+        return _to_float(value)
     except (ValueError, TypeError) as e:
         raise ValueError("No es un número decimal válido.") from e
 
@@ -710,7 +715,7 @@ def parse_float(value: Any) -> float:
 def parse_float_to_int(value: Any) -> int:
     """Convierte un número (potencialmente float) a su entero más cercano."""
     try:
-        val_float = float(str(value).strip().replace(',', '.'))
+        val_float = _to_float(value)
         return round(val_float)
     except (ValueError, TypeError) as e:
         raise ValueError("No es un valor numérico válido.") from e
@@ -719,7 +724,7 @@ def parse_float_to_int(value: Any) -> int:
 def parse_int_gb_to_mb(value: Any) -> int:
     """Convierte GB (string/float) a MB (entero). NetBox espera MB para memory."""
     try:
-        gb = float(str(value).strip().replace(',', '.'))
+        gb = _to_float(value)
         return round(gb * 1024)
     except (ValueError, TypeError) as e:
         raise ValueError("No es un valor numérico válido.") from e
