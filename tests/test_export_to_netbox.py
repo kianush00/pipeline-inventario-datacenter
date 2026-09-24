@@ -35,6 +35,7 @@ from export_to_netbox import (
     _generate_fallback_slug,
     _is_name_safely_unique,
     _parse_single_network_interface,
+    _prune_orphan_interfaces,
     _resolve_default_or_empty,
     _resolve_device_role,
     _resolve_field_value,
@@ -1547,3 +1548,46 @@ class TestResolveDeviceTypeUHeight:
         args, _ = mock_ensure_device_type.call_args
         assert args[3] == 1.0
         assert isinstance(args[3], float)
+
+
+class TestPruneInterfaces:
+    """Verifica la poda de interfaces huérfanas."""
+
+    def test_pruning_removes_orphan(self) -> None:
+        mock_iface1 = MagicMock()
+        mock_iface1.name = "eth0"
+
+        mock_iface2 = MagicMock()
+        mock_iface2.name = "eth1"
+
+        existing_ifaces = {"eth0": mock_iface1, "eth1": mock_iface2}
+
+        # El CSV solo reporta "eth0"
+        csv_iface_names = {"eth0"}
+
+        errors = _prune_orphan_interfaces(
+            existing_ifaces=existing_ifaces,
+            csv_iface_names=csv_iface_names,
+            obj_id=10,
+            dry_run=False,
+        )
+
+        assert errors == 0
+        mock_iface1.delete.assert_not_called()
+        mock_iface2.delete.assert_called_once()
+
+    def test_pruning_dry_run_skips_delete(self) -> None:
+        mock_iface = MagicMock()
+        mock_iface.name = "eth1"
+        existing_ifaces = {"eth1": mock_iface}
+        csv_iface_names = set()
+
+        errors = _prune_orphan_interfaces(
+            existing_ifaces=existing_ifaces,
+            csv_iface_names=csv_iface_names,
+            obj_id=10,
+            dry_run=True,
+        )
+
+        assert errors == 0
+        mock_iface.delete.assert_not_called()

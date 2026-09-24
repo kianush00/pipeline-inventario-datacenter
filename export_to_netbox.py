@@ -3043,12 +3043,42 @@ def _sync_single_interface(
     return existing_ifaces[name], ip_obj
 
 
+def _prune_orphan_interfaces(
+    existing_ifaces: dict[str, NetBoxObject],
+    csv_iface_names: set[str],
+    obj_id: int,
+    dry_run: bool,
+) -> int:
+    """
+    Elimina (poda) de NetBox las interfaces que ya no existen en el CSV.
+    Retorna la cantidad de errores ocurridos.
+    """
+    errors = 0
+    for name, iface_obj in existing_ifaces.items():
+        if name not in csv_iface_names:
+            if dry_run:
+                log.info(
+                    "[DRY-RUN] Eliminaría interfaz huérfana '%s' en objeto %s",
+                    name,
+                    obj_id,
+                )
+            else:
+                try:
+                    cast(Record, iface_obj).delete()
+                    log.info("DELETED interfaz huérfana: %s", name)
+                except RequestError:
+                    log.exception("Error eliminando interfaz huérfana '%s'", name)
+                    errors += 1
+    return errors
+
+
 def sync_interfaces_for_object(
     endpoints: NetBoxEndpoints,
     obj_id: int,
     node_type: NodeType,
     interfaces: list[NetworkInterfaceData],
     dry_run: bool,
+    prune_interfaces: bool = False,
 ) -> tuple[int, list[int]]:
     """Sincroniza interfaces y sus IPs para un Device o VM.
     Retorna una tupla: (cantidad de errores, lista de IDs de IPv4 asignadas)."""
@@ -3086,6 +3116,10 @@ def sync_interfaces_for_object(
         except NetBoxApiError:
             log.exception("ERROR de API sincronizando interfaz")
             errors += 1
+
+    if prune_interfaces and obj_id != 0:
+        csv_names = {iface["name"] for iface in interfaces}
+        errors += _prune_orphan_interfaces(existing_ifaces, csv_names, obj_id, dry_run)
 
     return errors, ipv4_ids
 
@@ -3153,6 +3187,7 @@ def _sync_row(
     csv_name_counts: Counter[str],
     counts: SyncCounts,
     dry_run: bool,
+    prune_interfaces: bool = False,
 ) -> SyncCounts:
     """
     Sincroniza una fila individual del CSV con NetBox, incluyendo
@@ -3240,6 +3275,7 @@ def _sync_row(
             node_type,
             interfaces,
             dry_run,
+            prune_interfaces,
         )
         if iface_errors > 0:
             counts[SyncStatus.ERROR] += iface_errors
@@ -3306,6 +3342,11 @@ def main() -> None:
         "--verbose",
         action="store_true",
         help="Activa logs de nivel DEBUG.",
+    )
+    parser.add_argument(
+        "--prune-interfaces",
+        action="store_true",
+        help="Elimina las interfaces de NetBox que ya no existan en el CSV para ese nodo.",
     )
 
     args = parser.parse_args()
@@ -3414,6 +3455,7 @@ def main() -> None:
             csv_name_counts,
             counts,
             args.dry_run,
+            args.prune_interfaces,
         )
 
     # ── Fase 2: Sincronizar VMs ──────────────────────────────
@@ -3432,6 +3474,7 @@ def main() -> None:
             csv_name_counts,
             counts,
             args.dry_run,
+            args.prune_interfaces,
         )
 
     # ── Resumen ──────────────────────────────────────────────
