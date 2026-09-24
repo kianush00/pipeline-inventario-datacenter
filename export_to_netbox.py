@@ -198,6 +198,7 @@ class NetBoxEndpoints(BaseModel):
     device_interfaces: Endpoint
     vm_interfaces: Endpoint
     ip_addresses: Endpoint
+    mac_addresses: Endpoint
 
 
 # ============================================================
@@ -605,8 +606,9 @@ class MockNetBoxRecord(BaseModel):
     vm_role: bool = False
     custom_fields: dict[str, Any] = Field(default_factory=dict)
 
-    # Red y asignaciones (para simulaciones de IP)
+    # Red y asignaciones (para simulaciones de IP/MAC)
     address: str | None = None
+    mac_address: str | None = None
     assigned_object_id: int | None = None
     assigned_object_type: str | None = None
 
@@ -1029,6 +1031,7 @@ def build_netbox_endpoints(nb: Api) -> NetBoxEndpoints:
             device_interfaces=nb.dcim.interfaces,
             vm_interfaces=nb.virtualization.interfaces,
             ip_addresses=nb.ipam.ip_addresses,
+            mac_addresses=nb.dcim.mac_addresses,
         )
     except AttributeError as e:
         raise NetBoxApiError(
@@ -2977,17 +2980,102 @@ def _assign_ip(
     return obj
 
 
+def _ensure_mac_address_assignment(
+    mac_addresses_endpoint: Endpoint,
+    mac_val: str,
+    iface_obj: NetBoxObject,
+    dry_run: bool,
+) -> NetBoxObject:
+    """
+    Crea o actualiza una MAC address en NetBox y la asigna a la interfaz.
+    Retorna el objeto MAC.
+    """
+    node_type = get_node_type_from_object(iface_obj)
+    assigned_type: str = (
+        "dcim.interface"
+        if node_type == NodeType.DEVICE
+        else "virtualization.vminterface"
+    )
+    existing_macs: list[Record] = list(mac_addresses_endpoint.filter(mac_address=mac_val))
+
+    # 1. Verificar si la MAC ya está asignada a esta interfaz
+    for mac_obj in existing_macs:
+        current_id = getattr(mac_obj, "assigned_object_id", None)
+        current_type = getattr(mac_obj, "assigned_object_type", None)
+        if current_id == iface_obj.id and str(current_type) == assigned_type:
+            return mac_obj
+
+    # 2. Buscar si hay alguna MAC libre con este valor que podamos reclamar
+    unassigned_mac = None
+    for mac_obj in existing_macs:
+        if getattr(mac_obj, "assigned_object_id", None) is None:
+            unassigned_mac = mac_obj
+            break
+
+    if unassigned_mac:
+        if dry_run:
+            log.info(
+                "[DRY-RUN] Actualizaría MAC libre %s (asignación a objeto %s)",
+                mac_val,
+                iface_obj.id,
+            )
+            return MockNetBoxRecord(
+                id=0,
+                mac_address=mac_val,
+                assigned_object_id=iface_obj.id,
+                assigned_object_type=assigned_type,
+            )
+        try:
+            unassigned_mac.update(
+                {
+                    "assigned_object_type": assigned_type,
+                    "assigned_object_id": iface_obj.id,
+                }
+            )
+            log.info("MAC libre reasignada: %s", mac_val)
+            return unassigned_mac
+        except RequestError as e:
+            raise NetBoxApiError(f"Error actualizando MAC libre {mac_val}: {e}") from e
+
+    # 3. Crear una nueva MAC.
+    if dry_run:
+        log.info(
+            "[DRY-RUN] Crearía nueva MAC %s (asignada a objeto %s)", mac_val, iface_obj.id
+        )
+        return MockNetBoxRecord(
+            id=0,
+            mac_address=mac_val,
+            assigned_object_id=iface_obj.id,
+            assigned_object_type=assigned_type,
+        )
+
+    try:
+        obj = cast(
+            Record,
+            mac_addresses_endpoint.create(
+                mac_address=mac_val,
+                assigned_object_type=assigned_type,
+                assigned_object_id=iface_obj.id,
+            ),
+        )
+        log.info("MAC creada y asignada: %s", mac_val)
+        return obj
+    except RequestError as e:
+        raise NetBoxApiError(f"Error creando MAC {mac_val}: {e}") from e
+
+
 def _sync_single_interface(
     iface_data: NetworkInterfaceData,
     obj_id: int,
     iface_endpoint: Endpoint,
     existing_ifaces: dict[str, NetBoxObject],
     ip_addresses_endpoint: Endpoint,
+    mac_addresses_endpoint: Endpoint,
     dry_run: bool,
-) -> tuple[NetBoxObject, NetBoxObject | None]:
+) -> tuple[NetBoxObject, NetBoxObject | None, NetBoxObject | None]:
     """
-    Sincroniza una interfaz individual y le asigna su IP.
-    Retorna una tupla con (Interfaz, IP asignada o None).
+    Sincroniza una interfaz individual y le asigna su IP y MAC.
+    Retorna una tupla con (Interfaz, IP asignada o None, MAC asignada o None).
     """
     node_type = get_node_type_from_object(iface_endpoint)
     name: str = iface_data["name"]
@@ -2996,8 +3084,6 @@ def _sync_single_interface(
     cidr: str | None = iface_data.get("cidr")
 
     payload: NetBoxPayload = {"name": name, "enabled": enabled}
-    if mac:
-        payload["mac_address"] = mac.upper()
 
     if node_type == NodeType.DEVICE:
         payload["device"] = obj_id
@@ -3028,7 +3114,14 @@ def _sync_single_interface(
         iface_obj = existing_ifaces[name]
         ip_obj = _assign_ip(ip_addresses_endpoint, cidr, iface_obj, dry_run)
 
-    return existing_ifaces[name], ip_obj
+    mac_obj = None
+    if mac:
+        iface_obj = existing_ifaces[name]
+        mac_obj = _ensure_mac_address_assignment(
+            mac_addresses_endpoint, mac.upper(), iface_obj, dry_run
+        )
+
+    return existing_ifaces[name], ip_obj, mac_obj
 
 
 def _prune_orphan_interfaces(
@@ -3089,12 +3182,13 @@ def sync_interfaces_for_object(
     ipv4_ids: list[int] = []
     for iface_data in interfaces:
         try:
-            _, ip_obj = _sync_single_interface(
+            _, ip_obj, _ = _sync_single_interface(
                 iface_data,
                 obj_id,
                 iface_endpoint,
                 existing_ifaces,
                 endpoints.ip_addresses,
+                endpoints.mac_addresses,
                 dry_run,
             )
             if ip_obj is not None:
