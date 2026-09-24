@@ -727,6 +727,21 @@ class TestResolveFieldValue:
             == "Hola. Mundo"
         )
 
+    def test_coalesce_field(self, config: NetBoxMappingConfig) -> None:
+        row = {"S1": "", "S2": "Val2", "S3": ""}
+        field_def = FieldMappingConfig(
+            target="serial", source=["S1", "S2", "S3"], transform="coalesce"
+        )
+        assert _resolve_field_value(row, field_def, config, is_optional=True) == "Val2"
+
+    def test_coalesce_field_conflict(self, config: NetBoxMappingConfig) -> None:
+        row = {"S1": "Val1", "S2": "Val2"}
+        field_def = FieldMappingConfig(
+            target="serial", source=["S1", "S2"], transform="coalesce"
+        )
+        with pytest.raises(RowValidationError, match="Conflicto"):
+            _resolve_field_value(row, field_def, config, is_optional=True)
+
     def test_empty_with_default(self, config: NetBoxMappingConfig) -> None:
         row = {"Col": ""}
         field_def = FieldMappingConfig(target="target", source="Col")

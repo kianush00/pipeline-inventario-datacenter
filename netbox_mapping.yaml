@@ -251,13 +251,6 @@ custom_field_definitions:
       - "dcim.device"
       - "virtualization.virtualmachine"
 
-  - name: &cf_service_tag "service_tag"
-    label: "Service Tag"
-    type: "text"
-    required: false
-    object_types:
-      - "dcim.device"
-
   - name: &cf_cpu_model "cpu_model"
     label: "Modelo CPU"
     type: "text"
@@ -357,8 +350,9 @@ node_types:
         target: "name"
         required: true
 
-      - source: *col_serial
+      - source: [*col_serial, *col_service_tag]
         target: "serial"
+        transform: "coalesce"
         required: false
         is_unique: true
 
@@ -387,9 +381,6 @@ node_types:
 
       - source: *col_environment
         target: *cf_environment
-
-      - source: *col_service_tag
-        target: *cf_service_tag
 
       - source: *col_cpu_model
         target: *cf_cpu_model

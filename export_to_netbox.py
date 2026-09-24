@@ -352,7 +352,7 @@ class FieldMappingConfig(BaseModel):
     required: bool = False
     is_unique: bool = False
     cast: CastType | None = None
-    transform: Literal["concat_dot"] | None = None
+    transform: Literal["concat_dot", "coalesce"] | None = None
 
     @model_validator(mode="after")
     def validate_transform_and_source(self) -> "FieldMappingConfig":
@@ -368,9 +368,11 @@ class FieldMappingConfig(BaseModel):
                 f"En 'source' (target '{self.target}'), ningún elemento puede estar vacío."
             )
 
-        if self.transform == "concat_dot" and not isinstance(self.source, list):
+        if self.transform in ("concat_dot", "coalesce") and not isinstance(
+            self.source, list
+        ):
             raise ValueError(
-                f"El transform 'concat_dot' para target '{self.target}' "
+                f"El transform '{self.transform}' para target '{self.target}' "
                 "requiere que 'source' sea explícitamente una lista."
             )
 
@@ -1869,6 +1871,31 @@ def _extract_concat_dot_value(
     return concat_dot(parts, config)
 
 
+def _extract_coalesce_value(
+    row: CsvRow,
+    source: list[str],
+    config: NetBoxMappingConfig,
+) -> str:
+    """
+    Resuelve un campo multi-columna mediante coalesce.
+    Falla rápidamente si más de un campo contiene un valor.
+    Devuelve el primer valor encontrado, o un string vacío si ninguno tiene valor.
+    """
+    values = []
+    for s in source:
+        val = row.get(s, "").strip()
+        if not config.is_empty(val):
+            values.append(val)
+
+    if len(values) > 1:
+        raise RowValidationError(
+            f"Conflicto: Múltiples valores no nulos {values} para un campo coalesce "
+            f"provenientes de las columnas {source}."
+        )
+
+    return values[0] if values else ""
+
+
 def _extract_raw_source_value(row: CsvRow, source: str | list[str]) -> str:
     """Extrae el valor crudo de la(s) columna(s) origen, sin transformar."""
     if isinstance(source, str):
@@ -1947,13 +1974,18 @@ def _resolve_field_value(
     source = field_def.source
     target = field_def.target
 
-    # Ruta independiente: multi-columna con concatenación no pasa por
-    # map/select/cast, igual que en el comportamiento original.
-    if isinstance(source, list) and field_def.transform == "concat_dot":
-        value = _extract_concat_dot_value(row, source, config)
-        if value:
-            return value
-        return _resolve_default_or_empty(default, is_optional, target)
+    # Ruta independiente: multi-columna con transformador (concat_dot, coalesce)
+    if isinstance(source, list):
+        if field_def.transform == "concat_dot":
+            value = _extract_concat_dot_value(row, source, config)
+            if value:
+                return value
+            return _resolve_default_or_empty(default, is_optional, target)
+        elif field_def.transform == "coalesce":
+            value = _extract_coalesce_value(row, source, config)
+            if value:
+                return value
+            return _resolve_default_or_empty(default, is_optional, target)
 
     raw_value = _extract_raw_source_value(row, source)
     if config.is_empty(raw_value):

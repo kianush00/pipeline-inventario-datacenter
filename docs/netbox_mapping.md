@@ -72,8 +72,8 @@ This table acts as a data dictionary of the fields the script expects to extract
 | `raid` | `RAID` | Configured RAID level. | `RAID 1`, `RAID 5` |
 | `manufacturer` | `Marca` | Hardware brand or manufacturer. | `Dell`, `HP`, `Cisco` |
 | `model` | `Modelo` | Specific hardware model. | `PowerEdge R740`, `ProLiant DL380` |
-| `serial` | `Serial Number` | Physical serial number for general hardware (non-Dell). | `ABC12345` |
-| `service_tag` | `Service Tag` | Conventionally reserved for the Service Tag of Dell equipment. | `ST-442-XY` |
+| `serial` | `Serial Number` | Physical serial number for general hardware (non-Dell). Coalesced with Service Tag. | `ABC12345` |
+| `service_tag` | `Service Tag` | Conventionally reserved for the Service Tag of Dell equipment. Coalesced into native Serial. | `ST-442-XY` |
 | `asset_tag` | `Nro Inventario` | Internal inventory plate or number. | `INV-9876` |
 | `inventory_uuid` | `UUID` | Unique and deterministic identifier of the node (ideally extracted from DMI or virtual system). | `564d...e2f1` |
 | `bios_ver` | `Version BIOS` | Current BIOS/UEFI firmware version. | `2.14.0` |
@@ -186,6 +186,7 @@ Defines how to **extract** data from the CSV and **map** it to fields in the Net
 | Transform | Behavior |
 | ----------- | ---------------- |
 | `concat_dot` | Concatenates a list of values with the separator `.` (dot + space) |
+| `coalesce` | Returns the first non-empty value from a list of sources. Fails-fast if there is a collision. |
 
 ### Fields NOT included in the DML Mapping
 
