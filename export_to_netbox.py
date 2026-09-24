@@ -2996,7 +2996,9 @@ def _ensure_mac_address_assignment(
         if node_type == NodeType.DEVICE
         else "virtualization.vminterface"
     )
-    existing_macs: list[Record] = list(mac_addresses_endpoint.filter(mac_address=mac_val))
+    existing_macs: list[Record] = list(
+        mac_addresses_endpoint.filter(mac_address=mac_val)
+    )
 
     # 1. Verificar si la MAC ya está asignada a esta interfaz
     for mac_obj in existing_macs:
@@ -3040,7 +3042,9 @@ def _ensure_mac_address_assignment(
     # 3. Crear una nueva MAC.
     if dry_run:
         log.info(
-            "[DRY-RUN] Crearía nueva MAC %s (asignada a objeto %s)", mac_val, iface_obj.id
+            "[DRY-RUN] Crearía nueva MAC %s (asignada a objeto %s)",
+            mac_val,
+            iface_obj.id,
         )
         return MockNetBoxRecord(
             id=0,
@@ -3069,8 +3073,7 @@ def _sync_single_interface(
     obj_id: int,
     iface_endpoint: Endpoint,
     existing_ifaces: dict[str, NetBoxObject],
-    ip_addresses_endpoint: Endpoint,
-    mac_addresses_endpoint: Endpoint,
+    endpoints: NetBoxEndpoints,
     dry_run: bool,
 ) -> tuple[NetBoxObject, NetBoxObject | None, NetBoxObject | None]:
     """
@@ -3112,13 +3115,13 @@ def _sync_single_interface(
     ip_obj = None
     if cidr:
         iface_obj = existing_ifaces[name]
-        ip_obj = _assign_ip(ip_addresses_endpoint, cidr, iface_obj, dry_run)
+        ip_obj = _assign_ip(endpoints.ip_addresses, cidr, iface_obj, dry_run)
 
     mac_obj = None
     if mac:
         iface_obj = existing_ifaces[name]
         mac_obj = _ensure_mac_address_assignment(
-            mac_addresses_endpoint, mac.upper(), iface_obj, dry_run
+            endpoints.mac_addresses, mac.upper(), iface_obj, dry_run
         )
 
     return existing_ifaces[name], ip_obj, mac_obj
@@ -3187,8 +3190,7 @@ def sync_interfaces_for_object(
                 obj_id,
                 iface_endpoint,
                 existing_ifaces,
-                endpoints.ip_addresses,
-                endpoints.mac_addresses,
+                endpoints,
                 dry_run,
             )
             if ip_obj is not None:
