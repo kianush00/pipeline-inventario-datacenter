@@ -2859,11 +2859,25 @@ def parse_network_interfaces(
     macs = split_col(config.csv_columns["iface_mac"].source)
 
     max_len = len(names)
-    for lst in (statuses, ips, prefixes, macs):
+    inconsistencies = []
+    col_mappings = {
+        "iface_status": statuses,
+        "iface_ip": ips,
+        "iface_pfx": prefixes,
+        "iface_mac": macs,
+    }
+
+    for col_key, lst in col_mappings.items():
         if lst and len(lst) != max_len:
-            raise RowValidationError(
-                "Las columnas de red tienen longitudes inconsistentes."
-            )
+            col_name = config.csv_columns[col_key].source
+            inconsistencies.append(f"'{col_name}' tiene {len(lst)} elementos")
+
+    if inconsistencies:
+        ifaces_col = config.csv_columns["iface_names"].source
+        raise RowValidationError(
+            f"Discrepancia de elementos en red: se declararon {max_len} interfaces en '{ifaces_col}', "
+            f"pero " + ", ".join(inconsistencies) + ". Revisa las comas."
+        )
 
     def fill_if_empty(lst: list[str], length: int) -> list[str]:
         return lst if lst else [""] * length
@@ -3342,8 +3356,15 @@ def _sync_row(
     # ── Parsear interfaces ────────────────────────────────
     try:
         interfaces = parse_network_interfaces(row, config)
-    except RowValidationError:
-        log.exception("Error al parsear interfaces de '%s'", machine_name)
+        if not interfaces and not dry_run:
+            ifaces_col = config.csv_columns["iface_names"].source
+            log.warning(
+                "SKIP interfaces de '%s': columna '%s' está vacía u omitida.",
+                machine_name,
+                ifaces_col,
+            )
+    except RowValidationError as e:
+        log.warning("Omitiendo interfaces de '%s': %s", machine_name, e)
         counts[SyncStatus.ERROR] += 1
         return counts
     except Exception:

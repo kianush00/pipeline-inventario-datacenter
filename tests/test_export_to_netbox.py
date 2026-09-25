@@ -1269,7 +1269,7 @@ class TestParseNetworkInterfaces:
             config.csv_columns["iface_names"].source: "eth0, eth1",
             config.csv_columns["iface_ip"].source: "192.168.1.1",  # falta una IP
         }
-        with pytest.raises(RowValidationError, match="longitudes inconsistentes"):
+        with pytest.raises(RowValidationError, match="Discrepancia de elementos en red"):
             parse_network_interfaces(row, config)
 
     def test_empty_columns_filled(self, config: NetBoxMappingConfig) -> None:
