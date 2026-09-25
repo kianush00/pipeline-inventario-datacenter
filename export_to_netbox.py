@@ -3082,6 +3082,45 @@ def _ensure_mac_address_assignment(
         raise NetBoxApiError(f"Error creando MAC {mac_val}: {e}") from e
 
 
+def _upsert_interface_record(
+    name: str,
+    payload: NetBoxPayload,
+    existing_obj: NetBoxObject | None,
+    iface_endpoint: Endpoint,
+    obj_id: int,
+    dry_run: bool,
+) -> NetBoxObject:
+    """Ejecuta la lógica de creación o actualización de una interfaz."""
+    if dry_run:
+        if not existing_obj:
+            log.info("[DRY-RUN] Crearía interfaz %s en objeto %s", name, obj_id)
+            return MockNetBoxRecord(id=0, name=name, **payload)
+
+        diff = check_record_changes(cast(Record, existing_obj), payload)
+        if diff:
+            log.info(
+                "[DRY-RUN] Actualizaría interfaz %s en objeto %s - Cambios: %s",
+                name,
+                obj_id,
+                list(diff.keys()),
+            )
+        return existing_obj
+
+    try:
+        if not existing_obj:
+            new_obj = cast(Record, iface_endpoint.create(**payload))
+            log.info("Interfaz creada: %s", name)
+            return new_obj
+
+        diff = check_record_changes(cast(Record, existing_obj), payload)
+        if diff:
+            cast(Record, existing_obj).update(payload)
+            log.info("Interfaz actualizada: %s", name)
+        return existing_obj
+    except RequestError as e:
+        raise NetBoxApiError(f"Error procesando interfaz '{name}': {e}") from e
+
+
 def _sync_single_interface(
     iface_data: NetworkInterfaceData,
     obj_id: int,
@@ -3094,63 +3133,36 @@ def _sync_single_interface(
     Sincroniza una interfaz individual y le asigna su IP y MAC.
     Retorna una tupla con (Interfaz, IP asignada o None, MAC asignada o None).
     """
-    node_type = get_node_type_from_object(iface_endpoint)
-    name: str = iface_data["name"]
-    enabled: bool = iface_data["enabled"]
-    mac: str | None = iface_data.get("mac")
-    cidr: str | None = iface_data.get("cidr")
+    name = iface_data["name"]
+    payload: NetBoxPayload = {"name": name, "enabled": iface_data["enabled"]}
 
-    payload: NetBoxPayload = {"name": name, "enabled": enabled}
-
-    if node_type == NodeType.DEVICE:
+    if get_node_type_from_object(iface_endpoint) == NodeType.DEVICE:
         payload["device"] = obj_id
         payload["type"] = "other"  # tipo genérico; ajustable
     else:
         payload["virtual_machine"] = obj_id
 
-    is_existing = name in existing_ifaces
-
-    if dry_run:
-        if not is_existing:
-            log.info("[DRY-RUN] Crearía interfaz %s en objeto %s", name, obj_id)
-            existing_ifaces[name] = MockNetBoxRecord(id=0, name=name, **payload)
-        else:
-            diff = check_record_changes(cast(Record, existing_ifaces[name]), payload)
-            if diff:
-                log.info(
-                    "[DRY-RUN] Actualizaría interfaz %s en objeto %s - Cambios: %s",
-                    name,
-                    obj_id,
-                    list(diff.keys()),
-                )
-    else:
-        try:
-            if not is_existing:
-                existing_ifaces[name] = cast(Record, iface_endpoint.create(**payload))
-                log.info("Interfaz creada: %s", name)
-            else:
-                diff = check_record_changes(
-                    cast(Record, existing_ifaces[name]), payload
-                )
-                if diff:
-                    cast(Record, existing_ifaces[name]).update(payload)
-                    log.info("Interfaz actualizada: %s", name)
-        except RequestError as e:
-            raise NetBoxApiError(f"Error procesando interfaz '{name}': {e}") from e
+    iface_obj = _upsert_interface_record(
+        name,
+        payload,
+        existing_ifaces.get(name),
+        iface_endpoint,
+        obj_id,
+        dry_run,
+    )
+    existing_ifaces[name] = iface_obj
 
     ip_obj = None
-    if cidr:
-        iface_obj = existing_ifaces[name]
+    if cidr := iface_data.get("cidr"):
         ip_obj = _assign_ip(endpoints.ip_addresses, cidr, iface_obj, dry_run)
 
     mac_obj = None
-    if mac:
-        iface_obj = existing_ifaces[name]
+    if mac := iface_data.get("mac"):
         mac_obj = _ensure_mac_address_assignment(
             endpoints.mac_addresses, mac.upper(), iface_obj, dry_run
         )
 
-    return existing_ifaces[name], ip_obj, mac_obj
+    return iface_obj, ip_obj, mac_obj
 
 
 def _prune_orphan_interfaces(
