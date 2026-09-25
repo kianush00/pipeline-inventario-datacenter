@@ -2913,7 +2913,7 @@ def _assign_ip(
     cidr: str,
     iface_obj: NetBoxObject,
     dry_run: bool,
-) -> NetBoxObject:
+) -> tuple[NetBoxObject, bool]:
     """
     Crea o actualiza una IP address en NetBox y la asigna a la interfaz.
     Retorna el objeto IP.
@@ -2931,7 +2931,7 @@ def _assign_ip(
         current_id = getattr(ip_obj, "assigned_object_id", None)
         current_type = getattr(ip_obj, "assigned_object_type", None)
         if current_id == iface_obj.id and str(current_type) == assigned_type:
-            return ip_obj
+            return ip_obj, False
 
     # 2. Buscar si hay alguna IP libre con este valor que podamos reclamar
     unassigned_ip = None
@@ -2952,7 +2952,7 @@ def _assign_ip(
                 address=cidr,
                 assigned_object_id=iface_obj.id,
                 assigned_object_type=assigned_type,
-            )
+            ), True
         try:
             unassigned_ip.update(
                 {
@@ -2961,7 +2961,7 @@ def _assign_ip(
                 }
             )
             log.info("IP libre reasignada: %s", cidr)
-            return unassigned_ip
+            return unassigned_ip, True
         except RequestError as e:
             raise NetBoxApiError(f"Error actualizando IP libre {cidr}: {e}") from e
 
@@ -2975,7 +2975,7 @@ def _assign_ip(
             address=cidr,
             assigned_object_id=iface_obj.id,
             assigned_object_type=assigned_type,
-        )
+        ), True
 
     try:
         obj = cast(
@@ -2991,7 +2991,7 @@ def _assign_ip(
         raise NetBoxApiError(f"Error creando IP {cidr}: {e}") from e
 
     log.info("IP creada y asignada: %s", cidr)
-    return obj
+    return obj, True
 
 
 def _ensure_mac_address_assignment(
@@ -2999,7 +2999,7 @@ def _ensure_mac_address_assignment(
     mac_val: str,
     iface_obj: NetBoxObject,
     dry_run: bool,
-) -> NetBoxObject:
+) -> tuple[NetBoxObject, bool]:
     """
     Crea o actualiza una MAC address en NetBox y la asigna a la interfaz.
     Retorna el objeto MAC.
@@ -3019,7 +3019,7 @@ def _ensure_mac_address_assignment(
         current_id = getattr(mac_obj, "assigned_object_id", None)
         current_type = getattr(mac_obj, "assigned_object_type", None)
         if current_id == iface_obj.id and str(current_type) == assigned_type:
-            return mac_obj
+            return mac_obj, False
 
     # 2. Buscar si hay alguna MAC libre con este valor que podamos reclamar
     unassigned_mac = None
@@ -3040,7 +3040,7 @@ def _ensure_mac_address_assignment(
                 mac_address=mac_val,
                 assigned_object_id=iface_obj.id,
                 assigned_object_type=assigned_type,
-            )
+            ), True
         try:
             unassigned_mac.update(
                 {
@@ -3049,7 +3049,7 @@ def _ensure_mac_address_assignment(
                 }
             )
             log.info("MAC libre reasignada: %s", mac_val)
-            return unassigned_mac
+            return unassigned_mac, True
         except RequestError as e:
             raise NetBoxApiError(f"Error actualizando MAC libre {mac_val}: {e}") from e
 
@@ -3065,7 +3065,7 @@ def _ensure_mac_address_assignment(
             mac_address=mac_val,
             assigned_object_id=iface_obj.id,
             assigned_object_type=assigned_type,
-        )
+        ), True
 
     try:
         obj = cast(
@@ -3077,7 +3077,7 @@ def _ensure_mac_address_assignment(
             ),
         )
         log.info("MAC creada y asignada: %s", mac_val)
-        return obj
+        return obj, True
     except RequestError as e:
         raise NetBoxApiError(f"Error creando MAC {mac_val}: {e}") from e
 
@@ -3089,12 +3089,12 @@ def _upsert_interface_record(
     iface_endpoint: Endpoint,
     obj_id: int,
     dry_run: bool,
-) -> NetBoxObject:
+) -> tuple[NetBoxObject, bool]:
     """Ejecuta la lógica de creación o actualización de una interfaz."""
     if dry_run:
         if not existing_obj:
             log.info("[DRY-RUN] Crearía interfaz %s en objeto %s", name, obj_id)
-            return MockNetBoxRecord(id=0, name=name, **payload)
+            return MockNetBoxRecord(id=0, name=name, **payload), True
 
         diff = check_record_changes(cast(Record, existing_obj), payload)
         if diff:
@@ -3104,19 +3104,21 @@ def _upsert_interface_record(
                 obj_id,
                 list(diff.keys()),
             )
-        return existing_obj
+            return existing_obj, True
+        return existing_obj, False
 
     try:
         if not existing_obj:
             new_obj = cast(Record, iface_endpoint.create(**payload))
             log.info("Interfaz creada: %s", name)
-            return new_obj
+            return new_obj, True
 
         diff = check_record_changes(cast(Record, existing_obj), payload)
         if diff:
             cast(Record, existing_obj).update(payload)
             log.info("Interfaz actualizada: %s", name)
-        return existing_obj
+            return existing_obj, True
+        return existing_obj, False
     except RequestError as e:
         raise NetBoxApiError(f"Error procesando interfaz '{name}': {e}") from e
 
@@ -3128,10 +3130,10 @@ def _sync_single_interface(
     existing_ifaces: dict[str, NetBoxObject],
     endpoints: NetBoxEndpoints,
     dry_run: bool,
-) -> tuple[NetBoxObject, NetBoxObject | None, NetBoxObject | None]:
+) -> tuple[NetBoxObject, NetBoxObject | None, NetBoxObject | None, bool]:
     """
     Sincroniza una interfaz individual y le asigna su IP y MAC.
-    Retorna una tupla con (Interfaz, IP asignada o None, MAC asignada o None).
+    Retorna una tupla con (Interfaz, IP asignada o None, MAC asignada o None, hubo cambios).
     """
     name = iface_data["name"]
     payload: NetBoxPayload = {"name": name, "enabled": iface_data["enabled"]}
@@ -3142,7 +3144,7 @@ def _sync_single_interface(
     else:
         payload["virtual_machine"] = obj_id
 
-    iface_obj = _upsert_interface_record(
+    iface_obj, iface_changed = _upsert_interface_record(
         name,
         payload,
         existing_ifaces.get(name),
@@ -3153,16 +3155,20 @@ def _sync_single_interface(
     existing_ifaces[name] = iface_obj
 
     ip_obj = None
+    ip_changed = False
     if cidr := iface_data.get("cidr"):
-        ip_obj = _assign_ip(endpoints.ip_addresses, cidr, iface_obj, dry_run)
+        ip_obj, ip_changed = _assign_ip(
+            endpoints.ip_addresses, cidr, iface_obj, dry_run
+        )
 
     mac_obj = None
+    mac_changed = False
     if mac := iface_data.get("mac"):
-        mac_obj = _ensure_mac_address_assignment(
+        mac_obj, mac_changed = _ensure_mac_address_assignment(
             endpoints.mac_addresses, mac.upper(), iface_obj, dry_run
         )
 
-    return iface_obj, ip_obj, mac_obj
+    return iface_obj, ip_obj, mac_obj, (iface_changed or ip_changed or mac_changed)
 
 
 def _prune_orphan_interfaces(
@@ -3170,12 +3176,13 @@ def _prune_orphan_interfaces(
     csv_iface_names: set[str],
     obj_id: int,
     dry_run: bool,
-) -> int:
+) -> tuple[int, int]:
     """
     Elimina (poda) de NetBox las interfaces que ya no existen en el CSV.
-    Retorna la cantidad de errores ocurridos.
+    Retorna (cantidad_eliminadas, cantidad_errores).
     """
     errors = 0
+    deleted_count = 0
     for name, iface_obj in existing_ifaces.items():
         if name not in csv_iface_names:
             if dry_run:
@@ -3184,14 +3191,16 @@ def _prune_orphan_interfaces(
                     name,
                     obj_id,
                 )
+                deleted_count += 1
             else:
                 try:
                     cast(Record, iface_obj).delete()
                     log.info("DELETED interfaz huérfana: %s", name)
+                    deleted_count += 1
                 except RequestError:
                     log.exception("Error eliminando interfaz huérfana '%s'", name)
                     errors += 1
-    return errors
+    return deleted_count, errors
 
 
 def sync_interfaces_for_object(
@@ -3201,9 +3210,9 @@ def sync_interfaces_for_object(
     interfaces: list[NetworkInterfaceData],
     dry_run: bool,
     prune_interfaces: bool = False,
-) -> tuple[int, list[int]]:
+) -> tuple[int, list[int], bool]:
     """Sincroniza interfaces y sus IPs para un Device o VM.
-    Retorna una tupla: (cantidad de errores, lista de IDs de IPv4 asignadas)."""
+    Retorna una tupla: (cantidad de errores, lista de IDs de IPv4 asignadas, hubo cambios)."""
     if node_type == NodeType.DEVICE:
         iface_endpoint = endpoints.device_interfaces
         iface_filter = {"device_id": obj_id}
@@ -3221,9 +3230,10 @@ def sync_interfaces_for_object(
 
     errors = 0
     ipv4_ids: list[int] = []
+    any_changes = False
     for iface_data in interfaces:
         try:
-            _, ip_obj, _ = _sync_single_interface(
+            _, ip_obj, _, iface_changed = _sync_single_interface(
                 iface_data,
                 obj_id,
                 iface_endpoint,
@@ -3231,6 +3241,9 @@ def sync_interfaces_for_object(
                 endpoints,
                 dry_run,
             )
+            if iface_changed:
+                any_changes = True
+
             if ip_obj is not None:
                 address = getattr(ip_obj, "address", "")
                 if address and ":" not in str(address):
@@ -3241,9 +3254,14 @@ def sync_interfaces_for_object(
 
     if prune_interfaces and obj_id != 0:
         csv_names = {iface["name"] for iface in interfaces}
-        errors += _prune_orphan_interfaces(existing_ifaces, csv_names, obj_id, dry_run)
+        pruned_count, prune_errors = _prune_orphan_interfaces(
+            existing_ifaces, csv_names, obj_id, dry_run
+        )
+        errors += prune_errors
+        if pruned_count > 0:
+            any_changes = True
 
-    return errors, ipv4_ids
+    return errors, ipv4_ids, any_changes
 
 
 # ============================================================
@@ -3398,7 +3416,7 @@ def _sync_row(
 
     # ── Sincronizar interfaces del objeto ─────────────────
     try:
-        iface_errors, ipv4_ids = sync_interfaces_for_object(
+        iface_errors, ipv4_ids, ifaces_changed = sync_interfaces_for_object(
             endpoints,
             obj_id,
             node_type,
@@ -3409,8 +3427,15 @@ def _sync_row(
         if iface_errors > 0:
             counts[SyncStatus.ERROR] += iface_errors
 
+        primary_ip_changed = False
         if main_obj is not None:
-            _assign_primary_ipv4(main_obj, ipv4_ids, machine_name, dry_run)
+            primary_ip_changed = _assign_primary_ipv4(
+                main_obj, ipv4_ids, machine_name, dry_run
+            )
+
+        if result == SyncStatus.UNCHANGED and (ifaces_changed or primary_ip_changed):
+            counts[SyncStatus.UNCHANGED] -= 1
+            counts[SyncStatus.UPDATED] += 1
 
     except Exception:
         log.exception(

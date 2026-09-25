@@ -1580,13 +1580,14 @@ class TestPruneInterfaces:
         # El CSV solo reporta "eth0"
         csv_iface_names = {"eth0"}
 
-        errors = _prune_orphan_interfaces(
+        deleted, errors = _prune_orphan_interfaces(
             existing_ifaces=existing_ifaces,
             csv_iface_names=csv_iface_names,
             obj_id=10,
             dry_run=False,
         )
 
+        assert deleted == 1
         assert errors == 0
         mock_iface1.delete.assert_not_called()
         mock_iface2.delete.assert_called_once()
@@ -1597,12 +1598,13 @@ class TestPruneInterfaces:
         existing_ifaces = {"eth1": mock_iface}
         csv_iface_names = set()
 
-        errors = _prune_orphan_interfaces(
+        deleted, errors = _prune_orphan_interfaces(
             existing_ifaces=existing_ifaces,
             csv_iface_names=csv_iface_names,
             obj_id=10,
             dry_run=True,
         )
 
+        assert deleted == 1
         assert errors == 0
         mock_iface.delete.assert_not_called()
