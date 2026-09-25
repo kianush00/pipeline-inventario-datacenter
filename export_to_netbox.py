@@ -3203,34 +3203,40 @@ def _prune_orphan_interfaces(
     return deleted_count, errors
 
 
-def sync_interfaces_for_object(
-    endpoints: NetBoxEndpoints,
-    obj_id: int,
-    node_type: NodeType,
-    interfaces: list[NetworkInterfaceData],
-    dry_run: bool,
-    prune_interfaces: bool = False,
-) -> tuple[int, list[int], bool]:
-    """Sincroniza interfaces y sus IPs para un Device o VM.
-    Retorna una tupla: (cantidad de errores, lista de IDs de IPv4 asignadas, hubo cambios)."""
+def _get_interface_endpoint_and_filter(
+    endpoints: NetBoxEndpoints, obj_id: int, node_type: NodeType
+) -> tuple[Endpoint, dict[str, Any]]:
+    """Determina el endpoint y filtro correcto de interfaces según el tipo de nodo."""
     if node_type == NodeType.DEVICE:
-        iface_endpoint = endpoints.device_interfaces
-        iface_filter = {"device_id": obj_id}
-    else:
-        iface_endpoint = endpoints.vm_interfaces
-        iface_filter = {"virtual_machine_id": obj_id}
+        return endpoints.device_interfaces, {"device_id": obj_id}
+    return endpoints.vm_interfaces, {"virtual_machine_id": obj_id}
 
+
+def _fetch_existing_interfaces(
+    iface_endpoint: Endpoint,
+    iface_filter: dict[str, Any],
+    obj_id: int,
+) -> dict[str, NetBoxObject]:
+    """Obtiene las interfaces existentes de un nodo desde NetBox."""
     if obj_id == 0:
-        filtered_ifaces = []
-    else:
-        filtered_ifaces = list(iface_endpoint.filter(**iface_filter))
-    existing_ifaces: dict[str, NetBoxObject] = {
-        str(iface.name): iface for iface in filtered_ifaces
-    }
+        return {}
+    filtered_ifaces = list(iface_endpoint.filter(**iface_filter))
+    return {str(iface.name): iface for iface in filtered_ifaces}
 
+
+def _process_interfaces_sync(
+    interfaces: list[NetworkInterfaceData],
+    obj_id: int,
+    iface_endpoint: Endpoint,
+    existing_ifaces: dict[str, NetBoxObject],
+    endpoints: NetBoxEndpoints,
+    dry_run: bool,
+) -> tuple[int, list[int], bool]:
+    """Ejecuta la sincronización de una lista de interfaces y recopila IDs de IPv4."""
     errors = 0
     ipv4_ids: list[int] = []
     any_changes = False
+
     for iface_data in interfaces:
         try:
             _, ip_obj, _, iface_changed = _sync_single_interface(
@@ -3251,6 +3257,28 @@ def sync_interfaces_for_object(
         except NetBoxApiError:
             log.exception("ERROR de API sincronizando interfaz")
             errors += 1
+
+    return errors, ipv4_ids, any_changes
+
+
+def sync_interfaces_for_object(
+    endpoints: NetBoxEndpoints,
+    obj_id: int,
+    node_type: NodeType,
+    interfaces: list[NetworkInterfaceData],
+    dry_run: bool,
+    prune_interfaces: bool = False,
+) -> tuple[int, list[int], bool]:
+    """Sincroniza interfaces y sus IPs para un Device o VM.
+    Retorna una tupla: (cantidad de errores, lista de IDs de IPv4 asignadas, hubo cambios)."""
+    iface_endpoint, iface_filter = _get_interface_endpoint_and_filter(
+        endpoints, obj_id, node_type
+    )
+    existing_ifaces = _fetch_existing_interfaces(iface_endpoint, iface_filter, obj_id)
+
+    errors, ipv4_ids, any_changes = _process_interfaces_sync(
+        interfaces, obj_id, iface_endpoint, existing_ifaces, endpoints, dry_run
+    )
 
     if prune_interfaces and obj_id != 0:
         csv_names = {iface["name"] for iface in interfaces}
