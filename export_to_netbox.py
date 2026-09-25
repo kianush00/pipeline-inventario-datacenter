@@ -3168,7 +3168,8 @@ def _sync_single_interface(
             endpoints.mac_addresses, mac.upper(), iface_obj, dry_run
         )
 
-    return iface_obj, ip_obj, mac_obj, (iface_changed or ip_changed or mac_changed)
+    any_changes = iface_changed or ip_changed or mac_changed
+    return iface_obj, ip_obj, mac_obj, any_changes
 
 
 def _prune_orphan_interfaces(
@@ -3232,7 +3233,8 @@ def _process_interfaces_sync(
     endpoints: NetBoxEndpoints,
     dry_run: bool,
 ) -> tuple[int, list[int], bool]:
-    """Ejecuta la sincronización de una lista de interfaces y recopila IDs de IPv4."""
+    """Ejecuta la sincronización de una lista de interfaces y recopila IDs de IPv4.
+    Retorna una tupla: (cantidad de errores, lista de IDs de IPv4 asignadas, hubo cambios)."""
     errors = 0
     ipv4_ids: list[int] = []
     any_changes = False
@@ -3247,8 +3249,7 @@ def _process_interfaces_sync(
                 endpoints,
                 dry_run,
             )
-            if iface_changed:
-                any_changes = True
+            any_changes |= iface_changed
 
             if ip_obj is not None:
                 address = getattr(ip_obj, "address", "")
@@ -3286,8 +3287,7 @@ def sync_interfaces_for_object(
             existing_ifaces, csv_names, obj_id, dry_run
         )
         errors += prune_errors
-        if pruned_count > 0:
-            any_changes = True
+        any_changes |= pruned_count > 0
 
     return errors, ipv4_ids, any_changes
 
@@ -3342,6 +3342,102 @@ def _assign_primary_ipv4(
         return False
 
 
+def _process_node_sync(
+    machine_name: str,
+    row: CsvRow,
+    node_type: NodeType,
+    endpoints: NetBoxEndpoints,
+    config: NetBoxMappingConfig,
+    site: NetBoxObject,
+    cluster_type_map: dict[str, str],
+    fallback_cluster_type: NetBoxObject,
+    caches: CacheStore,
+    csv_name_counts: Counter[str],
+    dry_run: bool,
+) -> tuple[SyncStatus, int, NetBoxObject | None]:
+    """Sincroniza el nodo principal (Device o VM) en NetBox."""
+    if node_type == NodeType.DEVICE:
+        result, obj_id, main_obj = sync_device(
+            endpoints,
+            row,
+            config,
+            site,
+            cluster_type_map,
+            fallback_cluster_type,
+            caches,
+            csv_name_counts,
+            dry_run,
+        )
+        site_id = get_netbox_object_id(site)
+        caches.host_devices[(site_id, machine_name)] = obj_id
+        return result, obj_id, main_obj
+    else:
+        return sync_vm(
+            endpoints,
+            row,
+            config,
+            site,
+            cluster_type_map,
+            fallback_cluster_type,
+            caches,
+            csv_name_counts,
+            dry_run,
+        )
+
+
+def _parse_row_interfaces(
+    row: CsvRow,
+    machine_name: str,
+    config: NetBoxMappingConfig,
+    dry_run: bool,
+) -> list[NetworkInterfaceData]:
+    """Parsea las interfaces de la fila CSV y advierte si están vacías."""
+    interfaces = parse_network_interfaces(row, config)
+    if not interfaces and not dry_run:
+        ifaces_col = config.csv_columns["iface_names"].source
+        log.warning(
+            "SKIP interfaces de '%s': columna '%s' está vacía u omitida.",
+            machine_name,
+            ifaces_col,
+        )
+    return interfaces
+
+
+def _process_interfaces_and_ips(
+    endpoints: NetBoxEndpoints,
+    obj_id: int,
+    node_type: NodeType,
+    interfaces: list[NetworkInterfaceData],
+    dry_run: bool,
+    prune_interfaces: bool,
+    main_obj: NetBoxObject | None,
+    machine_name: str,
+    counts: SyncCounts,
+    result: SyncStatus,
+) -> None:
+    """Sincroniza interfaces y asigna la IP primaria, mutando los contadores."""
+    iface_errors, ipv4_ids, ifaces_changed = sync_interfaces_for_object(
+        endpoints,
+        obj_id,
+        node_type,
+        interfaces,
+        dry_run,
+        prune_interfaces,
+    )
+    if iface_errors > 0:
+        counts[SyncStatus.ERROR] += iface_errors
+
+    primary_ip_changed = False
+    if main_obj is not None:
+        primary_ip_changed = _assign_primary_ipv4(
+            main_obj, ipv4_ids, machine_name, dry_run
+        )
+
+    if result == SyncStatus.UNCHANGED and (ifaces_changed or primary_ip_changed):
+        counts[SyncStatus.UNCHANGED] -= 1
+        counts[SyncStatus.UPDATED] += 1
+
+
 def _sync_row(
     row_num: int,
     row: CsvRow,
@@ -3367,34 +3463,23 @@ def _sync_row(
     machine_name = extract_csv_value(row, "machine_name", config) or f"fila {row_num}"
 
     try:
-        if node_type == NodeType.DEVICE:
-            result, obj_id, main_obj = sync_device(
-                endpoints,
-                row,
-                config,
-                site,
-                cluster_type_map,
-                fallback_cluster_type,
-                caches,
-                csv_name_counts,
-                dry_run,
-            )
-            site_id = get_netbox_object_id(site)
-            caches.host_devices[(site_id, machine_name)] = obj_id
-        else:
-            result, obj_id, main_obj = sync_vm(
-                endpoints,
-                row,
-                config,
-                site,
-                cluster_type_map,
-                fallback_cluster_type,
-                caches,
-                csv_name_counts,
-                dry_run,
-            )
+        result, obj_id, main_obj = _process_node_sync(
+            machine_name,
+            row,
+            node_type,
+            endpoints,
+            config,
+            site,
+            cluster_type_map,
+            fallback_cluster_type,
+            caches,
+            csv_name_counts,
+            dry_run,
+        )
     except ConfigValidationError as e:
-        raise ConfigValidationError(f"Error de configuración en fila {row_num}: {e}")
+        raise ConfigValidationError(
+            f"Error de configuración en fila {row_num}: {e}"
+        ) from e
     except RowSkipCondition as e:
         log.warning("SKIP fila %d: %s", row_num, e)
         counts[SyncStatus.SKIPPED] += 1
@@ -3417,22 +3502,12 @@ def _sync_row(
     # ── Validar ID para interfaces (Fail-Fast) ────────────
     if not obj_id:
         if not dry_run:
-            log.warning(
-                "SKIP interfaces de '%s': el objeto no tiene ID.",
-                machine_name,
-            )
+            log.warning("SKIP interfaces de '%s': el objeto no tiene ID.", machine_name)
         return counts
 
     # ── Parsear interfaces ────────────────────────────────
     try:
-        interfaces = parse_network_interfaces(row, config)
-        if not interfaces and not dry_run:
-            ifaces_col = config.csv_columns["iface_names"].source
-            log.warning(
-                "SKIP interfaces de '%s': columna '%s' está vacía u omitida.",
-                machine_name,
-                ifaces_col,
-            )
+        interfaces = _parse_row_interfaces(row, machine_name, config, dry_run)
     except RowValidationError as e:
         log.warning("Omitiendo interfaces de '%s': %s", machine_name, e)
         counts[SyncStatus.ERROR] += 1
@@ -3444,27 +3519,18 @@ def _sync_row(
 
     # ── Sincronizar interfaces del objeto ─────────────────
     try:
-        iface_errors, ipv4_ids, ifaces_changed = sync_interfaces_for_object(
+        _process_interfaces_and_ips(
             endpoints,
             obj_id,
             node_type,
             interfaces,
             dry_run,
             prune_interfaces,
+            main_obj,
+            machine_name,
+            counts,
+            result,
         )
-        if iface_errors > 0:
-            counts[SyncStatus.ERROR] += iface_errors
-
-        primary_ip_changed = False
-        if main_obj is not None:
-            primary_ip_changed = _assign_primary_ipv4(
-                main_obj, ipv4_ids, machine_name, dry_run
-            )
-
-        if result == SyncStatus.UNCHANGED and (ifaces_changed or primary_ip_changed):
-            counts[SyncStatus.UNCHANGED] -= 1
-            counts[SyncStatus.UPDATED] += 1
-
     except Exception:
         log.exception(
             "ERROR inesperado al sincronizar interfaces de '%s'", machine_name
