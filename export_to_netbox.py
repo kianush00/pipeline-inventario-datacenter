@@ -3414,7 +3414,7 @@ def _process_interfaces_and_ips(
     machine_name: str,
     counts: SyncCounts,
     result: SyncStatus,
-) -> None:
+) -> SyncCounts:
     """Sincroniza interfaces y asigna la IP primaria, mutando los contadores."""
     iface_errors, ipv4_ids, ifaces_changed = sync_interfaces_for_object(
         endpoints,
@@ -3436,6 +3436,8 @@ def _process_interfaces_and_ips(
     if result == SyncStatus.UNCHANGED and (ifaces_changed or primary_ip_changed):
         counts[SyncStatus.UNCHANGED] -= 1
         counts[SyncStatus.UPDATED] += 1
+        
+    return counts
 
 
 def _sync_row(
@@ -3519,7 +3521,7 @@ def _sync_row(
 
     # ── Sincronizar interfaces del objeto ─────────────────
     try:
-        _process_interfaces_and_ips(
+        counts = _process_interfaces_and_ips(
             endpoints,
             obj_id,
             node_type,
