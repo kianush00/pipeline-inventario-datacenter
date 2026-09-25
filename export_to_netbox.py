@@ -692,6 +692,34 @@ def create_with_fallback_slug(
             ) from e
 
 
+def check_record_changes(
+    record: Record,
+    payload: NetBoxPayload,
+) -> NetBoxPayload:
+    """
+    Determina qué campos cambiarían en el Record al aplicar el payload,
+    sin persistir cambios ni realizar llamadas HTTP.
+    Retorna un diccionario con las modificaciones detectadas.
+
+    Nota: Utiliza Record._init_cache (API interna de pynetbox, verificado
+    en v7.8.0) para clonar el estado original. Si la API interna cambia
+    en una versión futura, el fallback asume conservadoramente que todos
+    los campos del payload han cambiado.
+    """
+    try:
+        temp = Record(dict(record._init_cache), record.api, record.endpoint)
+    except (AttributeError, TypeError):
+        log.debug(
+            "Fallback en check_record_changes: _init_cache no disponible; "
+            "se asume que todos los campos del payload han cambiado."
+        )
+        return dict(payload)
+
+    for k, v in payload.items():
+        setattr(temp, k, v)
+    return temp.updates()
+
+
 def parse_int(value: Any) -> int:
     """Convierte un valor a int, o lanza ValueError si no es convertible."""
     try:
@@ -2368,34 +2396,6 @@ def _is_name_safely_unique(
     return False
 
 
-def _check_record_changes(
-    record: Record,
-    payload: NetBoxPayload,
-) -> NetBoxPayload:
-    """
-    Determina qué campos cambiarían en el Record al aplicar el payload,
-    sin persistir cambios ni realizar llamadas HTTP.
-    Retorna un diccionario con las modificaciones detectadas.
-
-    Nota: Utiliza Record._init_cache (API interna de pynetbox, verificado
-    en v7.8.0) para clonar el estado original. Si la API interna cambia
-    en una versión futura, el fallback asume conservadoramente que todos
-    los campos del payload han cambiado.
-    """
-    try:
-        temp = Record(dict(record._init_cache), record.api, record.endpoint)
-    except (AttributeError, TypeError):
-        log.debug(
-            "Fallback en check_record_changes: _init_cache no disponible; "
-            "se asume que todos los campos del payload han cambiado."
-        )
-        return dict(payload)
-
-    for k, v in payload.items():
-        setattr(temp, k, v)
-    return temp.updates()
-
-
 def _execute_sync(
     endpoint: Endpoint,
     payload: NetBoxPayload,
@@ -2429,7 +2429,7 @@ def _execute_sync(
             return SyncStatus.CREATED, 0, None
 
         existing_id = get_netbox_object_id(existing[0])
-        diff = _check_record_changes(existing[0], payload)
+        diff = check_record_changes(existing[0], payload)
         if diff:
             log.info(
                 "[DRY-RUN] Actualizaría %s: %s (UUID=%s) - Cambios: %s",
@@ -3111,18 +3111,30 @@ def _sync_single_interface(
     is_existing = name in existing_ifaces
 
     if dry_run:
-        action = "Actualizaría" if is_existing else "Crearía"
-        log.info("[DRY-RUN] %s interfaz %s en objeto %s", action, name, obj_id)
         if not is_existing:
+            log.info("[DRY-RUN] Crearía interfaz %s en objeto %s", name, obj_id)
             existing_ifaces[name] = MockNetBoxRecord(id=0, name=name, **payload)
+        else:
+            diff = check_record_changes(cast(Record, existing_ifaces[name]), payload)
+            if diff:
+                log.info(
+                    "[DRY-RUN] Actualizaría interfaz %s en objeto %s - Cambios: %s",
+                    name,
+                    obj_id,
+                    list(diff.keys()),
+                )
     else:
         try:
-            if is_existing:
-                cast(Record, existing_ifaces[name]).update(payload)
-                log.info("Interfaz actualizada: %s", name)
-            else:
+            if not is_existing:
                 existing_ifaces[name] = cast(Record, iface_endpoint.create(**payload))
                 log.info("Interfaz creada: %s", name)
+            else:
+                diff = check_record_changes(
+                    cast(Record, existing_ifaces[name]), payload
+                )
+                if diff:
+                    cast(Record, existing_ifaces[name]).update(payload)
+                    log.info("Interfaz actualizada: %s", name)
         except RequestError as e:
             raise NetBoxApiError(f"Error procesando interfaz '{name}': {e}") from e
 
