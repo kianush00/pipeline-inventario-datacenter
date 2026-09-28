@@ -61,7 +61,7 @@ Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes prin
 
 ## 7. Verificación de Calidad, Tipos y Linting Continuo
 
-Antes de dar cualquier modificación por concluida, **como agente DEBES verificar y corregir autónomamente** el código modificado ejecutando las siguientes herramientas desde el entorno virtual:
+Antes de dar cualquier modificación por concluida, **como agente DEBES verificar y corregir autónomamente** el código modificado (incluyendo los archivos de test modificados) ejecutando las siguientes herramientas desde el entorno virtual:
 
 1. **Tipado Estático (Pyright / Pyrefly):**
    - Linux/macOS: `.venv/bin/pyright <archivo_modificado>`

@@ -48,7 +48,7 @@ import os
 import re
 import sys
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
@@ -106,18 +106,18 @@ class NetBoxApiError(Exception):
     al interactuar con Pynetbox (RequestError)."""
 
 
+class FieldParseError(ValueError):
+    """Excepción lanzada cuando un campo opcional contiene datos mal formados,
+    permitiendo a la capa superior decidir si ignorarlo o abortar la fila."""
+
+
 @contextmanager
-def netbox_error_wrap(msg: str) -> Iterator[None]:
+def netbox_error_wrap(msg: str) -> Generator[None, None, None]:
     """Envuelve errores de la API de NetBox en excepciones legibles de nuestro dominio."""
     try:
         yield
     except RequestError as e:
         raise NetBoxApiError(f"{msg}: {e}") from e
-
-
-class FieldParseError(ValueError):
-    """Excepción lanzada cuando un campo opcional contiene datos mal formados,
-    permitiendo a la capa superior decidir si ignorarlo o abortar la fila."""
 
 
 # ============================================================
