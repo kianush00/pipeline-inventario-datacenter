@@ -2785,19 +2785,16 @@ def _parse_single_network_interface(
     mac_val = mac_raw if not config.is_empty(mac_raw) else None
 
     cidr = None
-    if ip_val:
-        try:
+    try:
+        if ip_val:
             ip_val = _validate_interface_ip(ip_val, name)
             if pfx_val:
                 cidr = _build_interface_cidr(ip_val, pfx_val, name)
-        except FieldParseError as e:
-            raise RowValidationError(str(e)) from e
 
-    if mac_val:
-        try:
+        if mac_val:
             mac_val = _sanitize_mac_address(mac_val, name)
-        except FieldParseError as e:
-            raise RowValidationError(str(e)) from e
+    except FieldParseError as e:
+        raise RowValidationError(str(e)) from e
 
     return {
         "name": name,
@@ -3155,8 +3152,8 @@ def _prune_orphan_interfaces(
                     cast(Record, iface_obj).delete()
                     log.info("DELETED interfaz huérfana: %s", name)
                     deleted_count += 1
-                except RequestError:
-                    log.exception("Error eliminando interfaz huérfana '%s'", name)
+                except RequestError as e:
+                    log.warning("Error eliminando interfaz huérfana '%s': %s", name, e)
                     errors += 1
     return deleted_count, errors
 
