@@ -2926,178 +2926,130 @@ def parse_row_interfaces(
 # ============================================================
 
 
+def _assign_network_resource(
+    endpoint: Endpoint,
+    resource_name: str,
+    search_kwargs: dict[str, Any],
+    create_kwargs: dict[str, Any],
+    value_str: str,
+    iface_obj: NetBoxObject,
+    dry_run: bool,
+) -> tuple[NetBoxObject, bool]:
+    """Lógica común para asignar recursos de red (IP, MAC) a una interfaz."""
+    node_type = get_node_type_from_object(iface_obj)
+    assigned_type: str = (
+        "dcim.interface"
+        if node_type == NodeType.DEVICE
+        else "virtualization.vminterface"
+    )
+    existing_records: list[Record] = list(endpoint.filter(**search_kwargs))
+
+    # 1. Verificar si ya está asignado a esta interfaz
+    for record in existing_records:
+        current_id = getattr(record, "assigned_object_id", None)
+        current_type = getattr(record, "assigned_object_type", None)
+        if current_id == iface_obj.id and str(current_type) == assigned_type:
+            return record, False
+
+    # 2. Buscar si hay alguno libre para reasignar
+    unassigned = next(
+        (r for r in existing_records if getattr(r, "assigned_object_id", None) is None),
+        None,
+    )
+
+    if unassigned:
+        if dry_run:
+            log.info(
+                "[DRY-RUN] Actualizaría %s libre %s (asignación a objeto %s)",
+                resource_name,
+                value_str,
+                iface_obj.id,
+            )
+            return MockNetBoxRecord(
+                id=0,
+                assigned_object_id=iface_obj.id,
+                assigned_object_type=assigned_type,
+                **search_kwargs,
+            ), True
+        try:
+            unassigned.update(
+                {
+                    "assigned_object_type": assigned_type,
+                    "assigned_object_id": iface_obj.id,
+                }
+            )
+            log.info("%s libre reasignada: %s", resource_name, value_str)
+            return unassigned, True
+        except RequestError as e:
+            raise NetBoxApiError(
+                f"Error actualizando {resource_name} libre {value_str}: {e}"
+            ) from e
+
+    # 3. Crear nuevo recurso
+    if dry_run:
+        log.info(
+            "[DRY-RUN] Crearía nuev@ %s %s (asignada a objeto %s)",
+            resource_name,
+            value_str,
+            iface_obj.id,
+        )
+        return MockNetBoxRecord(
+            id=0,
+            assigned_object_id=iface_obj.id,
+            assigned_object_type=assigned_type,
+            **search_kwargs,
+        ), True
+
+    try:
+        obj = cast(
+            Record,
+            endpoint.create(
+                assigned_object_type=assigned_type,
+                assigned_object_id=iface_obj.id,
+                **create_kwargs,
+            ),
+        )
+    except RequestError as e:
+        raise NetBoxApiError(f"Error creando {resource_name} {value_str}: {e}") from e
+
+    log.info("%s creada y asignada: %s", resource_name, value_str)
+    return obj, True
+
+
 def _assign_ip(
     ip_addresses_endpoint: Endpoint,
     cidr: str,
     iface_obj: NetBoxObject,
     dry_run: bool,
 ) -> tuple[NetBoxObject, bool]:
-    """
-    Crea o actualiza una IP address en NetBox y la asigna a la interfaz.
-    Retorna el objeto IP.
-    """
-    node_type = get_node_type_from_object(iface_obj)
-    assigned_type: str = (
-        "dcim.interface"
-        if node_type == NodeType.DEVICE
-        else "virtualization.vminterface"
+    """Crea o actualiza una IP address en NetBox y la asigna a la interfaz."""
+    return _assign_network_resource(
+        endpoint=ip_addresses_endpoint,
+        resource_name="IP",
+        search_kwargs={"address": cidr},
+        create_kwargs={"address": cidr, "status": "active"},
+        value_str=cidr,
+        iface_obj=iface_obj,
+        dry_run=dry_run,
     )
-    existing_ips: list[Record] = list(ip_addresses_endpoint.filter(address=cidr))
-
-    # 1. Verificar si la IP ya está asignada a esta interfaz
-    for ip_obj in existing_ips:
-        current_id = getattr(ip_obj, "assigned_object_id", None)
-        current_type = getattr(ip_obj, "assigned_object_type", None)
-        if current_id == iface_obj.id and str(current_type) == assigned_type:
-            return ip_obj, False
-
-    # 2. Buscar si hay alguna IP libre con este valor que podamos reclamar
-    unassigned_ip = None
-    for ip_obj in existing_ips:
-        if getattr(ip_obj, "assigned_object_id", None) is None:
-            unassigned_ip = ip_obj
-            break
-
-    if unassigned_ip:
-        if dry_run:
-            log.info(
-                "[DRY-RUN] Actualizaría IP libre %s (asignación a objeto %s)",
-                cidr,
-                iface_obj.id,
-            )
-            return MockNetBoxRecord(
-                id=0,
-                address=cidr,
-                assigned_object_id=iface_obj.id,
-                assigned_object_type=assigned_type,
-            ), True
-        try:
-            unassigned_ip.update(
-                {
-                    "assigned_object_type": assigned_type,
-                    "assigned_object_id": iface_obj.id,
-                }
-            )
-            log.info("IP libre reasignada: %s", cidr)
-            return unassigned_ip, True
-        except RequestError as e:
-            raise NetBoxApiError(f"Error actualizando IP libre {cidr}: {e}") from e
-
-    # 3. Todas las IPs existentes están ocupadas por otros nodos. Crear una nueva.
-    if dry_run:
-        log.info(
-            "[DRY-RUN] Crearía nueva IP %s (asignada a objeto %s)", cidr, iface_obj.id
-        )
-        return MockNetBoxRecord(
-            id=0,
-            address=cidr,
-            assigned_object_id=iface_obj.id,
-            assigned_object_type=assigned_type,
-        ), True
-
-    try:
-        obj = cast(
-            Record,
-            ip_addresses_endpoint.create(
-                address=cidr,
-                status="active",
-                assigned_object_type=assigned_type,
-                assigned_object_id=iface_obj.id,
-            ),
-        )
-    except RequestError as e:
-        raise NetBoxApiError(f"Error creando IP {cidr}: {e}") from e
-
-    log.info("IP creada y asignada: %s", cidr)
-    return obj, True
 
 
-def _ensure_mac_address_assignment(
+def _assign_mac(
     mac_addresses_endpoint: Endpoint,
     mac_val: str,
     iface_obj: NetBoxObject,
     dry_run: bool,
 ) -> tuple[NetBoxObject, bool]:
-    """
-    Crea o actualiza una MAC address en NetBox y la asigna a la interfaz.
-    Retorna el objeto MAC.
-    """
-    node_type = get_node_type_from_object(iface_obj)
-    assigned_type: str = (
-        "dcim.interface"
-        if node_type == NodeType.DEVICE
-        else "virtualization.vminterface"
+    """Crea o actualiza una MAC address en NetBox y la asigna a la interfaz."""
+    return _assign_network_resource(
+        endpoint=mac_addresses_endpoint,
+        resource_name="MAC",
+        search_kwargs={"mac_address": mac_val},
+        create_kwargs={"mac_address": mac_val},
+        value_str=mac_val,
+        iface_obj=iface_obj,
+        dry_run=dry_run,
     )
-    existing_macs: list[Record] = list(
-        mac_addresses_endpoint.filter(mac_address=mac_val)
-    )
-
-    # 1. Verificar si la MAC ya está asignada a esta interfaz
-    for mac_obj in existing_macs:
-        current_id = getattr(mac_obj, "assigned_object_id", None)
-        current_type = getattr(mac_obj, "assigned_object_type", None)
-        if current_id == iface_obj.id and str(current_type) == assigned_type:
-            return mac_obj, False
-
-    # 2. Buscar si hay alguna MAC libre con este valor que podamos reclamar
-    unassigned_mac = None
-    for mac_obj in existing_macs:
-        if getattr(mac_obj, "assigned_object_id", None) is None:
-            unassigned_mac = mac_obj
-            break
-
-    if unassigned_mac:
-        if dry_run:
-            log.info(
-                "[DRY-RUN] Actualizaría MAC libre %s (asignación a objeto %s)",
-                mac_val,
-                iface_obj.id,
-            )
-            return MockNetBoxRecord(
-                id=0,
-                mac_address=mac_val,
-                assigned_object_id=iface_obj.id,
-                assigned_object_type=assigned_type,
-            ), True
-        try:
-            unassigned_mac.update(
-                {
-                    "assigned_object_type": assigned_type,
-                    "assigned_object_id": iface_obj.id,
-                }
-            )
-            log.info("MAC libre reasignada: %s", mac_val)
-            return unassigned_mac, True
-        except RequestError as e:
-            raise NetBoxApiError(f"Error actualizando MAC libre {mac_val}: {e}") from e
-
-    # 3. Crear una nueva MAC.
-    if dry_run:
-        log.info(
-            "[DRY-RUN] Crearía nueva MAC %s (asignada a objeto %s)",
-            mac_val,
-            iface_obj.id,
-        )
-        return MockNetBoxRecord(
-            id=0,
-            mac_address=mac_val,
-            assigned_object_id=iface_obj.id,
-            assigned_object_type=assigned_type,
-        ), True
-
-    try:
-        obj = cast(
-            Record,
-            mac_addresses_endpoint.create(
-                mac_address=mac_val,
-                assigned_object_type=assigned_type,
-                assigned_object_id=iface_obj.id,
-            ),
-        )
-        log.info("MAC creada y asignada: %s", mac_val)
-        return obj, True
-    except RequestError as e:
-        raise NetBoxApiError(f"Error creando MAC {mac_val}: {e}") from e
 
 
 def _upsert_interface_record(
@@ -3182,7 +3134,7 @@ def _sync_single_interface(
     mac_obj = None
     mac_changed = False
     if mac := iface_data.get("mac"):
-        mac_obj, mac_changed = _ensure_mac_address_assignment(
+        mac_obj, mac_changed = _assign_mac(
             endpoints.mac_addresses, mac.upper(), iface_obj, dry_run
         )
 
