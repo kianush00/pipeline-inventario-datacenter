@@ -48,6 +48,8 @@ import os
 import re
 import sys
 from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, NoReturn, TypeAlias, TypedDict, Union, cast
@@ -102,6 +104,15 @@ class RowSkipCondition(Exception):
 class NetBoxApiError(Exception):
     """Excepción lanzada cuando ocurre un error de API persistente
     al interactuar con Pynetbox (RequestError)."""
+
+
+@contextmanager
+def netbox_error_wrap(msg: str) -> Iterator[None]:
+    """Envuelve errores de la API de NetBox en excepciones legibles de nuestro dominio."""
+    try:
+        yield
+    except RequestError as e:
+        raise NetBoxApiError(f"{msg}: {e}") from e
 
 
 class FieldParseError(ValueError):
@@ -683,13 +694,11 @@ def create_with_fallback_slug(
             slug_fallback,
         )
         kwargs["slug"] = slug_fallback
-        try:
+        with netbox_error_wrap(
+            f"Imposible crear {object_type_name} '{original_name}' debido a colisión persistente "
+            f"de slug o rechazo de NetBox"
+        ):
             return cast(Record, endpoint.create(**kwargs))
-        except RequestError as e:
-            raise NetBoxApiError(
-                f"Imposible crear {object_type_name} '{original_name}' debido a colisión persistente "
-                f"de slug o rechazo de NetBox: {e}"
-            ) from e
 
 
 def check_record_changes(
@@ -1354,7 +1363,7 @@ def _sync_device_type_u_height(
         )
         return existing_dt
 
-    try:
+    with netbox_error_wrap(f"Error actualizando u_height de DeviceType '{model}'"):
         existing_dt.update({"u_height": target_height_val})
         log.info(
             "DeviceType '%s' u_height actualizado a %g",
@@ -1362,10 +1371,6 @@ def _sync_device_type_u_height(
             target_height_val,
         )
         return existing_dt
-    except RequestError as e:
-        raise NetBoxApiError(
-            f"Error actualizando u_height de DeviceType '{model}': {e}"
-        ) from e
 
 
 def _create_device_type(
@@ -1528,10 +1533,8 @@ def ensure_rack(
         cache[cache_key] = obj
         return obj
 
-    try:
+    with netbox_error_wrap(f"No se pudo crear el Rack '{name}'"):
         obj = cast(Record, racks_endpoint.create(name=name, site=site_id))
-    except RequestError as e:
-        raise NetBoxApiError(f"No se pudo crear el Rack '{name}': {e}") from e
     log.info("Rack creado: %s", name)
     cache[cache_key] = obj
     return obj
@@ -1568,7 +1571,7 @@ def ensure_cluster(
         cache[cache_key] = obj
         return obj
 
-    try:
+    with netbox_error_wrap(f"No se pudo crear el Cluster '{name}'"):
         obj = cast(
             Record,
             clusters_endpoint.create(
@@ -1577,8 +1580,6 @@ def ensure_cluster(
                 site=site_id,
             ),
         )
-    except RequestError as e:
-        raise NetBoxApiError(f"No se pudo crear el Cluster '{name}': {e}") from e
     log.info("Cluster creado: %s", name)
     cache[cache_key] = obj
     return obj
@@ -1607,13 +1608,9 @@ def _sync_single_device_role(
             if dry_run:
                 log.info("[DRY-RUN] Actualizaría DeviceRole para permitir VM: %s", name)
             else:
-                try:
+                with netbox_error_wrap(f"Error actualizando DeviceRole '{name}'"):
                     role_obj.update({"vm_role": True})
                     log.info("DeviceRole actualizado para permitir VM: %s", name)
-                except RequestError as e:
-                    raise NetBoxApiError(
-                        f"Error actualizando DeviceRole '{name}': {e}"
-                    ) from e
 
         device_roles_cache[key] = role_obj
         return role_obj
@@ -2452,23 +2449,15 @@ def _execute_sync(
         return SyncStatus.UNCHANGED, existing_id, existing[0]
 
     if not existing:
-        try:
+        with netbox_error_wrap(f"Error al crear {node_type} '{machine_name}'"):
             obj = cast(Record, endpoint.create(**payload))
-        except RequestError as e:
-            raise NetBoxApiError(
-                f"Error al crear {node_type} '{machine_name}': {e}"
-            ) from e
         obj_id = get_netbox_object_id(obj)
         log.info("CREATED %s: %s (ID=%d)", node_type, machine_name, obj_id)
         return SyncStatus.CREATED, obj_id, obj
 
     existing_id = get_netbox_object_id(existing[0])
-    try:
+    with netbox_error_wrap(f"Error al actualizar {node_type} '{machine_name}'"):
         updated = existing[0].update(payload)
-    except RequestError as e:
-        raise NetBoxApiError(
-            f"Error al actualizar {node_type} '{machine_name}': {e}"
-        ) from e
     if updated:
         log.info("UPDATED %s: %s", node_type, machine_name)
         return SyncStatus.UPDATED, existing_id, existing[0]
@@ -2567,9 +2556,7 @@ def sync_device(
     manufacturer = extract_csv_value(row, "manufacturer", config)
     model = extract_csv_value(row, "model", config)
     if not manufacturer or not model:
-        raise RowSkipCondition(
-            "Falta 'manufacturer' o 'model'. Requerido para Device."
-        )
+        raise RowSkipCondition("Falta 'manufacturer' o 'model'. Requerido para Device.")
 
     node_cfg = config.node_types.get_config(NodeType.DEVICE)
 
@@ -2979,7 +2966,7 @@ def _assign_network_resource(
                 assigned_object_type=assigned_type,
                 **search_kwargs,
             ), True
-        try:
+        with netbox_error_wrap(f"Error actualizando {resource_name} libre {value_str}"):
             unassigned.update(
                 {
                     "assigned_object_type": assigned_type,
@@ -2988,10 +2975,6 @@ def _assign_network_resource(
             )
             log.info("%s libre reasignada: %s", resource_name, value_str)
             return unassigned, True
-        except RequestError as e:
-            raise NetBoxApiError(
-                f"Error actualizando {resource_name} libre {value_str}: {e}"
-            ) from e
 
     # 3. Crear nuevo recurso
     if dry_run:
@@ -3008,7 +2991,7 @@ def _assign_network_resource(
             **search_kwargs,
         ), True
 
-    try:
+    with netbox_error_wrap(f"Error creando {resource_name} {value_str}"):
         obj = cast(
             Record,
             endpoint.create(
@@ -3017,8 +3000,6 @@ def _assign_network_resource(
                 **create_kwargs,
             ),
         )
-    except RequestError as e:
-        raise NetBoxApiError(f"Error creando {resource_name} {value_str}: {e}") from e
 
     log.info("%s creada y asignada: %s", resource_name, value_str)
     return obj, True
@@ -3085,7 +3066,7 @@ def _upsert_interface_record(
             return existing_obj, True
         return existing_obj, False
 
-    try:
+    with netbox_error_wrap(f"Error procesando interfaz '{name}'"):
         if not existing_obj:
             new_obj = cast(Record, iface_endpoint.create(**payload))
             log.info("Interfaz creada: %s", name)
@@ -3097,8 +3078,6 @@ def _upsert_interface_record(
             log.info("Interfaz actualizada: %s", name)
             return existing_obj, True
         return existing_obj, False
-    except RequestError as e:
-        raise NetBoxApiError(f"Error procesando interfaz '{name}': {e}") from e
 
 
 def _sync_single_interface(
@@ -3304,10 +3283,11 @@ def _assign_primary_ipv4(
         cast(Record, main_obj).update({"primary_ip4": primary_id})
         log.debug("IP primaria actualizada en '%s' (ID=%s)", machine_name, primary_id)
         return True
-    except RequestError:
-        log.exception(
-            "Fallo al actualizar IP primaria en '%s'",
+    except RequestError as e:
+        log.warning(
+            "Fallo al actualizar IP primaria en '%s': %s",
             machine_name,
+            e,
         )
         return False
 
@@ -3345,9 +3325,9 @@ def _assign_primary_mac(
         iface_name = getattr(iface_obj, "name", iface_obj.id)
         log.info("MAC primaria asignada a interfaz %s: %s", iface_name, mac_addr)
         return True
-    except RequestError:
+    except RequestError as e:
         iface_name = getattr(iface_obj, "name", iface_obj.id)
-        log.exception("Error asignando MAC primaria a interfaz %s", iface_name)
+        log.warning("Error asignando MAC primaria a interfaz %s: %s", iface_name, e)
         return False
 
 
@@ -3490,8 +3470,8 @@ def _sync_row(
         log.warning("SKIP fila %d: %s", row_num, e)
         counts[SyncStatus.SKIPPED] += 1
         return counts
-    except (NetBoxApiError, RowValidationError):
-        log.exception("ERROR en fila %d", row_num)
+    except (NetBoxApiError, RowValidationError, RequestError):
+        log.exception("ERROR de API o validación en fila %d", row_num)
         counts[SyncStatus.ERROR] += 1
         return counts
     except Exception:
