@@ -3202,16 +3202,16 @@ def _process_interfaces_sync(
     existing_ifaces: dict[str, NetBoxObject],
     endpoints: NetBoxEndpoints,
     dry_run: bool,
-) -> tuple[int, list[int], bool]:
-    """Ejecuta la sincronización de una lista de interfaces y recopila IDs de IPv4.
-    Retorna una tupla: (cantidad de errores, lista de IDs de IPv4 asignadas, hubo cambios)."""
+) -> tuple[int, list[tuple[int, NetBoxObject, NetBoxObject | None]], bool]:
+    """Ejecuta la sincronización de una lista de interfaces y recopila IPs asignadas.
+    Retorna una tupla: (cantidad de errores, lista de (ip_id, iface_obj, mac_obj), hubo cambios)."""
     errors = 0
-    ipv4_ids: list[int] = []
+    ipv4_candidates: list[tuple[int, NetBoxObject, NetBoxObject | None]] = []
     any_changes = False
 
     for iface_data in interfaces:
         try:
-            _, ip_obj, _, iface_changed = _sync_single_interface(
+            iface_obj, ip_obj, mac_obj, iface_changed = _sync_single_interface(
                 iface_data,
                 obj_id,
                 iface_endpoint,
@@ -3224,12 +3224,14 @@ def _process_interfaces_sync(
             if ip_obj is not None:
                 address = getattr(ip_obj, "address", "")
                 if address and ":" not in str(address):
-                    ipv4_ids.append(getattr(ip_obj, "id", 0))
+                    ipv4_candidates.append(
+                        (getattr(ip_obj, "id", 0), iface_obj, mac_obj)
+                    )
         except NetBoxApiError:
             log.exception("ERROR de API sincronizando interfaz")
             errors += 1
 
-    return errors, ipv4_ids, any_changes
+    return errors, ipv4_candidates, any_changes
 
 
 def _sync_interfaces_for_object(
@@ -3239,15 +3241,15 @@ def _sync_interfaces_for_object(
     interfaces: list[NetworkInterfaceData],
     dry_run: bool,
     prune_interfaces: bool = False,
-) -> tuple[int, list[int], bool]:
+) -> tuple[int, list[tuple[int, NetBoxObject, NetBoxObject | None]], bool]:
     """Sincroniza interfaces y sus IPs para un Device o VM.
-    Retorna una tupla: (cantidad de errores, lista de IDs de IPv4 asignadas, hubo cambios)."""
+    Retorna una tupla: (cantidad de errores, candidatos IPv4, hubo cambios)."""
     iface_endpoint, iface_filter = _get_interface_endpoint_and_filter(
         endpoints, obj_id, node_type
     )
     existing_ifaces = _fetch_existing_interfaces(iface_endpoint, iface_filter, obj_id)
 
-    errors, ipv4_ids, any_changes = _process_interfaces_sync(
+    errors, ipv4_candidates, any_changes = _process_interfaces_sync(
         interfaces, obj_id, iface_endpoint, existing_ifaces, endpoints, dry_run
     )
 
@@ -3259,7 +3261,7 @@ def _sync_interfaces_for_object(
         errors += prune_errors
         any_changes |= pruned_count > 0
 
-    return errors, ipv4_ids, any_changes
+    return errors, ipv4_candidates, any_changes
 
 
 def _assign_primary_ipv4(
@@ -3307,6 +3309,45 @@ def _assign_primary_ipv4(
         return False
 
 
+def _assign_primary_mac(
+    iface_obj: NetBoxObject,
+    mac_obj: NetBoxObject | None,
+    dry_run: bool,
+) -> bool:
+    """Asigna la MAC como primaria en la interfaz si aún no lo está."""
+    if not mac_obj:
+        return False
+
+    current_primary = getattr(iface_obj, "primary_mac_address", None)
+    current_primary_id = (
+        getattr(current_primary, "id", None) if current_primary else None
+    )
+
+    if current_primary_id == mac_obj.id:
+        return False
+
+    if dry_run:
+        mac_addr = getattr(mac_obj, "mac_address", mac_obj.id)
+        iface_name = getattr(iface_obj, "name", iface_obj.id)
+        log.info(
+            "[DRY-RUN] Asignaría MAC primaria %s a la interfaz %s",
+            mac_addr,
+            iface_name,
+        )
+        return True
+
+    try:
+        cast(Record, iface_obj).update({"primary_mac_address": mac_obj.id})
+        mac_addr = getattr(mac_obj, "mac_address", mac_obj.id)
+        iface_name = getattr(iface_obj, "name", iface_obj.id)
+        log.info("MAC primaria asignada a interfaz %s: %s", iface_name, mac_addr)
+        return True
+    except RequestError:
+        iface_name = getattr(iface_obj, "name", iface_obj.id)
+        log.exception("Error asignando MAC primaria a interfaz %s", iface_name)
+        return False
+
+
 def process_interfaces_and_ips(
     endpoints: NetBoxEndpoints,
     obj_id: int,
@@ -3319,8 +3360,8 @@ def process_interfaces_and_ips(
     counts: SyncCounts,
     result: SyncStatus,
 ) -> SyncCounts:
-    """Sincroniza interfaces y asigna la IP primaria, mutando los contadores."""
-    iface_errors, ipv4_ids, ifaces_changed = _sync_interfaces_for_object(
+    """Sincroniza interfaces y asigna la IP/MAC primaria, mutando los contadores."""
+    iface_errors, ipv4_candidates, ifaces_changed = _sync_interfaces_for_object(
         endpoints,
         obj_id,
         node_type,
@@ -3332,12 +3373,20 @@ def process_interfaces_and_ips(
         counts[SyncStatus.ERROR] += iface_errors
 
     primary_ip_changed = False
-    if main_obj is not None:
-        primary_ip_changed = _assign_primary_ipv4(
-            main_obj, ipv4_ids, machine_name, dry_run
-        )
+    primary_mac_changed = False
 
-    if result == SyncStatus.UNCHANGED and (ifaces_changed or primary_ip_changed):
+    if len(ipv4_candidates) == 1:
+        ip_id, iface_obj, mac_obj = ipv4_candidates[0]
+
+        if main_obj is not None:
+            primary_ip_changed = _assign_primary_ipv4(
+                main_obj, [ip_id], machine_name, dry_run
+            )
+
+        primary_mac_changed = _assign_primary_mac(iface_obj, mac_obj, dry_run)
+
+    any_changes = ifaces_changed or primary_ip_changed or primary_mac_changed
+    if result == SyncStatus.UNCHANGED and any_changes:
         counts[SyncStatus.UNCHANGED] -= 1
         counts[SyncStatus.UPDATED] += 1
 
