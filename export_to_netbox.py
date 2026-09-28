@@ -701,6 +701,51 @@ def create_with_fallback_slug(
             return cast(Record, endpoint.create(**kwargs))
 
 
+def _get_or_create_cached(
+    endpoint: Endpoint,
+    cache: dict[Any, NetBoxObject],
+    cache_key: Any,
+    filter_kwargs: dict[str, Any],
+    create_kwargs: dict[str, Any],
+    object_type_name: str,
+    name: str,
+    dry_run: bool,
+    use_fallback_slug: bool = False,
+    skip_filter: bool = False,
+) -> NetBoxObject:
+    """Helper genérico que reduce el boilerplate del patrón get-or-create con caché y dry-run."""
+    if cache_key in cache:
+        return cache[cache_key]
+
+    if not skip_filter:
+        results: list[Record] = list(endpoint.filter(**filter_kwargs))
+        if results:
+            cache[cache_key] = results[0]
+            return results[0]
+
+    if dry_run:
+        log.info("[DRY-RUN] Crearía %s: %s", object_type_name, name)
+        mock_kwargs = create_kwargs.copy()
+        obj: NetBoxObject = MockNetBoxRecord(id=0, **mock_kwargs)
+        cache[cache_key] = obj
+        return obj
+
+    if use_fallback_slug:
+        obj = create_with_fallback_slug(
+            endpoint,
+            object_type_name,
+            name,
+            **create_kwargs,
+        )
+    else:
+        with netbox_error_wrap(f"No se pudo crear el {object_type_name} '{name}'"):
+            obj = cast(Record, endpoint.create(**create_kwargs))
+
+    log.info("%s creado: %s", object_type_name, name)
+    cache[cache_key] = obj
+    return obj
+
+
 def check_record_changes(
     record: Record,
     payload: NetBoxPayload,
@@ -1168,21 +1213,21 @@ def ensure_site(
     name = site_cfg.name
     slug = cast(str, site_cfg.slug)
 
-    results: list[Record] = list(endpoints.sites.filter(name=name))
-    if results:
-        return results[0]
-
-    if dry_run:
-        log.info("[DRY-RUN] Crearía Site: %s", name)
-        return MockNetBoxRecord(id=0, name=name, slug=slug)
-
-    try:
-        obj = cast(Record, endpoints.sites.create(name=name, slug=slug))
-    except RequestError:
-        raise NetBoxApiError(f"No se pudo crear el Site: {name}")
-
-    log.info("Site creado: %s", name)
-    return obj
+    # Utilizamos un caché efímero solo para reutilizar la lógica de _get_or_create_cached,
+    # aunque realmente site se evalúa una sola vez por ejecución en _execute_pipeline.
+    return _get_or_create_cached(
+        endpoint=endpoints.sites,
+        cache={},
+        cache_key=name,
+        filter_kwargs={"name": name},
+        create_kwargs={"name": name, "slug": slug},
+        object_type_name="Site",
+        # TODO: tal vez en vez de pasarle un object_type_name hardcodeado, que lo
+        # resuelva del tipo de endpoint que le paso. Eso para todas las llamadas a
+        # _get_or_create_cached.
+        name=name,
+        dry_run=dry_run,
+    )
 
 
 def ensure_cluster_type(
@@ -1192,21 +1237,16 @@ def ensure_cluster_type(
     dry_run: bool,
 ) -> NetBoxObject:
     """Garantiza que el ClusterType exista en NetBox."""
-    results: list[Record] = list(endpoints.cluster_types.filter(name=name))
-    if results:
-        return results[0]
-
-    if dry_run:
-        log.info("[DRY-RUN] Crearía ClusterType: %s", name)
-        return MockNetBoxRecord(id=0, name=name, slug=slug)
-
-    try:
-        obj = cast(Record, endpoints.cluster_types.create(name=name, slug=slug))
-    except RequestError:
-        raise NetBoxApiError(f"No se pudo crear el ClusterType: {name}")
-
-    log.info("ClusterType creado: %s", name)
-    return obj
+    return _get_or_create_cached(
+        endpoint=endpoints.cluster_types,
+        cache={},  # Similar al Site, el caché real de cluster_types se maneja externamente
+        cache_key=name,
+        filter_kwargs={"name": name},
+        create_kwargs={"name": name, "slug": slug},
+        object_type_name="ClusterType",
+        name=name,
+        dry_run=dry_run,
+    )
 
 
 def precompute_cluster_type_map(
@@ -1305,8 +1345,6 @@ def ensure_manufacturer(
         cache[name] = results[0]
         return results[0]
 
-    # Búsqueda preventiva por slug: si "H.P." genera slug "hp" y ya existe
-    # un Manufacturer con ese slug (ej. "HP"), se reutiliza para deduplicar.
     slug = slugify(name)
     slug_results: list[Record] = list(manufacturers_endpoint.filter(slug=slug))
     if slug_results:
@@ -1320,22 +1358,18 @@ def ensure_manufacturer(
         cache[name] = slug_results[0]
         return slug_results[0]
 
-    if dry_run:
-        log.info("[DRY-RUN] Crearía Manufacturer: %s", name)
-        obj: NetBoxObject = MockNetBoxRecord(id=0, name=name)
-        cache[name] = obj
-        return obj
-
-    obj = create_with_fallback_slug(
-        manufacturers_endpoint,
-        "Manufacturer",
-        name,
+    return _get_or_create_cached(
+        endpoint=manufacturers_endpoint,
+        cache=cache,
+        cache_key=name,
+        filter_kwargs={"name": name},
+        create_kwargs={"name": name, "slug": slug},
+        object_type_name="Manufacturer",
         name=name,
-        slug=slug,
+        dry_run=dry_run,
+        use_fallback_slug=True,
+        skip_filter=True,  # Ya buscamos arriba
     )
-    log.info("Manufacturer creado: %s", name)
-    cache[name] = obj
-    return obj
 
 
 def _sync_device_type_u_height(
@@ -1516,28 +1550,17 @@ def ensure_rack(
     site_id = get_netbox_object_id(site)
     cache_key = (site_id, name)
 
-    if cache_key in cache:
-        return cache[cache_key]
-
-    if site_id == 0:
-        results = []
-    else:
-        results = list(racks_endpoint.filter(name=name, site_id=site_id))
-    if results:
-        cache[cache_key] = results[0]
-        return results[0]
-
-    if dry_run:
-        log.info("[DRY-RUN] Crearía Rack: %s", name)
-        obj: NetBoxObject = MockNetBoxRecord(id=0, name=name)
-        cache[cache_key] = obj
-        return obj
-
-    with netbox_error_wrap(f"No se pudo crear el Rack '{name}'"):
-        obj = cast(Record, racks_endpoint.create(name=name, site=site_id))
-    log.info("Rack creado: %s", name)
-    cache[cache_key] = obj
-    return obj
+    return _get_or_create_cached(
+        endpoint=racks_endpoint,
+        cache=cache,
+        cache_key=cache_key,
+        filter_kwargs={"name": name, "site_id": site_id},
+        create_kwargs={"name": name, "site": site_id},
+        object_type_name="Rack",
+        name=name,
+        dry_run=dry_run,
+        skip_filter=(site_id == 0),
+    )
 
 
 def ensure_cluster(
@@ -1551,38 +1574,19 @@ def ensure_cluster(
     """Garantiza que el Cluster exista en NetBox."""
     site_id = get_netbox_object_id(site)
     cache_key = (site_id, name)
-
-    if cache_key in cache:
-        return cache[cache_key]
-
-    if site_id == 0:
-        results = []
-    else:
-        results = list(clusters_endpoint.filter(name=name, site_id=site_id))
-    if results:
-        cache[cache_key] = results[0]
-        return results[0]
-
     cluster_type_id = get_netbox_object_id(cluster_type)
 
-    if dry_run:
-        log.info("[DRY-RUN] Crearía Cluster: %s", name)
-        obj: NetBoxObject = MockNetBoxRecord(id=0, name=name)
-        cache[cache_key] = obj
-        return obj
-
-    with netbox_error_wrap(f"No se pudo crear el Cluster '{name}'"):
-        obj = cast(
-            Record,
-            clusters_endpoint.create(
-                name=name,
-                type=cluster_type_id,
-                site=site_id,
-            ),
-        )
-    log.info("Cluster creado: %s", name)
-    cache[cache_key] = obj
-    return obj
+    return _get_or_create_cached(
+        endpoint=clusters_endpoint,
+        cache=cache,
+        cache_key=cache_key,
+        filter_kwargs={"name": name, "site_id": site_id},
+        create_kwargs={"name": name, "type": cluster_type_id, "site": site_id},
+        object_type_name="Cluster",
+        name=name,
+        dry_run=dry_run,
+        skip_filter=(site_id == 0),
+    )
 
 
 def _sync_single_device_role(

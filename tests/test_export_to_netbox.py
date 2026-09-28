@@ -34,6 +34,7 @@ from export_to_netbox import (
     _extract_raw_source_value,
     _find_existing_object,
     _generate_fallback_slug,
+    _get_or_create_cached,
     _is_name_safely_unique,
     _parse_network_interfaces,
     _parse_single_network_interface,
@@ -1568,7 +1569,7 @@ class TestPruneInterfaces:
         mock_iface2 = MagicMock()
         mock_iface2.name = "eth1"
 
-        existing_ifaces = {"eth0": mock_iface1, "eth1": mock_iface2}
+        existing_ifaces: dict[str, Any] = {"eth0": mock_iface1, "eth1": mock_iface2}
 
         # El CSV solo reporta "eth0"
         csv_iface_names = {"eth0"}
@@ -1588,7 +1589,7 @@ class TestPruneInterfaces:
     def test_pruning_dry_run_skips_delete(self) -> None:
         mock_iface = MagicMock()
         mock_iface.name = "eth1"
-        existing_ifaces = {"eth1": mock_iface}
+        existing_ifaces: dict[str, Any] = {"eth1": mock_iface}
         csv_iface_names = set()
 
         deleted, errors = _prune_orphan_interfaces(
@@ -1741,3 +1742,58 @@ class TestSyncDevice:
         payload_passed = mock_validate_sync.call_args[0][1]
         assert payload_passed["face"] == "front"
         assert payload_passed["position"] == 10
+
+
+class TestGetOrCreateCached:
+    def test_returns_from_cache(self) -> None:
+        endpoint = MagicMock()
+        cache: dict[Any, Any] = {"key1": "mock_obj"}
+        result = _get_or_create_cached(
+            endpoint, cache, "key1", {}, {}, "TestType", "Test", False
+        )
+        assert result == "mock_obj"
+        endpoint.filter.assert_not_called()
+        endpoint.create.assert_not_called()
+
+    def test_skip_filter_creates_directly(self) -> None:
+        endpoint = MagicMock()
+        cache: dict[Any, Any] = {}
+        endpoint.create.return_value = "created_obj"
+        result = _get_or_create_cached(
+            endpoint,
+            cache,
+            "key1",
+            {},
+            {"name": "Test"},
+            "TestType",
+            "Test",
+            False,
+            skip_filter=True,
+        )
+        assert result == "created_obj"
+        assert cache["key1"] == "created_obj"
+        endpoint.filter.assert_not_called()
+        endpoint.create.assert_called_once_with(name="Test")
+
+    def test_dry_run_mock(self) -> None:
+        endpoint = MagicMock()
+        endpoint.filter.return_value = []
+        cache: dict[Any, Any] = {}
+        result = _get_or_create_cached(
+            endpoint, cache, "key1", {}, {"name": "Test"}, "TestType", "Test", True
+        )
+        assert result.id == 0
+        assert result.name == "Test"
+        endpoint.create.assert_not_called()
+
+    def test_create_error_raises_netbox_api_error(self) -> None:
+        endpoint = MagicMock()
+        endpoint.filter.return_value = []
+        endpoint.create.side_effect = RequestError(
+            MagicMock(status_code=400, reason="Bad Request")
+        )
+        cache: dict[Any, Any] = {}
+        with pytest.raises(NetBoxApiError, match="No se pudo crear el TestType 'Test'"):
+            _get_or_create_cached(
+                endpoint, cache, "key1", {}, {"name": "Test"}, "TestType", "Test", False
+            )
