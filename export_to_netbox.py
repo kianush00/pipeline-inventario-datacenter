@@ -3266,20 +3266,15 @@ def _sync_interfaces_for_object(
 
 def _assign_primary_ipv4(
     main_obj: NetBoxObject,
-    ipv4_ids: list[int],
+    primary_id: int,
     machine_name: str,
     dry_run: bool,
 ) -> bool:
     """
-    Si existe exactamente 1 dirección IPv4 asignada a las interfaces,
-    la define como IP primaria (primary_ip4) del dispositivo/VM.
+    Define la dirección IPv4 indicada como IP primaria (primary_ip4) del dispositivo/VM.
 
     Retorna True si se asignó exitosamente (o se simuló en dry-run), False de lo contrario.
     """
-    if len(ipv4_ids) != 1:
-        return False
-
-    primary_id = ipv4_ids[0]
 
     current_primary = getattr(main_obj, "primary_ip4", None)
     current_primary_id = (
@@ -3380,7 +3375,7 @@ def process_interfaces_and_ips(
 
         if main_obj is not None:
             primary_ip_changed = _assign_primary_ipv4(
-                main_obj, [ip_id], machine_name, dry_run
+                main_obj, ip_id, machine_name, dry_run
             )
 
         primary_mac_changed = _assign_primary_mac(iface_obj, mac_obj, dry_run)
