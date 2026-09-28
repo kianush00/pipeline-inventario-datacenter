@@ -1211,7 +1211,7 @@ def read_and_validate_csv(
 
 
 def ensure_site(
-    endpoints: NetBoxEndpoints,
+    sites_endpoint: Endpoint,
     site_cfg: SiteConfig,
     dry_run: bool,
 ) -> NetBoxObject:
@@ -1222,7 +1222,7 @@ def ensure_site(
     # Utilizamos un caché efímero solo para reutilizar la lógica de _get_or_create_cached,
     # aunque realmente site se evalúa una sola vez por ejecución en _execute_pipeline.
     return _get_or_create_cached(
-        endpoint=endpoints.sites,
+        endpoint=sites_endpoint,
         cache={},
         cache_key=name,
         filter_kwargs={"name": name},
@@ -1233,14 +1233,14 @@ def ensure_site(
 
 
 def ensure_cluster_type(
-    endpoints: NetBoxEndpoints,
+    cluster_type_endpoint: Endpoint,
     name: str,
     slug: str,
     dry_run: bool,
 ) -> NetBoxObject:
     """Garantiza que el ClusterType exista en NetBox."""
     return _get_or_create_cached(
-        endpoint=endpoints.cluster_types,
+        endpoint=cluster_type_endpoint,
         cache={},  # Similar al Site, el caché real de cluster_types se maneja externamente
         cache_key=name,
         filter_kwargs={"name": name},
@@ -1316,7 +1316,9 @@ def ensure_dynamic_cluster_types(
     # Garantizar el fallback estático del YAML.
     fallback_name = fallback_cfg.default.name
     fallback_slug = cast(str, fallback_cfg.default.slug)
-    fallback = ensure_cluster_type(endpoints, fallback_name, fallback_slug, dry_run)
+    fallback = ensure_cluster_type(
+        endpoints.cluster_types, fallback_name, fallback_slug, dry_run
+    )
     cache[fallback_name] = fallback
 
     # Crear ClusterTypes dinámicos (uno por cada SO único).
@@ -1325,7 +1327,7 @@ def ensure_dynamic_cluster_types(
         if os_name in cache:
             continue
         os_slug = slugify(os_name)
-        ct = ensure_cluster_type(endpoints, os_name, os_slug, dry_run)
+        ct = ensure_cluster_type(endpoints.cluster_types, os_name, os_slug, dry_run)
         cache[os_name] = ct
 
     return fallback
@@ -3616,7 +3618,7 @@ def main() -> None:
     ensure_custom_fields(endpoints, config, args.dry_run)
 
     # ── Garantizar taxonomía global ──────────────────────────
-    site: NetBoxObject = ensure_site(endpoints, config.site, args.dry_run)
+    site: NetBoxObject = ensure_site(endpoints.sites, config.site, args.dry_run)
 
     # ── Inicializar caches ───────────────────────────────────
     caches: CacheStore = CacheStore()
