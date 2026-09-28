@@ -713,7 +713,14 @@ def _get_or_create_cached(
     use_fallback_slug: bool = False,
     skip_filter: bool = False,
 ) -> NetBoxObject:
-    """Helper genérico que reduce el boilerplate del patrón get-or-create con caché y dry-run."""
+    """
+    Helper genérico que reduce el boilerplate del patrón get-or-create con caché y dry-run.
+
+    El uso de `use_fallback_slug` está reservado exclusivamente para taxonomía dinámica/sucia
+    (Manufacturer, DeviceRole, etc.) proveniente de nodos, implementando un diseño Fail-Safe
+    contra colisiones de slug en NetBox. Para taxonomía estática (Site, ClusterType), se omite
+    para aplicar un enfoque Fail-Fast (ver docs/architecture.md).
+    """
     if cache_key in cache:
         return cache[cache_key]
 
@@ -2203,7 +2210,7 @@ def _resolve_device_type(
 ) -> int:
     """
     Resuelve y retorna el ID del DeviceType utilizando el manufacturer y el modelo.
-    Si la altura ('alt_u') no se proporciona o es inválida, asume 1 por defecto.
+    Si la altura ('hei_u') no se proporciona o es inválida, asume 1 por defecto.
     """
     manufacturer = extract_csv_value(row, "manufacturer", config)
     model = extract_csv_value(row, "model", config)
@@ -2216,7 +2223,7 @@ def _resolve_device_type(
         dry_run,
     )
 
-    raw_u_height = extract_csv_value(row, "alt_u", config)
+    raw_u_height = extract_csv_value(row, "hei_u", config)
     if not raw_u_height:
         u_height = 1.0
     else:
@@ -2224,7 +2231,7 @@ def _resolve_device_type(
             u_height = parse_float(raw_u_height) or 1.0
         except ValueError:
             raise RowValidationError(
-                f"Valor numérico inválido '{raw_u_height}' para 'alt_u'."
+                f"Valor numérico inválido '{raw_u_height}' para 'hei_u'."
             )
 
     device_type = ensure_device_type(

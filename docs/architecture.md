@@ -66,3 +66,12 @@ The exporter follows this logic for each row in the CSV:
 4. **Change detection**: Compares the payload against the current state of the record. An update is only issued if there are actual differences.
 5. **Dependency synchronization**: Sites, Manufacturers, Device Types, Platforms, Roles, Clusters, Custom Fields, Interfaces, and IPs are created or resolved as prerequisites.
 6. **Primary IP assignment**: If a Device or VM has exactly one valid IP, it is automatically assigned as the primary IPv4.
+
+### Taxonomy Resolution & Slug Collisions (Fail-Fast vs. Fail-Safe)
+
+NetBox mandates a URL-friendly `slug` for abstract taxonomy models (`Site`, `ClusterType`, `Manufacturer`, `DeviceType`, `DeviceRole`, `Platform`), but does not use slugs for physical instantiated objects (`Rack`, `Cluster`, `Device`, `VirtualMachine`).
+
+When resolving or creating taxonomic dependencies, the pipeline adopts a dual strategy depending on the nature of the data:
+
+- **Fail-Fast (Static Data):** For objects derived from the master configuration (`netbox_mapping.yaml`) like `Site` and `ClusterType`. If a collision occurs upon creation (e.g., trying to create a Site with a slug that already belongs to another Site), the pipeline throws a `NetBoxApiError` and aborts. Silently generating a fallback slug (e.g., `site-1a2b`) would create a duplicate organization and split the infrastructure incorrectly.
+- **Fail-Safe (Dynamic Data):** For objects derived from unpredictable node hardware data like `Manufacturer`, `DeviceType`, and `DeviceRole`. Node data can be dirty (e.g., "HP" vs "H.P."). The pipeline first attempts to deduplicate by checking if the generated slug already exists. If an unavoidable collision happens during creation, it applies a deterministic fallback slug appended with a hash (e.g., `hp-c4d2`). This ensures the pipeline survives dirty data without stopping the execution.

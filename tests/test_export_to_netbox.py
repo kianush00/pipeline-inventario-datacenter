@@ -1500,14 +1500,14 @@ class TestResolveDeviceTypeUHeight:
         def mock_extract(
             row: dict[str, Any], key: str, config: Any, *args: Any, **kwargs: Any
         ) -> Any:
-            if key == "alt_u":
+            if key == "hei_u":
                 return row.get(key)
             return "mocked"
 
         monkeypatch.setattr(export_to_netbox, "extract_csv_value", mock_extract)
         monkeypatch.setattr(export_to_netbox, "get_netbox_object_id", lambda x: 1)
 
-        row = {"manufacturer": "Dell", "model": "R740", "alt_u": "1.5"}
+        row = {"manufacturer": "Dell", "model": "R740", "hei_u": "1.5"}
         export_to_netbox._resolve_device_type(
             endpoints=MagicMock(),
             row=row,
@@ -1537,14 +1537,14 @@ class TestResolveDeviceTypeUHeight:
         def mock_extract(
             row: dict[str, Any], key: str, config: Any, *args: Any, **kwargs: Any
         ) -> Any:
-            if key == "alt_u":
+            if key == "hei_u":
                 return ""  # Simulamos celda vacía
             return "mocked"
 
         monkeypatch.setattr(export_to_netbox, "extract_csv_value", mock_extract)
         monkeypatch.setattr(export_to_netbox, "get_netbox_object_id", lambda x: 1)
 
-        row = {"alt_u": ""}
+        row = {"hei_u": ""}
         export_to_netbox._resolve_device_type(
             endpoints=MagicMock(),
             row=row,

@@ -76,7 +76,7 @@ csv_columns:
     source: &col_asset_tag "Nro Inventario"
   pos_u:
     source: &col_pos_u "Posicion (U)"
-  alt_u:
+  hei_u:
     source: "Altura (U)"
   desc:
     source: &col_desc "Descripcion"

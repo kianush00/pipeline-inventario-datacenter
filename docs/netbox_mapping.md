@@ -52,7 +52,7 @@ This table acts as a data dictionary of the fields the script expects to extract
 | `host_device` | `Dispositivo Host` | (For VMs) Name of the physical server running the VM. | `hyper-node-05` |
 | `rack` | `Rack` | Name of the physical rack where it is located. | `Rack-A1`, `Fila-2-R4` |
 | `pos_u` | `Posicion (U)` | Physical position or lowest bay number within the rack. | `12`, `25` |
-| `alt_u` | `Altura (U)` | Total U height the device occupies in the rack (usually 1, 2, or fractional). | `1.0`, `1.5`, `2.0` |
+| `hei_u` | `Altura (U)` | Total U height the device occupies in the rack (usually 1, 2, or fractional). | `1.0`, `1.5`, `2.0` |
 | `os` | `SO Host` | Base operating system of the node. | `Ubuntu`, `Windows Server 2022` |
 | `os_ver` | `Version SO Host` | Specific OS version. | `22.04 LTS`, `2019 Standard` |
 | `hypervisor_os` | `SO Hipervisor` | Base hypervisor operating system (e.g. ESXi, Proxmox). | `VMware ESXi`, `Proxmox VE` |
