@@ -1919,13 +1919,16 @@ def _extract_coalesce_value(
         if not config.is_empty(val):
             values.append(val)
 
-    if len(values) > 1:
+    # Eliminar duplicados para evitar falso conflicto si ambas columnas tienen el mismo valor exacto
+    unique_values = list(dict.fromkeys(values))
+
+    if len(unique_values) > 1:
         raise RowValidationError(
-            f"Conflicto: Múltiples valores no nulos {values} para un campo coalesce "
-            f"provenientes de las columnas {source}."
+            f"Conflicto: Múltiples valores distintos no nulos {unique_values} "
+            f"para un campo coalesce provenientes de las columnas {source}."
         )
 
-    return values[0] if values else ""
+    return unique_values[0] if unique_values else ""
 
 
 def _extract_raw_source_value(row: CsvRow, source: str | list[str]) -> str:
