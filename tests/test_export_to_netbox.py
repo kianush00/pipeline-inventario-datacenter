@@ -5,7 +5,7 @@ Pruebas unitarias para export_to_netbox.py
 import hashlib
 from collections import Counter
 from typing import Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pynetbox.core.query import RequestError  # type: ignore
@@ -24,6 +24,7 @@ from export_to_netbox import (
     NetBoxMappingConfig,
     NetBoxObject,
     NodeType,
+    RowSkipCondition,
     RowValidationError,
     SiteConfig,
     SyncStatus,
@@ -65,6 +66,8 @@ from export_to_netbox import (
     parse_int,
     parse_int_gb_to_mb,
     slugify,
+    sync_device,
+    sync_vm,
 )
 
 
@@ -1598,3 +1601,143 @@ class TestPruneInterfaces:
         assert deleted == 1
         assert errors == 0
         mock_iface.delete.assert_not_called()
+
+
+class TestSyncSkips:
+    def test_sync_device_skips_missing_manufacturer_or_model(self) -> None:
+        row = {"machine_name": "srv1", "machine_type": "server"}
+
+        mock_config = MagicMock()
+        mock_config.is_empty.return_value = False
+        mock_config.csv_columns = {
+            "manufacturer": MagicMock(source="manufacturer"),
+            "model": MagicMock(source="model"),
+            "machine_name": MagicMock(source="machine_name"),
+            "machine_type": MagicMock(source="machine_type"),
+        }
+
+        # Fallará porque falta manufacturer o model
+        with pytest.raises(RowSkipCondition, match="Falta 'manufacturer' o 'model'"):
+            sync_device(
+                endpoints=MagicMock(),
+                row=row,
+                config=mock_config,
+                site=MagicMock(),
+                cluster_type_map={},
+                fallback_cluster_type=MagicMock(),
+                caches=MagicMock(),
+                csv_name_counts=Counter(),
+                dry_run=False,
+            )
+
+    def test_sync_vm_skips_missing_cluster(self) -> None:
+        row = {"machine_name": "vm1"}
+
+        mock_config = MagicMock()
+        mock_config.is_empty.return_value = False
+        mock_config.csv_columns = {
+            "cluster_name": MagicMock(source="cluster_name"),
+            "machine_name": MagicMock(source="machine_name"),
+            "inventory_uuid": MagicMock(source="inventory_uuid"),
+        }
+
+        # Fallará porque falta cluster_name
+        with pytest.raises(RowSkipCondition, match="Falta 'cluster_name'"):
+            sync_vm(
+                endpoints=MagicMock(),
+                row=row,
+                config=mock_config,
+                site=MagicMock(),
+                cluster_type_map={},
+                fallback_cluster_type=MagicMock(),
+                caches=MagicMock(),
+                csv_name_counts=Counter(),
+                dry_run=False,
+            )
+
+    @patch("export_to_netbox._resolve_cluster", return_value=None)
+    @patch("export_to_netbox._resolve_base_node")
+    def test_sync_vm_skips_unresolvable_cluster(
+        self, mock_base_node: MagicMock, mock_resolve_cluster: MagicMock
+    ) -> None:
+        row = {"machine_name": "vm1", "cluster_name": "Cluster-X"}
+
+        mock_config = MagicMock()
+        mock_config.is_empty.return_value = False
+        mock_config.csv_columns = {
+            "cluster_name": MagicMock(source="cluster_name"),
+            "machine_name": MagicMock(source="machine_name"),
+            "inventory_uuid": MagicMock(source="inventory_uuid"),
+        }
+
+        mock_base_node.return_value = {
+            "machine_name": "vm1",
+            "inventory_uuid": "1234",
+            "payload": {},
+        }
+
+        with pytest.raises(
+            RowSkipCondition, match="Falló la resolución del cluster 'Cluster-X'"
+        ):
+            sync_vm(
+                endpoints=MagicMock(),
+                row=row,
+                config=mock_config,
+                site=MagicMock(),
+                cluster_type_map={},
+                fallback_cluster_type=MagicMock(),
+                caches=MagicMock(),
+                csv_name_counts=Counter(),
+                dry_run=False,
+            )
+
+
+class TestSyncDevice:
+    @patch("export_to_netbox._resolve_base_node")
+    @patch("export_to_netbox._resolve_cluster")
+    @patch("export_to_netbox.ensure_rack")
+    @patch("export_to_netbox._resolve_device_type")
+    @patch("export_to_netbox._validate_sync")
+    def test_sync_device_assigns_front_face(
+        self,
+        mock_validate_sync: MagicMock,
+        mock_device_type: MagicMock,
+        mock_ensure_rack: MagicMock,
+        mock_cluster: MagicMock,
+        mock_base_node: MagicMock,
+    ) -> None:
+        row = {"manufacturer": "Dell", "model": "R740", "machine_name": "srv1"}
+
+        mock_config = MagicMock()
+        mock_config.is_empty.return_value = False
+        mock_config.csv_columns = {
+            "manufacturer": MagicMock(source="manufacturer"),
+            "model": MagicMock(source="model"),
+            "rack": MagicMock(source="rack"),
+            "machine_type": MagicMock(source="machine_type"),
+        }
+
+        mock_base_node.return_value = {
+            "machine_name": "srv1",
+            "inventory_uuid": "1234",
+            "machine_type": "server",
+            "payload": {"position": 10},  # NetBox API exige face si hay position
+        }
+        mock_validate_sync.return_value = (SyncStatus.CREATED, 1, MagicMock())
+
+        _ = sync_device(
+            endpoints=MagicMock(),
+            row=row,
+            config=mock_config,
+            site=MagicMock(),
+            cluster_type_map={},
+            fallback_cluster_type=MagicMock(),
+            caches=MagicMock(),
+            csv_name_counts=Counter(),
+            dry_run=False,
+        )
+
+        # Validar que payload haya sido inyectado con 'face' = 'front'
+        payload_passed = mock_validate_sync.call_args[0][1]
+        assert payload_passed["face"] == "front"
+        assert payload_passed["position"] == 10

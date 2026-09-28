@@ -2670,7 +2670,9 @@ def sync_vm(
     Retorna: (SyncStatus, obj_id)
     """
     # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
-    _ = extract_csv_value(row, "cluster_name", config, required=True)
+    cluster_name = extract_csv_value(row, "cluster_name", config)
+    if not cluster_name:
+        raise RowSkipCondition("Falta 'cluster_name'. Requerido para Virtual Machine.")
 
     node_cfg = config.node_types.get_config(NodeType.VIRTUAL_MACHINE)
 
@@ -2707,7 +2709,7 @@ def sync_vm(
     if cluster_id is not None:
         payload["cluster"] = cluster_id
     else:
-        raise RowValidationError("Falló la resolución del cluster.")
+        raise RowSkipCondition(f"Falló la resolución del cluster '{cluster_name}'.")
 
     # Device del hipervisor host (acotado a site y cacheado).
     host_dev_id = _resolve_host_device(
