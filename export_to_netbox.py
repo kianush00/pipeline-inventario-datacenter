@@ -2813,7 +2813,7 @@ def _parse_single_network_interface(
     }
 
 
-def parse_network_interfaces(
+def _parse_network_interfaces(
     row: CsvRow,
     config: NetBoxMappingConfig,
 ) -> list[NetworkInterfaceData]:
@@ -2900,6 +2900,24 @@ def parse_network_interfaces(
         )
         interfaces.append(parsed)
 
+    return interfaces
+
+
+def parse_row_interfaces(
+    row: CsvRow,
+    machine_name: str,
+    config: NetBoxMappingConfig,
+    dry_run: bool,
+) -> list[NetworkInterfaceData]:
+    """Parsea las interfaces de la fila CSV y advierte si están vacías."""
+    interfaces = _parse_network_interfaces(row, config)
+    if not interfaces and not dry_run:
+        ifaces_col = config.csv_columns["iface_names"].source
+        log.warning(
+            "SKIP interfaces de '%s': columna '%s' está vacía u omitida.",
+            machine_name,
+            ifaces_col,
+        )
     return interfaces
 
 
@@ -3262,7 +3280,7 @@ def _process_interfaces_sync(
     return errors, ipv4_ids, any_changes
 
 
-def sync_interfaces_for_object(
+def _sync_interfaces_for_object(
     endpoints: NetBoxEndpoints,
     obj_id: int,
     node_type: NodeType,
@@ -3290,11 +3308,6 @@ def sync_interfaces_for_object(
         any_changes |= pruned_count > 0
 
     return errors, ipv4_ids, any_changes
-
-
-# ============================================================
-# MAIN
-# ============================================================
 
 
 def _assign_primary_ipv4(
@@ -3342,6 +3355,48 @@ def _assign_primary_ipv4(
         return False
 
 
+def process_interfaces_and_ips(
+    endpoints: NetBoxEndpoints,
+    obj_id: int,
+    node_type: NodeType,
+    interfaces: list[NetworkInterfaceData],
+    dry_run: bool,
+    prune_interfaces: bool,
+    main_obj: NetBoxObject | None,
+    machine_name: str,
+    counts: SyncCounts,
+    result: SyncStatus,
+) -> SyncCounts:
+    """Sincroniza interfaces y asigna la IP primaria, mutando los contadores."""
+    iface_errors, ipv4_ids, ifaces_changed = _sync_interfaces_for_object(
+        endpoints,
+        obj_id,
+        node_type,
+        interfaces,
+        dry_run,
+        prune_interfaces,
+    )
+    if iface_errors > 0:
+        counts[SyncStatus.ERROR] += iface_errors
+
+    primary_ip_changed = False
+    if main_obj is not None:
+        primary_ip_changed = _assign_primary_ipv4(
+            main_obj, ipv4_ids, machine_name, dry_run
+        )
+
+    if result == SyncStatus.UNCHANGED and (ifaces_changed or primary_ip_changed):
+        counts[SyncStatus.UNCHANGED] -= 1
+        counts[SyncStatus.UPDATED] += 1
+
+    return counts
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+
 def _process_node_sync(
     machine_name: str,
     row: CsvRow,
@@ -3370,9 +3425,8 @@ def _process_node_sync(
         )
         site_id = get_netbox_object_id(site)
         caches.host_devices[(site_id, machine_name)] = obj_id
-        return result, obj_id, main_obj
     else:
-        return sync_vm(
+        result, obj_id, main_obj = sync_vm(
             endpoints,
             row,
             config,
@@ -3383,61 +3437,7 @@ def _process_node_sync(
             csv_name_counts,
             dry_run,
         )
-
-
-def _parse_row_interfaces(
-    row: CsvRow,
-    machine_name: str,
-    config: NetBoxMappingConfig,
-    dry_run: bool,
-) -> list[NetworkInterfaceData]:
-    """Parsea las interfaces de la fila CSV y advierte si están vacías."""
-    interfaces = parse_network_interfaces(row, config)
-    if not interfaces and not dry_run:
-        ifaces_col = config.csv_columns["iface_names"].source
-        log.warning(
-            "SKIP interfaces de '%s': columna '%s' está vacía u omitida.",
-            machine_name,
-            ifaces_col,
-        )
-    return interfaces
-
-
-def _process_interfaces_and_ips(
-    endpoints: NetBoxEndpoints,
-    obj_id: int,
-    node_type: NodeType,
-    interfaces: list[NetworkInterfaceData],
-    dry_run: bool,
-    prune_interfaces: bool,
-    main_obj: NetBoxObject | None,
-    machine_name: str,
-    counts: SyncCounts,
-    result: SyncStatus,
-) -> SyncCounts:
-    """Sincroniza interfaces y asigna la IP primaria, mutando los contadores."""
-    iface_errors, ipv4_ids, ifaces_changed = sync_interfaces_for_object(
-        endpoints,
-        obj_id,
-        node_type,
-        interfaces,
-        dry_run,
-        prune_interfaces,
-    )
-    if iface_errors > 0:
-        counts[SyncStatus.ERROR] += iface_errors
-
-    primary_ip_changed = False
-    if main_obj is not None:
-        primary_ip_changed = _assign_primary_ipv4(
-            main_obj, ipv4_ids, machine_name, dry_run
-        )
-
-    if result == SyncStatus.UNCHANGED and (ifaces_changed or primary_ip_changed):
-        counts[SyncStatus.UNCHANGED] -= 1
-        counts[SyncStatus.UPDATED] += 1
-        
-    return counts
+    return result, obj_id, main_obj
 
 
 def _sync_row(
@@ -3509,7 +3509,7 @@ def _sync_row(
 
     # ── Parsear interfaces ────────────────────────────────
     try:
-        interfaces = _parse_row_interfaces(row, machine_name, config, dry_run)
+        interfaces = parse_row_interfaces(row, machine_name, config, dry_run)
     except RowValidationError as e:
         log.warning("Omitiendo interfaces de '%s': %s", machine_name, e)
         counts[SyncStatus.ERROR] += 1
@@ -3521,7 +3521,7 @@ def _sync_row(
 
     # ── Sincronizar interfaces del objeto ─────────────────
     try:
-        counts = _process_interfaces_and_ips(
+        counts = process_interfaces_and_ips(
             endpoints,
             obj_id,
             node_type,

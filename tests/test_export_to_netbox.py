@@ -34,6 +34,7 @@ from export_to_netbox import (
     _find_existing_object,
     _generate_fallback_slug,
     _is_name_safely_unique,
+    _parse_network_interfaces,
     _parse_single_network_interface,
     _prune_orphan_interfaces,
     _resolve_default_or_empty,
@@ -63,7 +64,6 @@ from export_to_netbox import (
     parse_float_to_int,
     parse_int,
     parse_int_gb_to_mb,
-    parse_network_interfaces,
     slugify,
 )
 
@@ -1250,7 +1250,7 @@ class TestParseNetworkInterfaces:
                 "iface_mac"
             ].source: "AA:AA:AA:AA:AA:AA, BB:BB:BB:BB:BB:BB",
         }
-        interfaces = parse_network_interfaces(row, config)
+        interfaces = _parse_network_interfaces(row, config)
         assert len(interfaces) == 2
         assert interfaces[0]["name"] == "eth0"
         assert interfaces[0]["cidr"] == "192.168.1.1/24"
@@ -1260,7 +1260,7 @@ class TestParseNetworkInterfaces:
 
     def test_no_interfaces(self, config: NetBoxMappingConfig) -> None:
         row = {config.csv_columns["iface_names"].source: ""}
-        assert parse_network_interfaces(row, config) == []
+        assert _parse_network_interfaces(row, config) == []
 
     def test_inconsistent_lengths_raises_error(
         self, config: NetBoxMappingConfig
@@ -1269,15 +1269,17 @@ class TestParseNetworkInterfaces:
             config.csv_columns["iface_names"].source: "eth0, eth1",
             config.csv_columns["iface_ip"].source: "192.168.1.1",  # falta una IP
         }
-        with pytest.raises(RowValidationError, match="Discrepancia de elementos en red"):
-            parse_network_interfaces(row, config)
+        with pytest.raises(
+            RowValidationError, match="Discrepancia de elementos en red"
+        ):
+            _parse_network_interfaces(row, config)
 
     def test_empty_columns_filled(self, config: NetBoxMappingConfig) -> None:
         row = {
             config.csv_columns["iface_names"].source: "eth0, eth1",
             config.csv_columns["iface_ip"].source: "",  # Completamente vacío
         }
-        interfaces = parse_network_interfaces(row, config)
+        interfaces = _parse_network_interfaces(row, config)
         assert len(interfaces) == 2
         assert interfaces[0]["ip"] is None
         assert interfaces[1]["ip"] is None
@@ -1288,7 +1290,7 @@ class TestParseNetworkInterfaces:
             config.csv_columns["iface_ip"].source: "192.168.1.1, N/A",
             config.csv_columns["iface_pfx"].source: "24, N/A",
         }
-        interfaces = parse_network_interfaces(row, config)
+        interfaces = _parse_network_interfaces(row, config)
         assert len(interfaces) == 2
         assert interfaces[0]["cidr"] == "192.168.1.1/24"
         assert interfaces[1]["cidr"] is None
@@ -1301,7 +1303,7 @@ class TestParseNetworkInterfaces:
             config.csv_columns["iface_names"].source: "eth0",
             config.csv_columns["iface_ip"].source: "1.1.1.1",
         }
-        interfaces = parse_network_interfaces(row, config)
+        interfaces = _parse_network_interfaces(row, config)
         assert len(interfaces) == 1
         assert interfaces[0]["enabled"] is True  # Por default
 
