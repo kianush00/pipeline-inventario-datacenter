@@ -2564,8 +2564,12 @@ def sync_device(
     Retorna: (SyncStatus, obj_id)
     """
     # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
-    _ = extract_csv_value(row, "manufacturer", config, required=True)
-    _ = extract_csv_value(row, "model", config, required=True)
+    manufacturer = extract_csv_value(row, "manufacturer", config)
+    model = extract_csv_value(row, "model", config)
+    if not manufacturer or not model:
+        raise RowSkipCondition(
+            "Falta 'manufacturer' o 'model'. Requerido para Device."
+        )
 
     node_cfg = config.node_types.get_config(NodeType.DEVICE)
 
@@ -2910,11 +2914,10 @@ def parse_row_interfaces(
     row: CsvRow,
     machine_name: str,
     config: NetBoxMappingConfig,
-    dry_run: bool,
 ) -> list[NetworkInterfaceData]:
     """Parsea las interfaces de la fila CSV y advierte si están vacías."""
     interfaces = _parse_network_interfaces(row, config)
-    if not interfaces and not dry_run:
+    if not interfaces:
         ifaces_col = config.csv_columns["iface_names"].source
         log.warning(
             "SKIP interfaces de '%s': columna '%s' está vacía u omitida.",
@@ -3508,7 +3511,7 @@ def _sync_row(
 
     # ── Parsear interfaces ────────────────────────────────
     try:
-        interfaces = parse_row_interfaces(row, machine_name, config, dry_run)
+        interfaces = parse_row_interfaces(row, machine_name, config)
     except RowValidationError as e:
         log.warning("Omitiendo interfaces de '%s': %s", machine_name, e)
         counts[SyncStatus.ERROR] += 1
