@@ -148,9 +148,8 @@ class TestGenerateFallbackSlug:
             mock_obj,
         ]
 
-        result = create_with_fallback_slug(
-            endpoint, "Device", "SRV", name="SRV", slug="srv"
-        )
+        result = endpoint.name = "devices"
+        result = create_with_fallback_slug(endpoint, "SRV", name="SRV", slug="srv")
         assert result.id == 10
         assert endpoint.create.call_count == 2
         # Verifica que la segunda llamada uso un slug diferente
@@ -162,12 +161,16 @@ class TestGenerateFallbackSlug:
 
         endpoint = MagicMock()
         # Falla siempre
+        endpoint.name = "clusters"
         endpoint.create.side_effect = RequestError(
             MagicMock(status_code=400, reason="Persistent Collision")
         )
 
-        with pytest.raises(NetBoxApiError, match="Imposible crear Device 'SRV'"):
-            create_with_fallback_slug(endpoint, "Device", "SRV", name="SRV", slug="srv")
+        with pytest.raises(
+            NetBoxApiError, match="Imposible crear objeto en 'devices' con nombre 'SRV'"
+        ):
+            endpoint.name = "devices"
+            create_with_fallback_slug(endpoint, "SRV", name="SRV", slug="srv")
 
 
 class TestParseInt:
@@ -942,6 +945,7 @@ class TestFindExistingObject:
     def test_not_found(self, config: NetBoxMappingConfig) -> None:
         endpoint = MagicMock()
         endpoint.filter.return_value = []
+        endpoint.name = "racks"
 
         existing, by_uuid, by_name = _find_existing_object(
             "uuid-123", "SRV-01", endpoint, config
@@ -1114,6 +1118,7 @@ class TestExecuteSync:
 
     def test_execute_sync_record_create_error(self) -> None:
         endpoint = MagicMock()
+        endpoint.name = "clusters"
         endpoint.create.side_effect = RequestError(
             MagicMock(status_code=400, reason="NetBox Reject")
         )
@@ -1388,6 +1393,7 @@ class TestEnsureManufacturer:
     def test_created_when_not_found(self) -> None:
         endpoint = MagicMock()
         endpoint.filter.return_value = []
+        endpoint.name = "racks"
         mock_created = MockNetBoxRecord(id=8, name="Lenovo")
         endpoint.create.return_value = mock_created
         cache: dict[str, NetBoxObject] = {}
@@ -1404,6 +1410,7 @@ class TestEnsureRack:
     def test_ensure_rack_request_error(self) -> None:
         endpoint = MagicMock()
         endpoint.filter.return_value = []
+        endpoint.name = "racks"
         # Simulamos que la creación falla
         endpoint.create.side_effect = RequestError(
             MagicMock(status_code=400, reason="Bad Request")
@@ -1412,7 +1419,10 @@ class TestEnsureRack:
         site_mock = MockNetBoxRecord(id=1, name="Site1")
         cache: dict[tuple[int, str], NetBoxObject] = {}
 
-        with pytest.raises(NetBoxApiError, match="No se pudo crear el Rack 'Rack1'"):
+        with pytest.raises(
+            NetBoxApiError,
+            match="No se pudo crear el objeto en 'racks' con nombre 'Rack1'",
+        ):
             ensure_rack(endpoint, "Rack1", site_mock, cache, dry_run=False)
 
 
@@ -1422,6 +1432,7 @@ class TestEnsureCluster:
     def test_ensure_cluster_request_error(self) -> None:
         endpoint = MagicMock()
         endpoint.filter.return_value = []
+        endpoint.name = "clusters"
         endpoint.create.side_effect = RequestError(
             MagicMock(status_code=400, reason="Bad Request")
         )
@@ -1431,7 +1442,8 @@ class TestEnsureCluster:
         cache: dict[tuple[int, str], NetBoxObject] = {}
 
         with pytest.raises(
-            NetBoxApiError, match="No se pudo crear el Cluster 'Cluster1'"
+            NetBoxApiError,
+            match="No se pudo crear el objeto en 'clusters' con nombre 'Cluster1'",
         ):
             ensure_cluster(
                 endpoint, "Cluster1", cluster_type_mock, site_mock, cache, dry_run=False
@@ -1749,7 +1761,7 @@ class TestGetOrCreateCached:
         endpoint = MagicMock()
         cache: dict[Any, Any] = {"key1": "mock_obj"}
         result = _get_or_create_cached(
-            endpoint, cache, "key1", {}, {}, "TestType", "Test", False
+            endpoint, cache, "key1", {}, {}, "Test", False
         )
         assert result == "mock_obj"
         endpoint.filter.assert_not_called()
@@ -1758,6 +1770,7 @@ class TestGetOrCreateCached:
     def test_skip_filter_creates_directly(self) -> None:
         endpoint = MagicMock()
         cache: dict[Any, Any] = {}
+        endpoint.name = "test_endpoints"
         endpoint.create.return_value = "created_obj"
         result = _get_or_create_cached(
             endpoint,
@@ -1765,7 +1778,6 @@ class TestGetOrCreateCached:
             "key1",
             {},
             {"name": "Test"},
-            "TestType",
             "Test",
             False,
             skip_filter=True,
@@ -1779,8 +1791,9 @@ class TestGetOrCreateCached:
         endpoint = MagicMock()
         endpoint.filter.return_value = []
         cache: dict[Any, Any] = {}
+        endpoint.name = "test_endpoints"
         result = _get_or_create_cached(
-            endpoint, cache, "key1", {}, {"name": "Test"}, "TestType", "Test", True
+            endpoint, cache, "key1", {}, {"name": "Test"}, "Test", True
         )
         assert result.id == 0
         assert result.name == "Test"
@@ -1793,7 +1806,11 @@ class TestGetOrCreateCached:
             MagicMock(status_code=400, reason="Bad Request")
         )
         cache: dict[Any, Any] = {}
-        with pytest.raises(NetBoxApiError, match="No se pudo crear el TestType 'Test'"):
+        endpoint.name = "test_endpoints"
+        with pytest.raises(
+            NetBoxApiError,
+            match="No se pudo crear el objeto en 'test_endpoints' con nombre 'Test'",
+        ):
             _get_or_create_cached(
-                endpoint, cache, "key1", {}, {"name": "Test"}, "TestType", "Test", False
+                endpoint, cache, "key1", {}, {"name": "Test"}, "Test", False
             )

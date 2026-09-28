@@ -673,7 +673,6 @@ def _generate_fallback_slug(base_slug: str, original_name: str) -> str:
 
 def create_with_fallback_slug(
     endpoint: Endpoint,
-    object_type_name: str,
     original_name: str,
     **kwargs: Any,
 ) -> Record:
@@ -687,16 +686,16 @@ def create_with_fallback_slug(
     except RequestError:
         slug_fallback = _generate_fallback_slug(slug, original_name)
         log.warning(
-            "Slug '%s' colisionó al crear %s '%s'; reintentando con '%s'.",
+            "Slug '%s' colisionó al crear objeto en '%s' con nombre '%s'; reintentando con '%s'.",
             slug,
-            object_type_name,
+            endpoint.name,
             original_name,
             slug_fallback,
         )
         kwargs["slug"] = slug_fallback
         with netbox_error_wrap(
-            f"Imposible crear {object_type_name} '{original_name}' debido a colisión persistente "
-            f"de slug o rechazo de NetBox"
+            f"Imposible crear objeto en '{endpoint.name}' con nombre '{original_name}' "
+            "debido a colisión persistente de slug o rechazo de NetBox"
         ):
             return cast(Record, endpoint.create(**kwargs))
 
@@ -707,7 +706,6 @@ def _get_or_create_cached(
     cache_key: Any,
     filter_kwargs: dict[str, Any],
     create_kwargs: dict[str, Any],
-    object_type_name: str,
     name: str,
     dry_run: bool,
     use_fallback_slug: bool = False,
@@ -731,7 +729,7 @@ def _get_or_create_cached(
             return results[0]
 
     if dry_run:
-        log.info("[DRY-RUN] Crearía %s: %s", object_type_name, name)
+        log.info("[DRY-RUN] Crearía objeto en '%s': %s", endpoint.name, name)
         mock_kwargs = create_kwargs.copy()
         obj: NetBoxObject = MockNetBoxRecord(id=0, **mock_kwargs)
         cache[cache_key] = obj
@@ -740,15 +738,16 @@ def _get_or_create_cached(
     if use_fallback_slug:
         obj = create_with_fallback_slug(
             endpoint,
-            object_type_name,
             name,
             **create_kwargs,
         )
     else:
-        with netbox_error_wrap(f"No se pudo crear el {object_type_name} '{name}'"):
+        with netbox_error_wrap(
+            f"No se pudo crear el objeto en '{endpoint.name}' con nombre '{name}'"
+        ):
             obj = cast(Record, endpoint.create(**create_kwargs))
 
-    log.info("%s creado: %s", object_type_name, name)
+    log.info("Objeto creado en '%s': %s", endpoint.name, name)
     cache[cache_key] = obj
     return obj
 
@@ -1228,10 +1227,6 @@ def ensure_site(
         cache_key=name,
         filter_kwargs={"name": name},
         create_kwargs={"name": name, "slug": slug},
-        object_type_name="Site",
-        # TODO: tal vez en vez de pasarle un object_type_name hardcodeado, que lo
-        # resuelva del tipo de endpoint que le paso. Eso para todas las llamadas a
-        # _get_or_create_cached.
         name=name,
         dry_run=dry_run,
     )
@@ -1250,7 +1245,6 @@ def ensure_cluster_type(
         cache_key=name,
         filter_kwargs={"name": name},
         create_kwargs={"name": name, "slug": slug},
-        object_type_name="ClusterType",
         name=name,
         dry_run=dry_run,
     )
@@ -1371,7 +1365,6 @@ def ensure_manufacturer(
         cache_key=name,
         filter_kwargs={"name": name},
         create_kwargs={"name": name, "slug": slug},
-        object_type_name="Manufacturer",
         name=name,
         dry_run=dry_run,
         use_fallback_slug=True,
@@ -1426,7 +1419,6 @@ def _create_device_type(
     u_height_val = u_height or 1.0
     return create_with_fallback_slug(
         endpoint,
-        "DeviceType",
         f"{manufacturer_name}/{model}",
         model=model,
         slug=slug,
@@ -1536,7 +1528,6 @@ def ensure_platform(
 
     obj = create_with_fallback_slug(
         platforms_endpoint,
-        "Platform",
         name,
         name=name,
         slug=slug,
@@ -1563,7 +1554,6 @@ def ensure_rack(
         cache_key=cache_key,
         filter_kwargs={"name": name, "site_id": site_id},
         create_kwargs={"name": name, "site": site_id},
-        object_type_name="Rack",
         name=name,
         dry_run=dry_run,
         skip_filter=(site_id == 0),
@@ -1589,7 +1579,6 @@ def ensure_cluster(
         cache_key=cache_key,
         filter_kwargs={"name": name, "site_id": site_id},
         create_kwargs={"name": name, "type": cluster_type_id, "site": site_id},
-        object_type_name="Cluster",
         name=name,
         dry_run=dry_run,
         skip_filter=(site_id == 0),
