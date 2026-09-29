@@ -3182,6 +3182,49 @@ def _sync_interfaces_for_object(
     return errors, ipv4_candidates, any_changes
 
 
+def _assign_primary_resource(
+    target_obj: NetBoxObject,
+    field_name: str,
+    resource_id: int,
+    resource_val: str | int,
+    log_context: str,
+    dry_run: bool,
+    resource_type_label: str,
+) -> bool:
+    """Helper genérico para asignar recursos primarios (IP primaria, MAC primaria)."""
+    current_primary = getattr(target_obj, field_name, None)
+    current_primary_id = (
+        getattr(current_primary, "id", None) if current_primary else None
+    )
+
+    if current_primary_id == resource_id:
+        return False
+
+    if dry_run:
+        log.info(
+            "[DRY-RUN] Asignaría %s %s a %s",
+            resource_type_label,
+            resource_val,
+            log_context,
+        )
+        return True
+
+    try:
+        cast(Record, target_obj).update({field_name: resource_id})
+        log.info(
+            "%s asignada a %s: %s",
+            resource_type_label.capitalize(),
+            log_context,
+            resource_val,
+        )
+        return True
+    except RequestError as e:
+        log.warning(
+            "Fallo al actualizar %s en %s: %s", resource_type_label, log_context, e
+        )
+        return False
+
+
 def _assign_primary_ipv4(
     main_obj: NetBoxObject,
     primary_id: int,
@@ -3192,33 +3235,15 @@ def _assign_primary_ipv4(
     Define la dirección IPv4 indicada como IP primaria (primary_ip4) del dispositivo/VM.
     Retorna True si se asignó exitosamente (o se simuló en dry-run), False de lo contrario.
     """
-    current_primary = getattr(main_obj, "primary_ip4", None)
-    current_primary_id = (
-        getattr(current_primary, "id", None) if current_primary else None
+    return _assign_primary_resource(
+        target_obj=main_obj,
+        field_name="primary_ip4",
+        resource_id=primary_id,
+        resource_val=f"(ID={primary_id})",
+        log_context=f"nodo '{machine_name}'",
+        dry_run=dry_run,
+        resource_type_label="IP primaria",
     )
-
-    if current_primary_id == primary_id:
-        return False
-
-    if dry_run:
-        log.info(
-            "[DRY-RUN] Asignaría IP primaria (ID=%s) al nodo '%s'",
-            primary_id,
-            machine_name,
-        )
-        return True
-
-    try:
-        cast(Record, main_obj).update({"primary_ip4": primary_id})
-        log.debug("IP primaria actualizada en '%s' (ID=%s)", machine_name, primary_id)
-        return True
-    except RequestError as e:
-        log.warning(
-            "Fallo al actualizar IP primaria en '%s': %s",
-            machine_name,
-            e,
-        )
-        return False
 
 
 def _assign_primary_mac(
@@ -3230,34 +3255,19 @@ def _assign_primary_mac(
     if not mac_obj:
         return False
 
-    current_primary = getattr(iface_obj, "primary_mac_address", None)
-    current_primary_id = (
-        getattr(current_primary, "id", None) if current_primary else None
+    mac_id = get_netbox_object_id(mac_obj)
+    mac_addr = str(getattr(mac_obj, "mac_address", mac_id))
+    iface_name = str(getattr(iface_obj, "name", get_netbox_object_id(iface_obj)))
+
+    return _assign_primary_resource(
+        target_obj=iface_obj,
+        field_name="primary_mac_address",
+        resource_id=mac_id,
+        resource_val=mac_addr,
+        log_context=f"interfaz '{iface_name}'",
+        dry_run=dry_run,
+        resource_type_label="MAC primaria",
     )
-
-    if current_primary_id == mac_obj.id:
-        return False
-
-    if dry_run:
-        mac_addr = getattr(mac_obj, "mac_address", mac_obj.id)
-        iface_name = getattr(iface_obj, "name", iface_obj.id)
-        log.info(
-            "[DRY-RUN] Asignaría MAC primaria %s a la interfaz %s",
-            mac_addr,
-            iface_name,
-        )
-        return True
-
-    try:
-        cast(Record, iface_obj).update({"primary_mac_address": mac_obj.id})
-        mac_addr = getattr(mac_obj, "mac_address", mac_obj.id)
-        iface_name = getattr(iface_obj, "name", iface_obj.id)
-        log.info("MAC primaria asignada a interfaz %s: %s", iface_name, mac_addr)
-        return True
-    except RequestError as e:
-        iface_name = getattr(iface_obj, "name", iface_obj.id)
-        log.warning("Error asignando MAC primaria a interfaz %s: %s", iface_name, e)
-        return False
 
 
 def process_interfaces_and_ips(
