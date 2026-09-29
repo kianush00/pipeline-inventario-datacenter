@@ -2971,35 +2971,39 @@ def _upsert_interface_record(
     obj_id: int,
     dry_run: bool,
 ) -> tuple[NetBoxObject, bool]:
-    """Ejecuta la lógica de creación o actualización de una interfaz."""
-    if dry_run:
-        if not existing_obj:
+    """
+    Ejecuta la lógica de creación o actualización de una interfaz.
+    Retorna una tupla con (Interfaz, hubo cambios).
+    """
+    if not existing_obj:
+        if dry_run:
             log.info("[DRY-RUN] Crearía interfaz %s en objeto %s", name, obj_id)
             return MockNetBoxRecord(id=0, name=name, **payload), True
 
-        diff = check_record_changes(cast(Record, existing_obj), payload)
-        if diff:
-            log.info(
-                "[DRY-RUN] Actualizaría interfaz %s en objeto %s - Cambios: %s",
-                name,
-                obj_id,
-                list(diff.keys()),
-            )
-            return existing_obj, True
-        return existing_obj, False
-
-    with netbox_error_wrap(f"Error procesando interfaz '{name}'"):
-        if not existing_obj:
+        with netbox_error_wrap(f"Error procesando interfaz '{name}'"):
             new_obj = cast(Record, iface_endpoint.create(**payload))
             log.info("Interfaz creada: %s", name)
             return new_obj, True
 
-        diff = check_record_changes(cast(Record, existing_obj), payload)
-        if diff:
-            cast(Record, existing_obj).update(payload)
-            log.info("Interfaz actualizada: %s", name)
-            return existing_obj, True
+    diff = check_record_changes(cast(Record, existing_obj), payload)
+
+    if not diff:
         return existing_obj, False
+
+    if dry_run:
+        log.info(
+            "[DRY-RUN] Actualizaría interfaz %s en objeto %s - Cambios: %s",
+            name,
+            obj_id,
+            list(diff.keys()),
+        )
+        return existing_obj, True
+
+    with netbox_error_wrap(f"Error procesando interfaz '{name}'"):
+        cast(Record, existing_obj).update(payload)
+        log.info("Interfaz actualizada: %s", name)
+
+    return existing_obj, True
 
 
 def _sync_single_interface(
