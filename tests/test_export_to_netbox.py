@@ -34,7 +34,6 @@ from export_to_netbox import (
     _execute_sync,
     _extract_raw_source_value,
     _find_existing_object,
-    _generate_fallback_slug,
     _get_or_create_cached,
     _is_name_safely_unique,
     _parse_network_interfaces,
@@ -58,6 +57,7 @@ from export_to_netbox import (
     ensure_rack,
     ensure_site,
     extract_csv_value,
+    generate_fallback_slug,
     get_netbox_object_id,
     get_node_type_from_row,
     load_config,
@@ -115,25 +115,25 @@ class TestGenerateFallbackSlug:
 
     def test_slug_format_with_hash(self) -> None:
         """El slug de fallback tiene el formato 'base-XXXX' (hash MD5 de 4 chars)."""
-        resultado = _generate_fallback_slug("mi-slug", "Nombre Original")
+        resultado = generate_fallback_slug("mi-slug", "Nombre Original")
         expected_hash = hashlib.md5(b"Nombre Original").hexdigest()[:4]
         assert resultado == f"mi-slug-{expected_hash}"
 
     def test_determinism(self) -> None:
         """La misma entrada siempre produce el mismo slug de fallback."""
-        a = _generate_fallback_slug("base", "Mismo Nombre")
-        b = _generate_fallback_slug("base", "Mismo Nombre")
+        a = generate_fallback_slug("base", "Mismo Nombre")
+        b = generate_fallback_slug("base", "Mismo Nombre")
         assert a == b
 
     def test_different_names_produce_different_hashes(self) -> None:
         """Nombres distintos generan sufijos hash distintos."""
-        a = _generate_fallback_slug("base", "Nombre A")
-        b = _generate_fallback_slug("base", "Nombre B")
+        a = generate_fallback_slug("base", "Nombre A")
+        b = generate_fallback_slug("base", "Nombre B")
         assert a != b
 
     def test_generate_fallback_slug(self) -> None:
         base = "srv-01"
-        fallback = _generate_fallback_slug(base, "SRV-01")
+        fallback = generate_fallback_slug(base, "SRV-01")
         assert fallback.startswith("srv-01-")
         assert len(fallback) == 7 + 4  # 'srv-01-' + 4 chars md5
 

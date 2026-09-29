@@ -665,7 +665,7 @@ def slugify(name: str) -> str:
     return slug[:100]
 
 
-def _generate_fallback_slug(base_slug: str, original_name: str) -> str:
+def generate_fallback_slug(base_slug: str, original_name: str) -> str:
     """Genera un slug de respaldo determinista usando un hash md5 corto."""
     hash_suffix = hashlib.md5(original_name.encode("utf-8")).hexdigest()[:4]
     return f"{base_slug}-{hash_suffix}"
@@ -1142,7 +1142,7 @@ def _create_with_fallback_slug(
     try:
         return cast(Record, endpoint.create(**kwargs))
     except RequestError:
-        slug_fallback = _generate_fallback_slug(slug, original_name)
+        slug_fallback = generate_fallback_slug(slug, original_name)
         log.warning(
             "Slug '%s' colisionó al crear objeto en '%s' con nombre '%s'; reintentando con '%s'.",
             slug,
@@ -1248,24 +1248,6 @@ def ensure_site(
     )
 
 
-def ensure_cluster_type(
-    cluster_type_endpoint: Endpoint,
-    name: str,
-    slug: str,
-    dry_run: bool,
-) -> NetBoxObject:
-    """Garantiza que el ClusterType exista en NetBox."""
-    return _get_or_create_cached(
-        endpoint=cluster_type_endpoint,
-        cache={},  # Similar al Site, el caché real de cluster_types se maneja externamente
-        cache_key=name,
-        filter_kwargs={"name": name},
-        create_kwargs={"name": name, "slug": slug},
-        name=name,
-        dry_run=dry_run,
-    )
-
-
 def precompute_cluster_type_map(
     rows: list[CsvRow],
     config: NetBoxMappingConfig,
@@ -1313,6 +1295,24 @@ def precompute_cluster_type_map(
     return cluster_type_map
 
 
+def _ensure_cluster_type(
+    cluster_type_endpoint: Endpoint,
+    name: str,
+    slug: str,
+    dry_run: bool,
+) -> NetBoxObject:
+    """Garantiza que el ClusterType exista en NetBox."""
+    return _get_or_create_cached(
+        endpoint=cluster_type_endpoint,
+        cache={},  # Similar al Site, el caché real de cluster_types se maneja externamente
+        cache_key=name,
+        filter_kwargs={"name": name},
+        create_kwargs={"name": name, "slug": slug},
+        name=name,
+        dry_run=dry_run,
+    )
+
+
 def ensure_dynamic_cluster_types(
     endpoints: NetBoxEndpoints,
     cluster_type_map: dict[str, str],
@@ -1332,7 +1332,7 @@ def ensure_dynamic_cluster_types(
     # Garantizar el fallback estático del YAML.
     fallback_name = fallback_cfg.default.name
     fallback_slug = cast(str, fallback_cfg.default.slug)
-    fallback = ensure_cluster_type(
+    fallback = _ensure_cluster_type(
         endpoints.cluster_types, fallback_name, fallback_slug, dry_run
     )
     cache[fallback_name] = fallback
@@ -1343,10 +1343,123 @@ def ensure_dynamic_cluster_types(
         if os_name in cache:
             continue
         os_slug = slugify(os_name)
-        ct = ensure_cluster_type(endpoints.cluster_types, os_name, os_slug, dry_run)
+        ct = _ensure_cluster_type(endpoints.cluster_types, os_name, os_slug, dry_run)
         cache[os_name] = ct
 
     return fallback
+
+
+def _sync_single_device_role(
+    endpoints: NetBoxEndpoints,
+    role_def: DeviceRoleConfig,
+    device_roles_cache: dict[str, NetBoxObject],
+    dry_run: bool,
+) -> NetBoxObject:
+    """
+    Sincroniza un único DeviceRole y asegura que permita VMs.
+    Retorna el objeto DeviceRole.
+    """
+    name = role_def.name
+    key = name.lower()
+    slug = cast(str, role_def.slug)
+
+    try:
+        obj = _get_or_create_cached(
+            endpoint=endpoints.device_roles,
+            cache=device_roles_cache,
+            cache_key=key,
+            filter_kwargs={"name": name},
+            create_kwargs={
+                "name": name,
+                "slug": slug,
+                "color": role_def.color,
+                "vm_role": True,
+            },
+            name=name,
+            dry_run=dry_run,
+        )
+    except NetBoxApiError as e:
+        raise ConfigValidationError(f"Error procesando DeviceRole '{name}': {e}") from e
+
+    if getattr(obj, "id", 0) != 0 and not getattr(obj, "vm_role", False):
+        if dry_run:
+            log.info("[DRY-RUN] Actualizaría DeviceRole para permitir VM: %s", name)
+        else:
+            with netbox_error_wrap(f"Error actualizando DeviceRole '{name}'"):
+                cast(Record, obj).update({"vm_role": True})
+                log.info("DeviceRole actualizado para permitir VM: %s", name)
+
+        device_roles_cache[key] = obj
+
+    return obj
+
+
+def ensure_all_device_roles(
+    endpoints: NetBoxEndpoints,
+    device_roles: list[DeviceRoleConfig],
+    device_roles_cache: dict[str, NetBoxObject],
+    dry_run: bool,
+) -> dict[str, NetBoxObject]:
+    """
+    Garantiza que todos los device roles definidos en el YAML
+    existen en NetBox (/api/dcim/device-roles/).
+    Todos los roles se habilitan para su uso en Virtual Machines.
+    Puebla caches.device_roles con {nombre_lower: objeto}.
+    Retorna un diccionario con los DeviceRoles sincronizados.
+    """
+    ensured_roles: dict[str, NetBoxObject] = {}
+    for role_def in device_roles:
+        key = role_def.name.lower()
+        ensured_roles[key] = _sync_single_device_role(
+            endpoints, role_def, device_roles_cache, dry_run
+        )
+    return ensured_roles
+
+
+def ensure_platform(
+    platforms_endpoint: Endpoint,
+    name: str,
+    cache: dict[str, NetBoxObject],
+    dry_run: bool,
+) -> NetBoxObject:
+    """Garantiza que el Platform exista en NetBox."""
+    slug = slugify(name)
+    return _get_or_create_cached(
+        endpoint=platforms_endpoint,
+        cache=cache,
+        cache_key=name,
+        filter_kwargs={"name": name},
+        create_kwargs={"name": name, "slug": slug},
+        name=name,
+        dry_run=dry_run,
+        use_fallback_slug=True,
+        preventive_slug_search=True,
+    )
+
+
+def ensure_cluster(
+    clusters_endpoint: Endpoint,
+    name: str,
+    cluster_type: NetBoxObject,
+    site: NetBoxObject,
+    cache: dict[tuple[int, str], NetBoxObject],
+    dry_run: bool,
+) -> NetBoxObject:
+    """Garantiza que el Cluster exista en NetBox."""
+    site_id = get_netbox_object_id(site)
+    cache_key = (site_id, name)
+    cluster_type_id = get_netbox_object_id(cluster_type)
+
+    return _get_or_create_cached(
+        endpoint=clusters_endpoint,
+        cache=cache,
+        cache_key=cache_key,
+        filter_kwargs={"name": name, "site_id": site_id},
+        create_kwargs={"name": name, "type": cluster_type_id, "site": site_id},
+        name=name,
+        dry_run=dry_run,
+        skip_filter=(site_id == 0),
+    )
 
 
 def ensure_manufacturer(
@@ -1451,27 +1564,6 @@ def ensure_device_type(
     return obj
 
 
-def ensure_platform(
-    platforms_endpoint: Endpoint,
-    name: str,
-    cache: dict[str, NetBoxObject],
-    dry_run: bool,
-) -> NetBoxObject:
-    """Garantiza que el Platform exista en NetBox."""
-    slug = slugify(name)
-    return _get_or_create_cached(
-        endpoint=platforms_endpoint,
-        cache=cache,
-        cache_key=name,
-        filter_kwargs={"name": name},
-        create_kwargs={"name": name, "slug": slug},
-        name=name,
-        dry_run=dry_run,
-        use_fallback_slug=True,
-        preventive_slug_search=True,
-    )
-
-
 def ensure_rack(
     racks_endpoint: Endpoint,
     name: str,
@@ -1493,98 +1585,6 @@ def ensure_rack(
         dry_run=dry_run,
         skip_filter=(site_id == 0),
     )
-
-
-def ensure_cluster(
-    clusters_endpoint: Endpoint,
-    name: str,
-    cluster_type: NetBoxObject,
-    site: NetBoxObject,
-    cache: dict[tuple[int, str], NetBoxObject],
-    dry_run: bool,
-) -> NetBoxObject:
-    """Garantiza que el Cluster exista en NetBox."""
-    site_id = get_netbox_object_id(site)
-    cache_key = (site_id, name)
-    cluster_type_id = get_netbox_object_id(cluster_type)
-
-    return _get_or_create_cached(
-        endpoint=clusters_endpoint,
-        cache=cache,
-        cache_key=cache_key,
-        filter_kwargs={"name": name, "site_id": site_id},
-        create_kwargs={"name": name, "type": cluster_type_id, "site": site_id},
-        name=name,
-        dry_run=dry_run,
-        skip_filter=(site_id == 0),
-    )
-
-
-def _sync_single_device_role(
-    endpoints: NetBoxEndpoints,
-    role_def: DeviceRoleConfig,
-    device_roles_cache: dict[str, NetBoxObject],
-    dry_run: bool,
-) -> NetBoxObject:
-    """
-    Sincroniza un único DeviceRole y asegura que permita VMs.
-    Retorna el objeto DeviceRole.
-    """
-    name = role_def.name
-    key = name.lower()
-    slug = cast(str, role_def.slug)
-
-    try:
-        obj = _get_or_create_cached(
-            endpoint=endpoints.device_roles,
-            cache=device_roles_cache,
-            cache_key=key,
-            filter_kwargs={"name": name},
-            create_kwargs={
-                "name": name,
-                "slug": slug,
-                "color": role_def.color,
-                "vm_role": True,
-            },
-            name=name,
-            dry_run=dry_run,
-        )
-    except NetBoxApiError as e:
-        raise ConfigValidationError(f"Error procesando DeviceRole '{name}': {e}") from e
-
-    if getattr(obj, "id", 0) != 0 and not getattr(obj, "vm_role", False):
-        if dry_run:
-            log.info("[DRY-RUN] Actualizaría DeviceRole para permitir VM: %s", name)
-        else:
-            with netbox_error_wrap(f"Error actualizando DeviceRole '{name}'"):
-                cast(Record, obj).update({"vm_role": True})
-                log.info("DeviceRole actualizado para permitir VM: %s", name)
-
-        device_roles_cache[key] = obj
-
-    return obj
-
-
-def ensure_all_device_roles(
-    endpoints: NetBoxEndpoints,
-    device_roles: list[DeviceRoleConfig],
-    device_roles_cache: dict[str, NetBoxObject],
-    dry_run: bool,
-) -> dict[str, NetBoxObject]:
-    """
-    Garantiza que todos los device roles definidos en el YAML
-    existen en NetBox (/api/dcim/device-roles/).
-    Todos los roles se habilitan para su uso en Virtual Machines.
-    Puebla caches.device_roles con {nombre_lower: objeto}.
-    Retorna un diccionario con los DeviceRoles sincronizados.
-    """
-    ensured_roles: dict[str, NetBoxObject] = {}
-    for role_def in device_roles:
-        key = role_def.name.lower()
-        ensured_roles[key] = _sync_single_device_role(
-            endpoints, role_def, device_roles_cache, dry_run
-        )
-    return ensured_roles
 
 
 # ============================================================
@@ -1996,6 +1996,7 @@ def build_payload(
         if val is not None:
             target_dict[fd.target] = val
 
+    # Cargar campos nativos
     for fd in native_maps:
         value = _resolve_field_value(
             row,
@@ -2008,6 +2009,7 @@ def build_payload(
 
         _assign_if_valid(payload, fd, value)
 
+    # Cargar campos custom
     for fd in custom_maps:
         cf_def = config.get_custom_field_def(fd.target)
         if cf_def is None:
@@ -2039,25 +2041,6 @@ def build_payload(
 # ============================================================
 
 
-def _resolve_netbox_status(
-    row: CsvRow, config: NetBoxMappingConfig, node_type: NodeType
-) -> str:
-    """
-    Resuelve el status NetBox a partir de la columna 'Estado'.
-
-    Si el valor no existe en status_map, se aplica el fallback
-    correspondiente al tipo de nodo.
-    """
-    status_csv = extract_csv_value(row, "status", config)
-
-    status_mapped = config.map_value("status", status_csv, strict=False)
-    if status_mapped is not None:
-        return status_mapped
-
-    node_cfg = config.node_types.get_config(node_type)
-    return node_cfg.status.default
-
-
 def _resolve_platform(
     plt_endpoint: Endpoint,
     row: CsvRow,
@@ -2077,6 +2060,54 @@ def _resolve_platform(
         dry_run,
     )
     return get_netbox_object_id(platform)
+
+
+def _resolve_device_role(
+    row: CsvRow,
+    roles_cache: dict[str, NetBoxObject],
+    config: NetBoxMappingConfig,
+) -> int:
+    """
+    Busca un DeviceRole por nombre (insensible a mayúsculas) y retorna su ID.
+    Si el nombre está vacío o no existe, utiliza "Others" como fallback.
+    Lanza RowValidationError si el fallback "Others" tampoco existe.
+    """
+    role_csv = extract_csv_value(row, "role", config)
+    role_obj = None
+
+    if role_csv:
+        role_obj = roles_cache.get(role_csv.lower())
+
+    if not role_obj:
+        role_obj = roles_cache.get("others")
+
+    if not role_obj:
+        machine_name = extract_csv_value(row, "machine_name", config) or "?"
+        raise RowValidationError(
+            f"No existe el DeviceRole 'Others' en NetBox para asignar como "
+            f"fallback a la máquina '{machine_name}'."
+        )
+
+    return get_netbox_object_id(role_obj)
+
+
+def _resolve_netbox_status(
+    row: CsvRow, config: NetBoxMappingConfig, node_type: NodeType
+) -> str:
+    """
+    Resuelve el status NetBox a partir de la columna 'Estado'.
+
+    Si el valor no existe en status_map, se aplica el fallback
+    correspondiente al tipo de nodo.
+    """
+    status_csv = extract_csv_value(row, "status", config)
+
+    status_mapped = config.map_value("status", status_csv, strict=False)
+    if status_mapped is not None:
+        return status_mapped
+
+    node_cfg = config.node_types.get_config(node_type)
+    return node_cfg.status.default
 
 
 def _resolve_cluster(
@@ -2217,38 +2248,47 @@ def _resolve_host_device(
         ) from e
 
 
-def _resolve_device_role(
-    row: CsvRow,
-    roles_cache: dict[str, NetBoxObject],
-    config: NetBoxMappingConfig,
-) -> int:
-    """
-    Busca un DeviceRole por nombre (insensible a mayúsculas) y retorna su ID.
-    Si el nombre está vacío o no existe, utiliza "Others" como fallback.
-    Lanza RowValidationError si el fallback "Others" tampoco existe.
-    """
-    role_csv = extract_csv_value(row, "role", config)
-    role_obj = None
-
-    if role_csv:
-        role_obj = roles_cache.get(role_csv.lower())
-
-    if not role_obj:
-        role_obj = roles_cache.get("others")
-
-    if not role_obj:
-        machine_name = extract_csv_value(row, "machine_name", config) or "?"
-        raise RowValidationError(
-            f"No existe el DeviceRole 'Others' en NetBox para asignar como "
-            f"fallback a la máquina '{machine_name}'."
-        )
-
-    return get_netbox_object_id(role_obj)
-
-
 # ============================================================
 # SINCRONIZACIÓN DE OBJETOS (DEVICES y VMS)
 # ============================================================
+
+
+def _resolve_base_node(
+    node_type: NodeType,
+    endpoints: NetBoxEndpoints,
+    row: CsvRow,
+    config: NetBoxMappingConfig,
+    site: NetBoxObject,
+    caches: CacheStore,
+    native_maps: list[FieldMappingConfig],
+    custom_maps: list[FieldMappingConfig],
+    dry_run: bool,
+) -> BaseNodeData:
+    """
+    Resuelve los campos comunes entre device y virtual_machine.
+    """
+    machine_name = extract_csv_value(row, "machine_name", config, required=True)
+    uuid = extract_csv_value(row, "inventory_uuid", config).lower()
+    machine_type = extract_csv_value(row, "machine_type", config, required=True)
+
+    payload = build_payload(row, native_maps, custom_maps, config)
+
+    platform_id = _resolve_platform(
+        endpoints.platforms, row, caches.platforms, dry_run, config
+    )
+    if platform_id is not None:
+        payload["platform"] = platform_id
+
+    payload["role"] = _resolve_device_role(row, caches.device_roles, config)
+    payload["status"] = _resolve_netbox_status(row, config, node_type)
+    payload["site"] = get_netbox_object_id(site)
+
+    return {
+        "machine_name": machine_name,
+        "inventory_uuid": uuid,
+        "machine_type": machine_type,
+        "payload": payload,
+    }
 
 
 def _find_existing_object(
@@ -2423,44 +2463,6 @@ def _validate_sync(
         uuid,
         dry_run,
     )
-
-
-def _resolve_base_node(
-    node_type: NodeType,
-    endpoints: NetBoxEndpoints,
-    row: CsvRow,
-    config: NetBoxMappingConfig,
-    site: NetBoxObject,
-    caches: CacheStore,
-    native_maps: list[FieldMappingConfig],
-    custom_maps: list[FieldMappingConfig],
-    dry_run: bool,
-) -> BaseNodeData:
-    """
-    Resuelve los campos comunes entre device y virtual_machine.
-    """
-    machine_name = extract_csv_value(row, "machine_name", config, required=True)
-    uuid = extract_csv_value(row, "inventory_uuid", config).lower()
-    machine_type = extract_csv_value(row, "machine_type", config, required=True)
-
-    payload = build_payload(row, native_maps, custom_maps, config)
-
-    platform_id = _resolve_platform(
-        endpoints.platforms, row, caches.platforms, dry_run, config
-    )
-    if platform_id is not None:
-        payload["platform"] = platform_id
-
-    payload["role"] = _resolve_device_role(row, caches.device_roles, config)
-    payload["status"] = _resolve_netbox_status(row, config, node_type)
-    payload["site"] = get_netbox_object_id(site)
-
-    return {
-        "machine_name": machine_name,
-        "inventory_uuid": uuid,
-        "machine_type": machine_type,
-        "payload": payload,
-    }
 
 
 def sync_device(
