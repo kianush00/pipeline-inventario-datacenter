@@ -1938,19 +1938,70 @@ def _resolve_field_value(
     if config.is_empty(raw_value):
         return _resolve_default_or_empty(default, is_optional, target)
 
+    # 3. Si es un campo transformado, ya se resolvió en el paso 1
     if isinstance(source, list) and field_def.transform:
         return raw_value
 
+    # 4. Procesamiento de campos simples
     value: FieldValue = raw_value
-
     if isinstance(source, str):
         value = config.map_value_by_source(source, raw_value, strict=True)
-    value = _validate_select_choice(value, custom_field_def, target, is_optional)
 
+    # 5. Validaciones y Casts
+    value = _validate_select_choice(value, custom_field_def, target, is_optional)
     if field_def.cast:
         value = apply_cast(value, field_def.cast, target)
 
     return value
+
+
+def _assign_if_valid(
+    target_payload: dict[str, Any], fd: FieldMappingConfig, val: FieldValue
+) -> dict[str, Any]:
+    """Sanitiza y asigna el valor al payload solo si es válido. Retorna el payload actualizado."""
+    if fd.is_unique and val == "":
+        val = None
+
+    if val is not None:
+        target_payload[fd.target] = val
+
+    return target_payload
+
+
+def _process_maps(
+    config: NetBoxMappingConfig,
+    row: CsvRow,
+    maps: list[FieldMappingConfig],
+    target_payload: dict[str, Any],
+    is_custom: bool,
+) -> dict[str, Any]:
+    """Procesa una lista de mapeos y puebla el payload destino."""
+    for fd in maps:
+        cf_def = None
+        default = None
+        is_optional = not fd.required
+
+        if is_custom:
+            cf_def = config.get_custom_field_def(fd.target)
+            if cf_def is None:
+                raise ConfigValidationError(
+                    f"Error crítico de configuración: El custom_mapping target "
+                    f"'{fd.target}' no está definido en custom_field_definitions."
+                )
+            default = cf_def.default
+            is_optional = not cf_def.required
+
+        value = _resolve_field_value(
+            row,
+            fd,
+            config,
+            is_optional=is_optional,
+            default=default,
+            custom_field_def=cf_def,
+        )
+        target_payload = _assign_if_valid(target_payload, fd, value)
+
+    return target_payload
 
 
 def build_payload(
@@ -1976,51 +2027,9 @@ def build_payload(
     payload: NetBoxPayload = {}
     cf_payload: CustomFieldsPayload = {}
 
-    def _assign_if_valid(
-        target_dict: dict[str, Any], fd: FieldMappingConfig, val: FieldValue
-    ) -> None:
-        """Sanitiza y asigna el valor al payload solo si es válido."""
-        # Sanitización dinámica de constraints UNIQUE dictadas por el YAML.
-        if fd.is_unique and val == "":
-            val = None
+    payload = _process_maps(config, row, native_maps, payload, is_custom=False)
+    cf_payload = _process_maps(config, row, custom_maps, cf_payload, is_custom=True)
 
-        if val is not None:
-            target_dict[fd.target] = val
-
-    # Cargar campos nativos
-    for fd in native_maps:
-        value = _resolve_field_value(
-            row,
-            fd,
-            config,
-            is_optional=not fd.required,
-            default=None,
-            custom_field_def=None,
-        )
-
-        _assign_if_valid(payload, fd, value)
-
-    # Cargar campos custom
-    for fd in custom_maps:
-        cf_def = config.get_custom_field_def(fd.target)
-        if cf_def is None:
-            raise ConfigValidationError(
-                f"Error crítico de configuración: El custom_mapping target "
-                f"'{fd.target}' no está definido en custom_field_definitions."
-            )
-
-        value = _resolve_field_value(
-            row,
-            fd,
-            config,
-            is_optional=not cf_def.required,
-            default=cf_def.default,
-            custom_field_def=cf_def,
-        )
-
-        _assign_if_valid(cf_payload, fd, value)
-
-    # Agregar los custom fields al payload
     if cf_payload:
         payload["custom_fields"] = cf_payload
 
