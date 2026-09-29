@@ -3066,23 +3066,28 @@ def _prune_orphan_interfaces(
     """
     errors = 0
     deleted_count = 0
+
     for name, iface_obj in existing_ifaces.items():
-        if name not in csv_iface_names:
-            if dry_run:
-                log.info(
-                    "[DRY-RUN] Eliminaría interfaz huérfana '%s' en objeto %s",
-                    name,
-                    obj_id,
-                )
-                deleted_count += 1
-            else:
-                try:
-                    cast(Record, iface_obj).delete()
-                    log.info("DELETED interfaz huérfana: %s", name)
-                    deleted_count += 1
-                except RequestError as e:
-                    log.warning("Error eliminando interfaz huérfana '%s': %s", name, e)
-                    errors += 1
+        if name in csv_iface_names:
+            continue
+
+        if dry_run:
+            log.info(
+                "[DRY-RUN] Eliminaría interfaz huérfana '%s' en objeto %s",
+                name,
+                obj_id,
+            )
+            deleted_count += 1
+            continue
+
+        try:
+            cast(Record, iface_obj).delete()
+            log.info("DELETED interfaz huérfana: %s", name)
+            deleted_count += 1
+        except RequestError as e:
+            log.warning("Error eliminando interfaz huérfana '%s': %s", name, e)
+            errors += 1
+
     return deleted_count, errors
 
 
@@ -3184,10 +3189,8 @@ def _assign_primary_ipv4(
 ) -> bool:
     """
     Define la dirección IPv4 indicada como IP primaria (primary_ip4) del dispositivo/VM.
-
     Retorna True si se asignó exitosamente (o se simuló en dry-run), False de lo contrario.
     """
-
     current_primary = getattr(main_obj, "primary_ip4", None)
     current_primary_id = (
         getattr(current_primary, "id", None) if current_primary else None
