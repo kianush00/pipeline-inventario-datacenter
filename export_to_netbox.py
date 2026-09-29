@@ -1405,26 +1405,6 @@ def _sync_device_type_u_height(
         return existing_dt
 
 
-def _create_device_type(
-    endpoint: Endpoint,
-    model: str,
-    slug: str,
-    manufacturer_id: int,
-    u_height: float,
-    manufacturer_name: str,
-) -> Record:
-    """Intenta crear el DeviceType, manejando colisiones de slug."""
-    u_height_val = u_height or 1.0
-    return _create_with_fallback_slug(
-        endpoint,
-        f"{manufacturer_name}/{model}",
-        model=model,
-        slug=slug,
-        manufacturer=manufacturer_id,
-        u_height=u_height_val,
-    )
-
-
 def ensure_device_type(
     device_types_endpoint: Endpoint,
     manufacturer: NetBoxObject,
@@ -1439,53 +1419,35 @@ def ensure_device_type(
     # El ID numérico se retiene solo como fallback.
     manufacturer_name = str(getattr(manufacturer, "name", manufacturer_id))
     key = (manufacturer_name, model)
-    if key in cache:
-        return cache[key]
 
-    if manufacturer_id == 0:
-        results = []
-    else:
-        results = list(
-            device_types_endpoint.filter(model=model, manufacturer_id=manufacturer_id)
-        )
-    if results:
-        existing_dt = _sync_device_type_u_height(results[0], model, u_height, dry_run)
-        cache[key] = existing_dt
-        return existing_dt
-
-    if dry_run:
-        log.info("[DRY-RUN] Crearía DeviceType: %s / %s", manufacturer_name, model)
-        obj = MockNetBoxRecord(id=0, model=model)
-        cache[key] = obj
-        return obj
-
-    # Prefijamos el slug con el nombre del fabricante para evitar colisiones
-    # entre modelos homónimos de distintas marcas (ej. "PowerEdge" de Dell vs HP).
     slug = slugify(f"{manufacturer_name} {model}")
+    u_height_val = u_height or 1.0
 
-    # Búsqueda preventiva por slug.
-    slug_results: list[Record] = list(device_types_endpoint.filter(slug=slug))
-    if slug_results:
-        log.warning(
-            "DeviceType '%s/%s' no existe por nombre, pero su slug '%s' coincide "
-            "con un DeviceType existente. Se reutiliza.",
-            manufacturer_name,
-            model,
-            slug,
-        )
-        cache[key] = slug_results[0]
-        return slug_results[0]
-
-    obj = _create_device_type(
-        device_types_endpoint,
-        model,
-        slug,
-        manufacturer_id,
-        u_height,
-        manufacturer_name,
+    obj = _get_or_create_cached(
+        endpoint=device_types_endpoint,
+        cache=cache,
+        cache_key=key,
+        filter_kwargs={"model": model, "manufacturer_id": manufacturer_id},
+        create_kwargs={
+            "model": model,
+            "slug": slug,
+            "manufacturer": manufacturer_id,
+            "u_height": u_height_val,
+        },
+        name=f"{manufacturer_name} / {model}",
+        dry_run=dry_run,
+        use_fallback_slug=True,
+        preventive_slug_search=True,
+        skip_filter=(manufacturer_id == 0),
     )
-    log.info("DeviceType creado: %s / %s", manufacturer_name, model)
-    cache[key] = obj
+
+    if getattr(obj, "id", 0) != 0:
+        updated_obj = _sync_device_type_u_height(
+            cast(Record, obj), model, u_height, dry_run
+        )
+        if updated_obj is not obj:
+            cache[key] = updated_obj
+            return updated_obj
     return obj
 
 
@@ -1570,45 +1532,36 @@ def _sync_single_device_role(
     """
     name = role_def.name
     key = name.lower()
-
-    if key in device_roles_cache:
-        return device_roles_cache[key]
-
-    results: list[Record] = list(endpoints.device_roles.filter(name=name))
-    if results:
-        role_obj = results[0]
-        if not getattr(role_obj, "vm_role", False):
-            if dry_run:
-                log.info("[DRY-RUN] Actualizaría DeviceRole para permitir VM: %s", name)
-            else:
-                with netbox_error_wrap(f"Error actualizando DeviceRole '{name}'"):
-                    role_obj.update({"vm_role": True})
-                    log.info("DeviceRole actualizado para permitir VM: %s", name)
-
-        device_roles_cache[key] = role_obj
-        return role_obj
-
-    if dry_run:
-        log.info("[DRY-RUN] Crearía DeviceRole: %s", name)
-        obj_mock = MockNetBoxRecord(id=0, name=name, vm_role=True)
-        device_roles_cache[key] = obj_mock
-        return obj_mock
+    slug = cast(str, role_def.slug)
 
     try:
-        slug = cast(str, role_def.slug)
-        obj = cast(
-            Record,
-            endpoints.device_roles.create(
-                name=name,
-                slug=slug,
-                color=role_def.color,
-                vm_role=True,
-            ),
+        obj = _get_or_create_cached(
+            endpoint=endpoints.device_roles,
+            cache=device_roles_cache,
+            cache_key=key,
+            filter_kwargs={"name": name},
+            create_kwargs={
+                "name": name,
+                "slug": slug,
+                "color": role_def.color,
+                "vm_role": True,
+            },
+            name=name,
+            dry_run=dry_run,
         )
-    except RequestError as e:
-        raise ConfigValidationError(f"Error creando DeviceRole '{name}': {e}") from e
-    log.info("DeviceRole creado: %s", name)
-    device_roles_cache[key] = obj
+    except NetBoxApiError as e:
+        raise ConfigValidationError(f"Error procesando DeviceRole '{name}': {e}") from e
+
+    if getattr(obj, "id", 0) != 0 and not getattr(obj, "vm_role", False):
+        if dry_run:
+            log.info("[DRY-RUN] Actualizaría DeviceRole para permitir VM: %s", name)
+        else:
+            with netbox_error_wrap(f"Error actualizando DeviceRole '{name}'"):
+                cast(Record, obj).update({"vm_role": True})
+                log.info("DeviceRole actualizado para permitir VM: %s", name)
+
+        device_roles_cache[key] = obj
+
     return obj
 
 
