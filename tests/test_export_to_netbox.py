@@ -4,7 +4,7 @@ Pruebas unitarias para export_to_netbox.py
 
 import hashlib
 from collections import Counter
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,6 +17,7 @@ from export_to_netbox import (
     ChoiceSetConfig,
     ConfigValidationError,
     CustomFieldConfig,
+    DeviceRoleConfig,
     FieldMappingConfig,
     FieldParseError,
     MockNetBoxRecord,
@@ -45,6 +46,7 @@ from export_to_netbox import (
     _resolve_netbox_status,
     _sanitize_mac_address,
     _sync_device_type_u_height,
+    _sync_single_device_role,
     _validate_csv_headers,
     _validate_interface_ip,
     _validate_select_choice,
@@ -53,6 +55,7 @@ from export_to_netbox import (
     concat_dot,
     count_machine_names,
     ensure_cluster,
+    ensure_device_type,
     ensure_manufacturer,
     ensure_rack,
     ensure_site,
@@ -66,6 +69,7 @@ from export_to_netbox import (
     parse_float_to_int,
     parse_int,
     parse_int_gb_to_mb,
+    precompute_cluster_type_map,
     slugify,
     sync_device,
     sync_vm,
@@ -1814,4 +1818,133 @@ class TestGetOrCreateCached:
         ):
             _get_or_create_cached(
                 endpoint, cache, "key1", {}, {"name": "Test"}, "Test", False
+            )
+
+
+class TestEnsureTaxonomyQACases:
+    """
+    Pruebas QA destructivas y de edge cases para el código de taxonomía (ensure_*).
+    """
+
+    def test_precompute_cluster_type_map_conflict(self) -> None:
+        """
+        Escenario: Inconsistencia en el inventario maestro para SO de hipervisores.
+        Dos nodos del mismo cluster reportan SO distintos. Debe explotar ruidosamente.
+        """
+        config = MagicMock()
+
+        def mock_extract(
+            row: dict[str, str], col: str, config_mock: Any, **kwargs: Any
+        ) -> str:
+            return row.get(col, "")
+
+        config.extract_csv_value = mock_extract
+
+        rows = [
+            {
+                "machine_type": "Hipervisor",
+                "cluster_name": "Cluster-X",
+                "hypervisor_os": "ESXi 7",
+            },
+            {
+                "machine_type": "Hipervisor",
+                "cluster_name": "Cluster-X",
+                "hypervisor_os": "ESXi 8",
+            },
+        ]
+
+        with (
+            patch("export_to_netbox.extract_csv_value", side_effect=mock_extract),
+            pytest.raises(ConfigValidationError, match="Conflicto de SO en el clúster 'Cluster-X'"),
+        ):
+            precompute_cluster_type_map(cast(Any, rows), config)
+
+    def test_sync_single_device_role_api_error_wrap(self) -> None:
+        """
+        Escenario: La creación de un DeviceRole falla a nivel API.
+        _sync_single_device_role debe atrapar NetBoxApiError y envolverlo en ConfigValidationError.
+        """
+        endpoints = MagicMock()
+        endpoints.device_roles.name = "device_roles"
+        endpoints.device_roles.filter.return_value = []
+        endpoints.device_roles.create.side_effect = RequestError(
+            MagicMock(status_code=403, reason="Forbidden")
+        )
+
+        role_def = DeviceRoleConfig(
+            name="CoreRouter", slug="core-router", color="0000ff"
+        )
+
+        with pytest.raises(
+            ConfigValidationError, match="Error procesando DeviceRole 'CoreRouter'"
+        ):
+            _sync_single_device_role(endpoints, role_def, {}, dry_run=False)
+
+    def test_get_or_create_preventive_slug_without_slug_kwarg(self) -> None:
+        """
+        Escenario: Búsqueda preventiva por slug activa, pero omitiendo 'slug' en create_kwargs.
+        Debe omitir la búsqueda por slug (sin KeyError) y crear el objeto de todos modos.
+        """
+        endpoint = MagicMock()
+        endpoint.name = "generic"
+        endpoint.filter.return_value = []
+        mock_created = MockNetBoxRecord(id=99, name="NoSlug")
+        endpoint.create.return_value = mock_created
+
+        cache: dict[str, NetBoxObject] = {}
+        result = _get_or_create_cached(
+            endpoint,
+            cache=cache,
+            cache_key="key",
+            filter_kwargs={"name": "NoSlug"},
+            create_kwargs={"name": "NoSlug"},  # Falta 'slug' intencionalmente
+            name="NoSlug",
+            dry_run=False,
+            preventive_slug_search=True,
+        )
+
+        assert result.id == 99
+        endpoint.filter.assert_called_once_with(name="NoSlug")
+        endpoint.create.assert_called_once_with(name="NoSlug")
+
+    def test_ensure_device_type_blade_0u_overwrite_bug(self) -> None:
+        """
+        Escenario Edge Case Lógico: NetBox permite U-Height de 0.0 para blades lógicos,
+        pero ensure_device_type silenciosamente sobreescribe `0.0` a `1.0` por `u_height or 1.0`.
+        Validamos que en la llamada de creación se inyectó 1.0.
+        """
+        endpoint = MagicMock()
+        endpoint.name = "device_types"
+        endpoint.filter.return_value = []
+        mock_dt = MockNetBoxRecord(id=5, model="Blade")
+        endpoint.create.return_value = mock_dt
+
+        manufacturer = MockNetBoxRecord(id=10, name="Dell")
+
+        ensure_device_type(
+            device_types_endpoint=endpoint,
+            manufacturer=manufacturer,
+            model="Blade",
+            u_height=0.0,
+            cache={},
+            dry_run=False,
+        )
+
+        endpoint.create.assert_called_once()
+        create_call_args = endpoint.create.call_args[1]
+        assert create_call_args["u_height"] == 1.0
+
+    def test_sync_device_type_u_height_update_failure(self) -> None:
+        """
+        Escenario: Actualización de u_height falla debido a un problema con NetBox.
+        """
+        mock_record = MagicMock()
+        mock_record.u_height = 1.0
+        mock_record.update.side_effect = RequestError(MagicMock(status_code=500))
+
+        with pytest.raises(
+            NetBoxApiError, match="Error actualizando u_height de DeviceType 'R640'"
+        ):
+            _sync_device_type_u_height(
+                existing_dt=mock_record, model="R640", target_height=2.0, dry_run=False
             )
