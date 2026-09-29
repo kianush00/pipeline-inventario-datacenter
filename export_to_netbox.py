@@ -671,87 +671,6 @@ def _generate_fallback_slug(base_slug: str, original_name: str) -> str:
     return f"{base_slug}-{hash_suffix}"
 
 
-def create_with_fallback_slug(
-    endpoint: Endpoint,
-    original_name: str,
-    **kwargs: Any,
-) -> Record:
-    """
-    Intenta crear un objeto en NetBox. Si ocurre colisión de slug (RequestError),
-    genera un slug determinista de respaldo y reintenta la creación.
-    """
-    slug: str = kwargs.get("slug", "")
-    try:
-        return cast(Record, endpoint.create(**kwargs))
-    except RequestError:
-        slug_fallback = _generate_fallback_slug(slug, original_name)
-        log.warning(
-            "Slug '%s' colisionó al crear objeto en '%s' con nombre '%s'; reintentando con '%s'.",
-            slug,
-            endpoint.name,
-            original_name,
-            slug_fallback,
-        )
-        kwargs["slug"] = slug_fallback
-        with netbox_error_wrap(
-            f"Imposible crear objeto en '{endpoint.name}' con nombre '{original_name}' "
-            "debido a colisión persistente de slug o rechazo de NetBox"
-        ):
-            return cast(Record, endpoint.create(**kwargs))
-
-
-def _get_or_create_cached(
-    endpoint: Endpoint,
-    cache: dict[Any, NetBoxObject],
-    cache_key: Any,
-    filter_kwargs: dict[str, Any],
-    create_kwargs: dict[str, Any],
-    name: str,
-    dry_run: bool,
-    use_fallback_slug: bool = False,
-    skip_filter: bool = False,
-) -> NetBoxObject:
-    """
-    Helper genérico que reduce el boilerplate del patrón get-or-create con caché y dry-run.
-
-    El uso de `use_fallback_slug` está reservado exclusivamente para taxonomía dinámica/sucia
-    (Manufacturer, DeviceRole, etc.) proveniente de nodos, implementando un diseño Fail-Safe
-    contra colisiones de slug en NetBox. Para taxonomía estática (Site, ClusterType), se omite
-    para aplicar un enfoque Fail-Fast (ver docs/architecture.md).
-    """
-    if cache_key in cache:
-        return cache[cache_key]
-
-    if not skip_filter:
-        results: list[Record] = list(endpoint.filter(**filter_kwargs))
-        if results:
-            cache[cache_key] = results[0]
-            return results[0]
-
-    if dry_run:
-        log.info("[DRY-RUN] Crearía objeto en '%s': %s", endpoint.name, name)
-        mock_kwargs = create_kwargs.copy()
-        obj: NetBoxObject = MockNetBoxRecord(id=0, **mock_kwargs)
-        cache[cache_key] = obj
-        return obj
-
-    if use_fallback_slug:
-        obj = create_with_fallback_slug(
-            endpoint,
-            name,
-            **create_kwargs,
-        )
-    else:
-        with netbox_error_wrap(
-            f"No se pudo crear el objeto en '{endpoint.name}' con nombre '{name}'"
-        ):
-            obj = cast(Record, endpoint.create(**create_kwargs))
-
-    log.info("Objeto creado en '%s': %s", endpoint.name, name)
-    cache[cache_key] = obj
-    return obj
-
-
 def check_record_changes(
     record: Record,
     payload: NetBoxPayload,
@@ -1210,6 +1129,87 @@ def read_and_validate_csv(
 # ============================================================
 
 
+def _create_with_fallback_slug(
+    endpoint: Endpoint,
+    original_name: str,
+    **kwargs: Any,
+) -> Record:
+    """
+    Intenta crear un objeto en NetBox. Si ocurre colisión de slug (RequestError),
+    genera un slug determinista de respaldo y reintenta la creación.
+    """
+    slug: str = kwargs.get("slug", "")
+    try:
+        return cast(Record, endpoint.create(**kwargs))
+    except RequestError:
+        slug_fallback = _generate_fallback_slug(slug, original_name)
+        log.warning(
+            "Slug '%s' colisionó al crear objeto en '%s' con nombre '%s'; reintentando con '%s'.",
+            slug,
+            endpoint.name,
+            original_name,
+            slug_fallback,
+        )
+        kwargs["slug"] = slug_fallback
+        with netbox_error_wrap(
+            f"Imposible crear objeto en '{endpoint.name}' con nombre '{original_name}' "
+            "debido a colisión persistente de slug o rechazo de NetBox"
+        ):
+            return cast(Record, endpoint.create(**kwargs))
+
+
+def _get_or_create_cached(
+    endpoint: Endpoint,
+    cache: dict[Any, NetBoxObject],
+    cache_key: Any,
+    filter_kwargs: dict[str, Any],
+    create_kwargs: dict[str, Any],
+    name: str,
+    dry_run: bool,
+    use_fallback_slug: bool = False,
+    skip_filter: bool = False,
+) -> NetBoxObject:
+    """
+    Helper genérico que reduce el boilerplate del patrón get-or-create con caché y dry-run.
+
+    El uso de `use_fallback_slug` está reservado exclusivamente para taxonomía dinámica/sucia
+    (Manufacturer, DeviceRole, etc.) proveniente de nodos, implementando un diseño Fail-Safe
+    contra colisiones de slug en NetBox. Para taxonomía estática (Site, ClusterType), se omite
+    para aplicar un enfoque Fail-Fast (ver docs/architecture.md).
+    """
+    if cache_key in cache:
+        return cache[cache_key]
+
+    if not skip_filter:
+        results: list[Record] = list(endpoint.filter(**filter_kwargs))
+        if results:
+            cache[cache_key] = results[0]
+            return results[0]
+
+    if dry_run:
+        log.info("[DRY-RUN] Crearía objeto en '%s': %s", endpoint.name, name)
+        mock_kwargs = create_kwargs.copy()
+        obj: NetBoxObject = MockNetBoxRecord(id=0, **mock_kwargs)
+        cache[cache_key] = obj
+        return obj
+
+    if use_fallback_slug:
+        obj = _create_with_fallback_slug(
+            endpoint,
+            name,
+            **create_kwargs,
+        )
+    else:
+        with netbox_error_wrap(
+            f"No se pudo crear el objeto en '{endpoint.name}' con nombre '{name}'"
+        ):
+            obj = cast(Record, endpoint.create(**create_kwargs))
+
+    log.info("Objeto creado en '%s': %s", endpoint.name, name)
+    cache[cache_key] = obj
+    return obj
+
+
 def ensure_site(
     sites_endpoint: Endpoint,
     site_cfg: SiteConfig,
@@ -1419,7 +1419,7 @@ def _create_device_type(
 ) -> Record:
     """Intenta crear el DeviceType, manejando colisiones de slug."""
     u_height_val = u_height or 1.0
-    return create_with_fallback_slug(
+    return _create_with_fallback_slug(
         endpoint,
         f"{manufacturer_name}/{model}",
         model=model,
@@ -1528,7 +1528,7 @@ def ensure_platform(
         cache[name] = slug_results[0]
         return slug_results[0]
 
-    obj = create_with_fallback_slug(
+    obj = _create_with_fallback_slug(
         platforms_endpoint,
         name,
         name=name,
