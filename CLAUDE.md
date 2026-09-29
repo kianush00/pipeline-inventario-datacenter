@@ -28,6 +28,7 @@ Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes prin
 ## 2. Calidad de Código, Semántica y Consistencia Arquitectónica (Clean Code)
 
 - Prioriza la legibilidad, la intención y la robustez profesional sobre la brevedad o soluciones rápidas.
+- **Funciones Puras y Ausencia de Side-Effects:** Al diseñar funciones (especialmente en procesos ETL), evita mutar silenciosamente argumentos pasados por referencia (como cachés, diccionarios o listas). Las funciones deben ser lo más "puras" posibles. Si modifican estado o estructuras de datos, deben retornar explícitamente la estructura modificada para hacer el flujo predecible, facilitar el testing unitario y evitar bugs por efectos colaterales.
 - **Cero atajos o parches forzados:** Toda modificación debe ser limpia, cuidadosa y respetar estrictamente los patrones de diseño y convenciones ya establecidas en el código base.
 - **Consistencia de patrones arquitectónicos:** Al implementar nueva lógica o procedimientos, no reinventes patrones, convenciones ni estructuras de flujo desde cero. Imita y replica los patrones de diseño y flujo ya consolidados en el archivo (ej. el manejo de excepciones, la estructura de las condiciones if-else, etc.), garantizando uniformidad estética y conceptual en todo el código base.
 - **Reutilización y creación de utilidades:** Prohibido duplicar lógica ad-hoc. Aprovecha siempre las funciones auxiliares (utilidades) existentes en el proyecto. Si introduces código nuevo que resuelva transformaciones, parseos o validaciones comunes no cubiertas actualmente, abstáelo en una nueva función auxiliar reutilizable siguiendo el diseño de los módulos de soporte existentes.
@@ -61,7 +62,7 @@ Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes prin
 
 ## 7. Verificación de Calidad, Tipos y Linting Continuo
 
-Antes de dar cualquier modificación por concluida, **como agente DEBES verificar y corregir autónomamente** el código modificado ejecutando las siguientes herramientas desde el entorno virtual:
+Antes de dar cualquier modificación por concluida, **como agente DEBES verificar y corregir autónomamente** el código modificado (incluyendo los archivos de test modificados) ejecutando las siguientes herramientas desde el entorno virtual:
 
 1. **Tipado Estático (Pyright / Pyrefly):**
    - Linux/macOS: `.venv/bin/pyright <archivo_modificado>`
