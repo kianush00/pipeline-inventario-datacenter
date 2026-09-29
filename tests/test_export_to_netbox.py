@@ -1855,7 +1855,9 @@ class TestEnsureTaxonomyQACases:
 
         with (
             patch("export_to_netbox.extract_csv_value", side_effect=mock_extract),
-            pytest.raises(ConfigValidationError, match="Conflicto de SO en el clúster 'Cluster-X'"),
+            pytest.raises(
+                ConfigValidationError, match="Conflicto de SO en el clúster 'Cluster-X'"
+            ),
         ):
             precompute_cluster_type_map(cast(Any, rows), config)
 

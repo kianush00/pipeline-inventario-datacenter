@@ -1591,11 +1591,6 @@ def ensure_rack(
 # ============================================================
 
 
-def _get_choice_set_choices(choices: list[ChoiceItemConfig]) -> list[list[str]]:
-    """Obtiene las opciones de un choice set, ya sea de tipo lista de listas o iterable."""
-    return [[choice.value, choice.label] for choice in choices]
-
-
 def _normalize_choices(extra_choices: Any) -> list[list[str]]:
     """Convierte las opciones de un choice set a una lista de listas de strings."""
     if not isinstance(extra_choices, (list, tuple)):
@@ -1608,57 +1603,25 @@ def _normalize_choices(extra_choices: Any) -> list[list[str]]:
     ]
 
 
-def _ensure_choice_set(
-    choice_sets_endpoint: Endpoint,
-    existing_choice_sets: dict[str, Record],
-    choice_set_cfg: ChoiceSetConfig,
+def _sync_choice_set_choices(
+    choice_set: Record,
+    choice_set_name: str,
+    choices: list[list[str]],
     dry_run: bool,
 ) -> int:
-    """Crea un choice set si no existe en NetBox."""
-    choice_set_name: str = choice_set_cfg.name
-    choices: list[list[str]] = _get_choice_set_choices(choice_set_cfg.choices)
-    choice_set = existing_choice_sets.get(choice_set_name)
+    """Sincroniza las opciones (choices) de un choice set."""
 
-    def _get_choice_set_id(choice_set: Record) -> int:
-        return cast(int, getattr(choice_set, "id", 0))
-
-    if choice_set is None:
-        if dry_run:
-            log.info(
-                "[DRY-RUN] Crearía Choice Set: %s",
-                choice_set_name,
-            )
-            return 0
-
-        try:
-            choice_set = cast(
-                Record,
-                choice_sets_endpoint.create(
-                    name=choice_set_name,
-                    extra_choices=choices,
-                    order_alphabetically=False,
-                ),
-            )
-        except RequestError as e:
-            raise ConfigValidationError(
-                f"Error al crear Choice Set '{choice_set_name}': {e}"
-            ) from e
-
-        existing_choice_sets[choice_set_name] = choice_set
-        log.info(
-            "Choice Set creado: %s",
-            choice_set_name,
-        )
-        return _get_choice_set_id(choice_set)
-
-    if dry_run:
-        log.info("[DRY-RUN] Actualizaría Choice Set: %s", choice_set_name)
-        return _get_choice_set_id(choice_set)
+    def _get_choice_set_id(ch_set: Record) -> int:
+        return cast(int, getattr(ch_set, "id", 0))
 
     extra_choices: Any = getattr(choice_set, "extra_choices", None)
     current_choices: list[list[str]] = _normalize_choices(extra_choices)
 
     if current_choices == choices:
+        return _get_choice_set_id(choice_set)
+
+    if dry_run:
+        log.info("[DRY-RUN] Actualizaría Choice Set: %s", choice_set_name)
         return _get_choice_set_id(choice_set)
 
     try:
@@ -1677,9 +1640,50 @@ def _ensure_choice_set(
     return _get_choice_set_id(choice_set)
 
 
+def _ensure_choice_set(
+    choice_sets_endpoint: Endpoint,
+    existing_choice_sets: dict[str, NetBoxObject],
+    choice_set_cfg: ChoiceSetConfig,
+    dry_run: bool,
+) -> int:
+    """Crea un choice set si no existe en NetBox."""
+
+    def _get_choice_set_choices(choices: list[ChoiceItemConfig]) -> list[list[str]]:
+        return [[choice.value, choice.label] for choice in choices]
+
+    choice_set_name: str = choice_set_cfg.name
+    choices: list[list[str]] = _get_choice_set_choices(choice_set_cfg.choices)
+
+    try:
+        choice_set = _get_or_create_cached(
+            endpoint=choice_sets_endpoint,
+            cache=existing_choice_sets,
+            cache_key=choice_set_name,
+            filter_kwargs={"name": choice_set_name},
+            create_kwargs={
+                "name": choice_set_name,
+                "extra_choices": choices,
+                "order_alphabetically": False,
+            },
+            name=choice_set_name,
+            dry_run=dry_run,
+        )
+    except NetBoxApiError as e:
+        raise ConfigValidationError(
+            f"Error al crear Choice Set '{choice_set_name}': {e}"
+        ) from e
+
+    if getattr(choice_set, "id", 0) != 0:
+        return _sync_choice_set_choices(
+            cast(Record, choice_set), choice_set_name, choices, dry_run
+        )
+
+    return 0
+
+
 def _ensure_custom_field(
     custom_fields_endpoint: Endpoint,
-    existing_cfs: dict[str, Record],
+    existing_cfs: dict[str, NetBoxObject],
     cf_def: CustomFieldConfig,
     object_types: list[str],
     choice_set_id: int | None,
@@ -1690,21 +1694,6 @@ def _ensure_custom_field(
     Retorna el objeto Custom Field.
     """
     name: str = cf_def.name
-
-    if name in existing_cfs:
-        log.debug(
-            "Custom field ya existe: %s",
-            name,
-        )
-        return existing_cfs[name]
-
-    if dry_run:
-        log.info(
-            "[DRY-RUN] Crearía custom field: %s (%s)",
-            name,
-            cf_def.type,
-        )
-        return MockNetBoxRecord(id=0, name=name, type=cf_def.type)
 
     create_kwargs: NetBoxPayload = {
         "name": name,
@@ -1722,13 +1711,17 @@ def _ensure_custom_field(
         create_kwargs["default"] = default_value
 
     try:
-        created_cf = cast(Record, custom_fields_endpoint.create(**create_kwargs))
-    except RequestError as e:
+        return _get_or_create_cached(
+            endpoint=custom_fields_endpoint,
+            cache=existing_cfs,
+            cache_key=name,
+            filter_kwargs={"name": name},
+            create_kwargs=create_kwargs,
+            name=name,
+            dry_run=dry_run,
+        )
+    except NetBoxApiError as e:
         raise ConfigValidationError(f"Error al crear custom field '{name}': {e}") from e
-
-    existing_cfs[name] = created_cf
-    log.info("Custom field creado: %s", name)
-    return created_cf
 
 
 def ensure_custom_fields(
@@ -1760,9 +1753,9 @@ def ensure_custom_fields(
     custom_fields = cast(list[Record], endpoints.custom_fields.all())
     choice_sets = cast(list[Record], endpoints.choice_sets.all())
 
-    existing_cfs: dict[str, Record] = {str(cf.name): cf for cf in custom_fields}
+    existing_cfs: dict[str, NetBoxObject] = {str(cf.name): cf for cf in custom_fields}
 
-    existing_choice_sets: dict[str, Record] = {
+    existing_choice_sets: dict[str, NetBoxObject] = {
         str(ch_set.name): ch_set for ch_set in choice_sets
     }
 
