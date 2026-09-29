@@ -1909,14 +1909,18 @@ class TestEnsureTaxonomyQACases:
 
     def test_ensure_device_type_blade_0u_overwrite_bug(self) -> None:
         """
-        Escenario Edge Case Lógico: NetBox permite U-Height de 0.0 para blades lógicos,
-        pero ensure_device_type silenciosamente sobreescribe `0.0` a `1.0` por `u_height or 1.0`.
-        Validamos que en la llamada de creación se inyectó 1.0.
+        Escenario Edge Case Lógico: NetBox permite U-Height de 0.0 para blades lógicos.
+        Validamos que `ensure_device_type` pase correctamente `0.0` en la creación sin
+        sobrescribirlo erróneamente por un `or 1.0`.
         """
         endpoint = MagicMock()
         endpoint.name = "device_types"
         endpoint.filter.return_value = []
-        mock_dt = MockNetBoxRecord(id=5, model="Blade")
+        mock_dt = MagicMock()
+        mock_dt.id = 5
+        mock_dt.model = "Blade"
+        mock_dt.u_height = 0.0
+        mock_dt.update = MagicMock()
         endpoint.create.return_value = mock_dt
 
         manufacturer = MockNetBoxRecord(id=10, name="Dell")
@@ -1932,7 +1936,7 @@ class TestEnsureTaxonomyQACases:
 
         endpoint.create.assert_called_once()
         create_call_args = endpoint.create.call_args[1]
-        assert create_call_args["u_height"] == 1.0
+        assert create_call_args["u_height"] == 0.0
 
     def test_sync_device_type_u_height_update_failure(self) -> None:
         """

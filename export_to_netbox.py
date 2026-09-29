@@ -1493,10 +1493,10 @@ def _sync_device_type_u_height(
     Sincroniza la altura en U del modelo de servidor.
     Retorna el objeto DeviceType modificado (o intacto).
     """
-    target_height_val = target_height or 1.0
-    current_height = float(getattr(existing_dt, "u_height", 1) or 1)
+    current_val = getattr(existing_dt, "u_height", 1)
+    current_height = float(current_val) if current_val is not None else 1.0
 
-    if current_height == float(target_height_val):
+    if current_height == target_height:
         return existing_dt
 
     if dry_run:
@@ -1504,16 +1504,16 @@ def _sync_device_type_u_height(
             "[DRY-RUN] Actualizaría u_height de DeviceType '%s' (de %g a %g)",
             model,
             current_height,
-            target_height_val,
+            target_height,
         )
         return existing_dt
 
     with netbox_error_wrap(f"Error actualizando u_height de DeviceType '{model}'"):
-        existing_dt.update({"u_height": target_height_val})
+        existing_dt.update({"u_height": target_height})
         log.info(
             "DeviceType '%s' u_height actualizado a %g",
             model,
-            target_height_val,
+            target_height,
         )
         return existing_dt
 
@@ -1534,7 +1534,6 @@ def ensure_device_type(
     key = (manufacturer_name, model)
 
     slug = slugify(f"{manufacturer_name} {model}")
-    u_height_val = u_height or 1.0
 
     obj = _get_or_create_cached(
         endpoint=device_types_endpoint,
@@ -1545,7 +1544,7 @@ def ensure_device_type(
             "model": model,
             "slug": slug,
             "manufacturer": manufacturer_id,
-            "u_height": u_height_val,
+            "u_height": u_height,
         },
         name=f"{manufacturer_name} / {model}",
         dry_run=dry_run,
@@ -2174,7 +2173,7 @@ def _resolve_device_type(
         u_height = 1.0
     else:
         try:
-            u_height = parse_float(raw_u_height) or 1.0
+            u_height = parse_float(raw_u_height)
         except ValueError:
             raise RowValidationError(
                 f"Valor numérico inválido '{raw_u_height}' para 'hei_u'."
