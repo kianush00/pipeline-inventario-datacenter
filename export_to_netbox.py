@@ -1871,39 +1871,41 @@ def _validate_select_choice(
         return value
 
     valid_choices = [c.value for c in custom_field_def.choice_set.choices]
+    is_multi = custom_field_def.type == "multiselect"
+    invalid_val: FieldValue = None
 
-    if custom_field_def.type == "multiselect":
+    if is_multi:
         parts = [p.strip() for p in str(value).split(",") if p.strip()]
-        invalid_parts = [p for p in parts if p not in valid_choices]
-
-        if not invalid_parts:
+        invalid_val = [p for p in parts if p not in valid_choices]
+        if not invalid_val:
             return parts
+    else:
+        if value in valid_choices:
+            return value
+        invalid_val = value
 
-        log.warning(
-            "Valores %s no son válidos para el Custom Field multiselect '%s'. Opciones válidas: %s.",
-            invalid_parts,
-            target,
-            valid_choices,
-        )
-        if is_optional:
-            return None
-        raise RowValidationError(
-            f"Valores inválidos '{invalid_parts}' para el campo requerido '{target}'."
-        )
-
-    if value in valid_choices:
-        return value
+    # Manejo unificado de fallbacks y errores
+    msg_val = (
+        f"Valores {invalid_val} no son válidos"
+        if is_multi
+        else f"Valor '{invalid_val}' no es válido"
+    )
+    msg_type = " multiselect" if is_multi else ""
 
     log.warning(
-        "Valor '%s' no es válido para el Custom Field '%s'. Opciones válidas: %s.",
-        value,
+        "%s para el Custom Field%s '%s'. Opciones válidas: %s.",
+        msg_val,
+        msg_type,
         target,
         valid_choices,
     )
+
     if is_optional:
         return None
+
+    err_prefix = "Valores inválidos" if is_multi else "Valor inválido"
     raise RowValidationError(
-        f"Valor inválido '{value}' para el campo requerido '{target}'."
+        f"{err_prefix} '{invalid_val}' para el campo requerido '{target}'."
     )
 
 
@@ -1924,28 +1926,25 @@ def _resolve_field_value(
     source = field_def.source
     target = field_def.target
 
-    # Ruta independiente: multi-columna con transformador (concat_dot, coalesce)
-    if isinstance(source, list):
-        if field_def.transform == "concat_dot":
-            value = _extract_concat_dot_value(row, source, config)
-            if value:
-                return value
-            return _resolve_default_or_empty(default, is_optional, target)
-        elif field_def.transform == "coalesce":
-            value = _extract_coalesce_value(row, source, config)
-            if value:
-                return value
-            return _resolve_default_or_empty(default, is_optional, target)
+    # 1. Extracción Cruda o Transformación
+    if isinstance(source, list) and field_def.transform == "concat_dot":
+        raw_value = _extract_concat_dot_value(row, source, config)
+    elif isinstance(source, list) and field_def.transform == "coalesce":
+        raw_value = _extract_coalesce_value(row, source, config)
+    else:
+        raw_value = _extract_raw_source_value(row, source)
 
-    raw_value = _extract_raw_source_value(row, source)
+    # 2. Resolución de Vacíos y Defaults (Centralizado)
     if config.is_empty(raw_value):
         return _resolve_default_or_empty(default, is_optional, target)
+
+    if isinstance(source, list) and field_def.transform:
+        return raw_value
 
     value: FieldValue = raw_value
 
     if isinstance(source, str):
         value = config.map_value_by_source(source, raw_value, strict=True)
-
     value = _validate_select_choice(value, custom_field_def, target, is_optional)
 
     if field_def.cast:
