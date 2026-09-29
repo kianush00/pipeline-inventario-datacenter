@@ -1168,6 +1168,7 @@ def _get_or_create_cached(
     dry_run: bool,
     use_fallback_slug: bool = False,
     skip_filter: bool = False,
+    preventive_slug_search: bool = False,
 ) -> NetBoxObject:
     """
     Helper genérico que reduce el boilerplate del patrón get-or-create con caché y dry-run.
@@ -1185,6 +1186,21 @@ def _get_or_create_cached(
         if results:
             cache[cache_key] = results[0]
             return results[0]
+
+    if preventive_slug_search and "slug" in create_kwargs:
+        slug_val = create_kwargs["slug"]
+        slug_results: list[Record] = list(endpoint.filter(slug=slug_val))
+        if slug_results:
+            log.warning(
+                "Objeto '%s' no existe por sus campos de filtro, pero su slug '%s' coincide "
+                "con un objeto existente en '%s' ('%s'). Se reutiliza.",
+                name,
+                slug_val,
+                endpoint.name,
+                getattr(slug_results[0], "name", "?"),
+            )
+            cache[cache_key] = slug_results[0]
+            return slug_results[0]
 
     if dry_run:
         log.info("[DRY-RUN] Crearía objeto en '%s': %s", endpoint.name, name)
@@ -1340,27 +1356,7 @@ def ensure_manufacturer(
     dry_run: bool,
 ) -> NetBoxObject:
     """Garantiza que el Manufacturer exista en NetBox."""
-    if name in cache:
-        return cache[name]
-
-    results: list[Record] = list(manufacturers_endpoint.filter(name=name))
-    if results:
-        cache[name] = results[0]
-        return results[0]
-
     slug = slugify(name)
-    slug_results: list[Record] = list(manufacturers_endpoint.filter(slug=slug))
-    if slug_results:
-        log.warning(
-            "Manufacturer '%s' no existe, pero su slug '%s' coincide con '%s'. "
-            "Se reutiliza el objeto existente.",
-            name,
-            slug,
-            getattr(slug_results[0], "name", "?"),
-        )
-        cache[name] = slug_results[0]
-        return slug_results[0]
-
     return _get_or_create_cached(
         endpoint=manufacturers_endpoint,
         cache=cache,
@@ -1370,7 +1366,7 @@ def ensure_manufacturer(
         name=name,
         dry_run=dry_run,
         use_fallback_slug=True,
-        skip_filter=True,  # Ya buscamos arriba
+        preventive_slug_search=True,
     )
 
 
@@ -1500,43 +1496,18 @@ def ensure_platform(
     dry_run: bool,
 ) -> NetBoxObject:
     """Garantiza que el Platform exista en NetBox."""
-    if name in cache:
-        return cache[name]
-
-    results: list[Record] = list(platforms_endpoint.filter(name=name))
-    if results:
-        cache[name] = results[0]
-        return results[0]
-
-    if dry_run:
-        log.info("[DRY-RUN] Crearía Platform: %s", name)
-        obj: NetBoxObject = MockNetBoxRecord(id=0, name=name)
-        cache[name] = obj
-        return obj
-
-    # Búsqueda preventiva por slug para deduplicar variantes tipográficas.
     slug = slugify(name)
-    slug_results: list[Record] = list(platforms_endpoint.filter(slug=slug))
-    if slug_results:
-        log.warning(
-            "Platform '%s' no existe, pero su slug '%s' coincide con '%s'. "
-            "Se reutiliza el objeto existente.",
-            name,
-            slug,
-            getattr(slug_results[0], "name", "?"),
-        )
-        cache[name] = slug_results[0]
-        return slug_results[0]
-
-    obj = _create_with_fallback_slug(
-        platforms_endpoint,
-        name,
+    return _get_or_create_cached(
+        endpoint=platforms_endpoint,
+        cache=cache,
+        cache_key=name,
+        filter_kwargs={"name": name},
+        create_kwargs={"name": name, "slug": slug},
         name=name,
-        slug=slug,
+        dry_run=dry_run,
+        use_fallback_slug=True,
+        preventive_slug_search=True,
     )
-    log.info("Platform creado: %s", name)
-    cache[name] = obj
-    return obj
 
 
 def ensure_rack(
