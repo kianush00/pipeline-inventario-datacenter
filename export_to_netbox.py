@@ -2708,10 +2708,14 @@ def _parse_single_network_interface(
             "El nombre de una interfaz de red no puede estar vacío."
         )
 
+    def get_raw_value_or_none(raw_value: str) -> str | None:
+        """Obtiene el valor crudo si no está vacío, None en caso contrario."""
+        return raw_value if not config.is_empty(raw_value) else None
+
     enabled = status_map.get(status_raw.lower().strip(), True)
-    ip_val = ip_raw if not config.is_empty(ip_raw) else None
-    pfx_val = pfx_raw if not config.is_empty(pfx_raw) else None
-    mac_val = mac_raw if not config.is_empty(mac_raw) else None
+    ip_val = get_raw_value_or_none(ip_raw)
+    pfx_val = get_raw_value_or_none(pfx_raw)
+    mac_val = get_raw_value_or_none(mac_raw)
 
     cidr = None
     try:
@@ -2771,27 +2775,20 @@ def _parse_network_interfaces(
         raw = row.get(col_name, "")
         return [v.strip() for v in raw.split(",")] if not config.is_empty(raw) else []
 
+    # Validar nombres
     names = split_col(config.csv_columns["iface_names"].source)
     if not names:
         return []
 
-    statuses = split_col(config.csv_columns["iface_status"].source)
-    ips = split_col(config.csv_columns["iface_ip"].source)
-    prefixes = split_col(config.csv_columns["iface_pfx"].source)
-    macs = split_col(config.csv_columns["iface_mac"].source)
+    keys = ["iface_status", "iface_ip", "iface_pfx", "iface_mac"]
+    cols = {k: split_col(config.csv_columns[k].source) for k in keys}
 
     max_len = len(names)
     inconsistencies = []
-    col_mappings = {
-        "iface_status": statuses,
-        "iface_ip": ips,
-        "iface_pfx": prefixes,
-        "iface_mac": macs,
-    }
 
-    for col_key, lst in col_mappings.items():
+    for k, lst in cols.items():
         if lst and len(lst) != max_len:
-            col_name = config.csv_columns[col_key].source
+            col_name = config.csv_columns[k].source
             inconsistencies.append(f"'{col_name}' tiene {len(lst)} elementos")
 
     if inconsistencies:
@@ -2801,23 +2798,22 @@ def _parse_network_interfaces(
             f"pero " + ", ".join(inconsistencies) + ". Revisa las comas."
         )
 
-    def fill_if_empty(lst: list[str], length: int) -> list[str]:
-        return lst if lst else [""] * length
+    def fill_if_empty(lst: list[str]) -> list[str]:
+        return lst if lst else [""] * max_len
 
-    statuses = fill_if_empty(statuses, max_len)
-    ips = fill_if_empty(ips, max_len)
-    prefixes = fill_if_empty(prefixes, max_len)
-    macs = fill_if_empty(macs, max_len)
+    cols = {k: fill_if_empty(lst) for k, lst in cols.items()}
 
     interfaces: list[NetworkInterfaceData] = []
+    status_map = config.csv_columns["iface_status"].map or {}
+
     for i, name in enumerate(names):
         parsed = _parse_single_network_interface(
             name=name,
-            status_raw=statuses[i],
-            ip_raw=ips[i],
-            pfx_raw=prefixes[i],
-            mac_raw=macs[i],
-            status_map=config.csv_columns["iface_status"].map or {},
+            status_raw=cols["iface_status"][i],
+            ip_raw=cols["iface_ip"][i],
+            pfx_raw=cols["iface_pfx"][i],
+            mac_raw=cols["iface_mac"][i],
+            status_map=status_map,
             config=config,
         )
         interfaces.append(parsed)
