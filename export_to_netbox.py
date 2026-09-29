@@ -2378,8 +2378,8 @@ def _execute_sync(
     uuid = raw_uuid or "N/A"
     node_type = get_node_type_from_object(endpoint)
 
-    if dry_run:
-        if not existing:
+    if not existing:
+        if dry_run:
             log.info(
                 "[DRY-RUN] Crearía %s: %s (UUID=%s)",
                 node_type,
@@ -2388,42 +2388,49 @@ def _execute_sync(
             )
             return SyncStatus.CREATED, 0, None
 
-        existing_id = get_netbox_object_id(existing[0])
-        diff = check_record_changes(existing[0], payload)
-        if diff:
-            log.info(
-                "[DRY-RUN] Actualizaría %s: %s (UUID=%s) - Cambios: %s",
-                node_type,
-                machine_name,
-                uuid,
-                list(diff.keys()),
-            )
-            return SyncStatus.UPDATED, existing_id, existing[0]
-
-        log.info(
-            "[DRY-RUN] UNCHANGED %s: %s (UUID=%s)",
-            node_type,
-            machine_name,
-            uuid,
-        )
-        return SyncStatus.UNCHANGED, existing_id, existing[0]
-
-    if not existing:
         with netbox_error_wrap(f"Error al crear {node_type} '{machine_name}'"):
             obj = cast(Record, endpoint.create(**payload))
         obj_id = get_netbox_object_id(obj)
         log.info("CREATED %s: %s (ID=%d)", node_type, machine_name, obj_id)
         return SyncStatus.CREATED, obj_id, obj
 
-    existing_id = get_netbox_object_id(existing[0])
+    existing_obj = existing[0]
+    existing_id = get_netbox_object_id(existing_obj)
+
+    # Evaluación de diferencias para optimizar red
+    diff = check_record_changes(existing_obj, payload)
+
+    if not diff:
+        prefix = "[DRY-RUN] " if dry_run else ""
+        log.info(
+            "%sUNCHANGED %s: %s (UUID=%s)",
+            prefix,
+            node_type,
+            machine_name,
+            uuid,
+        )
+        return SyncStatus.UNCHANGED, existing_id, existing_obj
+
+    if dry_run:
+        log.info(
+            "[DRY-RUN] Actualizaría %s: %s (UUID=%s) - Cambios: %s",
+            node_type,
+            machine_name,
+            uuid,
+            list(diff.keys()),
+        )
+        return SyncStatus.UPDATED, existing_id, existing_obj
+
     with netbox_error_wrap(f"Error al actualizar {node_type} '{machine_name}'"):
-        updated = existing[0].update(payload)
+        updated = existing_obj.update(payload)
+
     if updated:
         log.info("UPDATED %s: %s", node_type, machine_name)
-        return SyncStatus.UPDATED, existing_id, existing[0]
+        return SyncStatus.UPDATED, existing_id, existing_obj
 
+    # Fallback si updated == False pero diff no estaba vacío (comportamiento defensivo)
     log.info("UNCHANGED %s: %s", node_type, machine_name)
-    return SyncStatus.UNCHANGED, existing_id, existing[0]
+    return SyncStatus.UNCHANGED, existing_id, existing_obj
 
 
 def _validate_sync(

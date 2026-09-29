@@ -1032,6 +1032,7 @@ class TestExecuteSync:
 
         mock_existing = MagicMock()
         mock_existing.id = 50
+        del mock_existing._init_cache
         mock_existing.update.return_value = True  # Hubo cambios
 
         status, obj_id, _ = _execute_sync(
@@ -1052,6 +1053,7 @@ class TestExecuteSync:
 
         mock_existing = MagicMock()
         mock_existing.id = 50
+        del mock_existing._init_cache
         mock_existing.update.return_value = False  # Sin cambios
 
         status, obj_id, _ = _execute_sync(
