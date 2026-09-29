@@ -4,7 +4,7 @@ Pruebas unitarias para export_to_netbox.py
 
 import hashlib
 from collections import Counter
-from typing import Any, cast
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -30,6 +30,7 @@ from export_to_netbox import (
     SyncStatus,
     _assign_primary_ipv4,
     _build_interface_cidr,
+    _create_with_fallback_slug,
     _execute_sync,
     _extract_raw_source_value,
     _find_existing_object,
@@ -52,7 +53,6 @@ from export_to_netbox import (
     build_payload,
     concat_dot,
     count_machine_names,
-    create_with_fallback_slug,
     ensure_cluster,
     ensure_manufacturer,
     ensure_rack,
@@ -149,7 +149,7 @@ class TestGenerateFallbackSlug:
         ]
 
         result = endpoint.name = "devices"
-        result = create_with_fallback_slug(endpoint, "SRV", name="SRV", slug="srv")
+        result = _create_with_fallback_slug(endpoint, "SRV", name="SRV", slug="srv")
         assert result.id == 10
         assert endpoint.create.call_count == 2
         # Verifica que la segunda llamada uso un slug diferente
@@ -170,7 +170,7 @@ class TestGenerateFallbackSlug:
             NetBoxApiError, match="Imposible crear objeto en 'devices' con nombre 'SRV'"
         ):
             endpoint.name = "devices"
-            create_with_fallback_slug(endpoint, "SRV", name="SRV", slug="srv")
+            _create_with_fallback_slug(endpoint, "SRV", name="SRV", slug="srv")
 
 
 class TestParseInt:
@@ -1322,11 +1322,12 @@ class TestEnsureSite:
 
     def test_site_exists(self) -> None:
         endpoints = MagicMock()
+        endpoints.sites.name = "sites"
         mock_site = MockNetBoxRecord(id=1, name="DC1", slug="dc1")
         endpoints.sites.filter.return_value = [mock_site]
 
         site_cfg = SiteConfig(name="DC1", slug="dc1")
-        result = ensure_site(cast(Any, endpoints), site_cfg, dry_run=False)
+        result = ensure_site(endpoints.sites, site_cfg, dry_run=False)
 
         assert result.id == 1
         endpoints.sites.filter.assert_called_once_with(name="DC1")
@@ -1334,22 +1335,24 @@ class TestEnsureSite:
 
     def test_site_created(self) -> None:
         endpoints = MagicMock()
+        endpoints.sites.name = "sites"
         endpoints.sites.filter.return_value = []
         mock_site = MockNetBoxRecord(id=2, name="DC2", slug="dc2")
         endpoints.sites.create.return_value = mock_site
 
         site_cfg = SiteConfig(name="DC2", slug="dc2")
-        result = ensure_site(cast(Any, endpoints), site_cfg, dry_run=False)
+        result = ensure_site(endpoints.sites, site_cfg, dry_run=False)
 
         assert result.id == 2
         endpoints.sites.create.assert_called_once_with(name="DC2", slug="dc2")
 
     def test_dry_run_create_mock_site(self) -> None:
         endpoints = MagicMock()
+        endpoints.sites.name = "sites"
         endpoints.sites.filter.return_value = []
 
         site_cfg = SiteConfig(name="DC3", slug="dc3")
-        result = ensure_site(cast(Any, endpoints), site_cfg, dry_run=True)
+        result = ensure_site(endpoints.sites, site_cfg, dry_run=True)
 
         assert result.id == 0  # Mock
         assert result.name == "DC3"
@@ -1760,9 +1763,7 @@ class TestGetOrCreateCached:
     def test_returns_from_cache(self) -> None:
         endpoint = MagicMock()
         cache: dict[Any, Any] = {"key1": "mock_obj"}
-        result = _get_or_create_cached(
-            endpoint, cache, "key1", {}, {}, "Test", False
-        )
+        result = _get_or_create_cached(endpoint, cache, "key1", {}, {}, "Test", False)
         assert result == "mock_obj"
         endpoint.filter.assert_not_called()
         endpoint.create.assert_not_called()
