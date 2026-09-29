@@ -2208,44 +2208,38 @@ def _resolve_host_device(
         return None
 
     site_id = get_netbox_object_id(site)
-
     cache_key = (site_id, host_name_csv)
-    if cache_key in cache:
-        dev_id = cache[cache_key]
-        if dev_id is None:
-            log.warning(
-                "ADVERTENCIA (%s): El dispositivo host '%s' no se encontró en el site. "
-                "La VM se creará sin asignación de host.",
-                machine_name,
-                host_name_csv,
-            )
-        return dev_id
 
-    try:
-        if site_id == 0:
-            host_devices = []
-        else:
-            host_devices = list(
-                devices_endpoint.filter(name=host_name_csv, site_id=site_id)
-            )
-        if not host_devices:
-            log.warning(
-                "ADVERTENCIA (%s): El dispositivo host '%s' no se encontró en el site. "
-                "La VM se creará sin asignación de host.",
-                machine_name,
-                host_name_csv,
-            )
-            cache[cache_key] = None
-            return None
+    # Solo buscar si no existe en caché.
+    if cache_key not in cache:
+        try:
+            host_devices: list[Record] = []
+            if site_id != 0:
+                host_devices = list(
+                    devices_endpoint.filter(name=host_name_csv, site_id=site_id)
+                )
 
-        dev_id = get_netbox_object_id(host_devices[0])
-        cache[cache_key] = dev_id
-        return dev_id
-    except Exception as e:
-        raise NetBoxApiError(
-            f"ERROR ({machine_name}): falló la consulta del host_device '{host_name_csv}' "
-            f"en Site (ID: {site_id}): {e}"
-        ) from e
+            device_id: int | None = (
+                get_netbox_object_id(host_devices[0]) if host_devices else None
+            )
+            cache[cache_key] = device_id
+        except Exception as e:
+            raise NetBoxApiError(
+                f"ERROR ({machine_name}): falló la consulta del host_device '{host_name_csv}' "
+                f"en Site (ID: {site_id}): {e}"
+            ) from e
+
+    dev_id = cache[cache_key]
+
+    if dev_id is None:
+        log.warning(
+            "ADVERTENCIA (%s): El dispositivo host '%s' no se encontró en el site. "
+            "La VM se creará sin asignación de host.",
+            machine_name,
+            host_name_csv,
+        )
+
+    return dev_id
 
 
 # ============================================================
