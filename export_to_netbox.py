@@ -1484,8 +1484,19 @@ def _get_or_create_cached(
     preventive_slug_search: bool = False,
 ) -> tuple[NetBoxObject, dict[Any, NetBoxObject]]:
     """
-    Helper genérico que reduce el boilerplate del patrón get-or-create con caché y dry-run.
-    Retorna una tupla con (Objeto, caché_actualizado) para evitar side-effects silenciosos.
+    Motor centralizado de Identity Map (Caché) para el patrón Get-or-Create.
+
+    Decisiones de diseño:
+    - Eficiencia O(1) de Red: Evita avalanchas de peticiones HTTP (N+1 queries) contra
+      NetBox manteniendo un registro en memoria de las entidades ya creadas o consultadas.
+    - Prevención de Colisiones (preventive_slug_search): En NetBox, los slugs deben ser
+      estrictamente únicos. Si buscamos un objeto por nombre y no lo encontramos, NetBox
+      rechazará la creación si el slug generado colisiona con otro objeto (HTTP 400).
+      La búsqueda preventiva por slug evita el crash permitiendo reutilizar objetos similares.
+    - Pureza Monádica: Retornar la caché mutada evita side-effects silenciosos (paso por referencia).
+
+    Retorna:
+        tuple[NetBoxObject, dict[Any, NetBoxObject]]: El objeto final y la caché propagada.
     """
     if cache_key in cache:
         return cache[cache_key], cache
