@@ -2136,3 +2136,69 @@ class TestSyncSingleInterface:
         assert "eth1" in returned_cache
         assert returned_cache["eth1"] == mock_iface
         assert any_changes is True
+
+
+class TestClassifyRows:
+    """QA Tester verification para _classify_rows."""
+
+    def test_classify_rows_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verifica que las filas se dividan correctamente según su NodeType."""
+
+        def mock_get_node_type(row: dict[str, str], config: Any) -> NodeType:
+            if row.get("type") == "vm":
+                return NodeType.VIRTUAL_MACHINE
+            return NodeType.DEVICE
+
+        monkeypatch.setattr(
+            export_to_netbox, "get_node_type_from_row", mock_get_node_type
+        )
+
+        rows = [
+            {"type": "device", "machine_name": "host1"},
+            {"type": "vm", "machine_name": "vm1"},
+            {"type": "device", "machine_name": "host2"},
+        ]
+
+        counts = {SyncStatus.ERROR: 0}
+
+        result, new_counts = export_to_netbox._classify_rows(rows, MagicMock(), counts)  # type: ignore
+
+        assert len(result.device_rows) == 2
+        assert len(result.vm_rows) == 1
+        assert new_counts[SyncStatus.ERROR] == 0
+        # Validar índices reales devueltos (start=2)
+        assert result.device_rows[0][0] == 2
+        assert result.vm_rows[0][0] == 3
+        assert result.device_rows[1][0] == 4
+
+    def test_classify_rows_validation_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verifica el caso de borde destructivo: Una fila corrompida lanza RowValidationError."""
+
+        def mock_get_node_type(row: dict[str, str], config: Any) -> NodeType:
+            if row.get("type") == "invalid":
+                raise export_to_netbox.RowValidationError("Invalid node type")
+            return NodeType.DEVICE
+
+        monkeypatch.setattr(
+            export_to_netbox, "get_node_type_from_row", mock_get_node_type
+        )
+        monkeypatch.setattr(
+            export_to_netbox,
+            "extract_csv_value",
+            lambda r, k, c, **kwargs: "broken_host",
+        )
+
+        rows = [
+            {"type": "invalid", "machine_name": "broken_host"},
+            {"type": "device", "machine_name": "host1"},
+        ]
+
+        counts = {SyncStatus.ERROR: 5}  # Empezamos con un estado previo
+
+        result, new_counts = export_to_netbox._classify_rows(rows, MagicMock(), counts)  # type: ignore
+
+        assert len(result.device_rows) == 1
+        assert len(result.vm_rows) == 0
+        assert new_counts[SyncStatus.ERROR] == 6  # Se sumó 1 error

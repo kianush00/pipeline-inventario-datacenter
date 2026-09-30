@@ -166,6 +166,16 @@ class SyncResult(NamedTuple):
     main_obj: NetBoxObject | None
 
 
+class ClassifiedRows(NamedTuple):
+    """
+    Estructura de datos que almacena las filas del CSV clasificadas
+    por su rol en la jerarquía (físico vs virtual).
+    """
+
+    device_rows: list[tuple[int, CsvRow]]
+    vm_rows: list[tuple[int, CsvRow]]
+
+
 class Ipv4Candidate(NamedTuple):
     """Tupla que representa un candidato a IPv4 primaria: (ip_id, iface_obj, mac_obj)."""
 
@@ -3527,6 +3537,53 @@ def process_interfaces_and_ips(
 # ============================================================
 
 
+def _classify_rows(
+    rows: list[CsvRow],
+    config: NetBoxMappingConfig,
+    counts: SyncCounts,
+) -> tuple[ClassifiedRows, SyncCounts]:
+    """
+    Clasifica las filas del CSV separando dispositivos físicos (Devices)
+    de máquinas virtuales (VMs).
+
+    Decisiones de diseño:
+    - Orden de Dependencia: En NetBox, una VM pertenece a un Cluster, el cual
+      suele depender de un Host Device. Para evitar el fallo de dependencias
+      circulares o rotas, garantizamos que todo el hardware físico (Devices)
+      se sincronice estrictamente en una fase anterior a las VMs.
+    - Tolerancia a Fallos: Atrapa errores de validación (ej. falta de OS)
+      al vuelo, logueando el error y escalando el contador sin quebrar el pipeline.
+
+    Retorna:
+        tuple[ClassifiedRows, SyncCounts]: Las filas separadas y los contadores mutados.
+    """
+    device_rows: list[tuple[int, CsvRow]] = []
+    vm_rows: list[tuple[int, CsvRow]] = []
+
+    for row_num, row in enumerate(rows, start=2):
+        try:
+            node_type = get_node_type_from_row(row, config)
+            if node_type == NodeType.DEVICE:
+                device_rows.append((row_num, row))
+            else:
+                vm_rows.append((row_num, row))
+        except RowValidationError:
+            machine_name = (
+                extract_csv_value(row, "machine_name", config) or f"fila {row_num}"
+            )
+            log.exception("ERROR fila %d ('%s')", row_num, machine_name)
+            counts[SyncStatus.ERROR] += 1
+
+    log.info(
+        "Clasificación: %d device(s), %d VM(s), %d error(es) de tipo.",
+        len(device_rows),
+        len(vm_rows),
+        counts[SyncStatus.ERROR],
+    )
+
+    return ClassifiedRows(device_rows, vm_rows), counts
+
+
 def _process_node_sync(
     machine_name: str,
     row: CsvRow,
@@ -3829,29 +3886,9 @@ def main() -> None:
     }
 
     # ── Clasificar filas por tipo de nodo ─────────────────────
-    device_rows: list[tuple[int, CsvRow]] = []
-    vm_rows: list[tuple[int, CsvRow]] = []
-
-    for row_num, row in enumerate(rows, start=2):
-        try:
-            node_type = get_node_type_from_row(row, config)
-            if node_type == NodeType.DEVICE:
-                device_rows.append((row_num, row))
-            else:
-                vm_rows.append((row_num, row))
-        except RowValidationError:
-            machine_name = (
-                extract_csv_value(row, "machine_name", config) or f"fila {row_num}"
-            )
-            log.exception("ERROR fila %d ('%s')", row_num, machine_name)
-            counts[SyncStatus.ERROR] += 1
-
-    log.info(
-        "Clasificación: %d device(s), %d VM(s), %d error(es) de tipo.",
-        len(device_rows),
-        len(vm_rows),
-        counts[SyncStatus.ERROR],
-    )
+    classified_rows, counts = _classify_rows(rows, config, counts)
+    device_rows = classified_rows.device_rows
+    vm_rows = classified_rows.vm_rows
 
     # ── Fase 1: Sincronizar Devices ──────────────────────────
     log.info("── Fase 1: Sincronizando %d Device(s) ──", len(device_rows))
