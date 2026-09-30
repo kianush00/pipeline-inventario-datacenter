@@ -70,6 +70,7 @@ from export_to_netbox import (
     parse_int,
     parse_int_gb_to_mb,
     precompute_cluster_type_map,
+    process_interfaces_and_ips,
     slugify,
     sync_device,
     sync_vm,
@@ -2036,3 +2037,39 @@ class TestSyncVM:
         )
 
         assert returned_caches is mock_caches
+
+
+class TestProcessInterfacesAndIps:
+    @patch("export_to_netbox._sync_interfaces_for_object")
+    @patch("export_to_netbox._assign_primary_ipv4")
+    @patch("export_to_netbox._assign_primary_mac")
+    def test_pure_returns_correct_deltas(
+        self,
+        mock_assign_mac: MagicMock,
+        mock_assign_ipv4: MagicMock,
+        mock_sync_ifaces: MagicMock,
+    ) -> None:
+        # Configurar mock_sync_ifaces para retornar (errores=2, ipv4_candidates=[...], ifaces_changed=False)
+        mock_iface = MagicMock()
+        mock_mac = MagicMock()
+        mock_sync_ifaces.return_value = (2, [(10, mock_iface, mock_mac)], False)
+
+        # Simular que se cambió la IP pero no la MAC
+        mock_assign_ipv4.return_value = True
+        mock_assign_mac.return_value = False
+
+        iface_errors, any_changes = process_interfaces_and_ips(
+            endpoints=MagicMock(),
+            obj_id=1,
+            node_type=MagicMock(),
+            interfaces=[],
+            dry_run=False,
+            prune_interfaces=False,
+            main_obj=MagicMock(),
+            machine_name="test-machine",
+        )
+
+        assert iface_errors == 2
+        assert any_changes is True
+        mock_assign_ipv4.assert_called_once()
+        mock_assign_mac.assert_called_once()

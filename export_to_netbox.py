@@ -3350,12 +3350,10 @@ def process_interfaces_and_ips(
     prune_interfaces: bool,
     main_obj: NetBoxObject | None,
     machine_name: str,
-    counts: SyncCounts,
-    result: SyncStatus,
-) -> SyncCounts:
+) -> tuple[int, bool]:
     """
-    Sincroniza interfaces y asigna la IP/MAC primaria, mutando los contadores.
-    Retorna un objeto SyncCounts con los contadores de las operaciones realizadas.
+    Sincroniza interfaces y asigna la IP/MAC primaria.
+    Retorna una tupla: (cantidad de errores, booleano indicando si hubo cambios).
     """
     iface_errors, ipv4_candidates, ifaces_changed = _sync_interfaces_for_object(
         endpoints,
@@ -3365,9 +3363,6 @@ def process_interfaces_and_ips(
         dry_run,
         prune_interfaces,
     )
-    if iface_errors > 0:
-        counts[SyncStatus.ERROR] += iface_errors
-
     primary_ip_changed = False
     primary_mac_changed = False
 
@@ -3382,11 +3377,7 @@ def process_interfaces_and_ips(
         primary_mac_changed = _assign_primary_mac(iface_obj, mac_obj, dry_run)
 
     any_changes = ifaces_changed or primary_ip_changed or primary_mac_changed
-    if result == SyncStatus.UNCHANGED and any_changes:
-        counts[SyncStatus.UNCHANGED] -= 1
-        counts[SyncStatus.UPDATED] += 1
-
-    return counts
+    return iface_errors, any_changes
 
 
 # ============================================================
@@ -3524,7 +3515,7 @@ def _sync_row(
 
     # ── Sincronizar interfaces del objeto ─────────────────
     try:
-        counts = process_interfaces_and_ips(
+        iface_errors, any_changes = process_interfaces_and_ips(
             endpoints,
             obj_id,
             node_type,
@@ -3533,9 +3524,14 @@ def _sync_row(
             prune_interfaces,
             main_obj,
             machine_name,
-            counts,
-            result,
         )
+        if iface_errors > 0:
+            counts[SyncStatus.ERROR] += iface_errors
+
+        if result == SyncStatus.UNCHANGED and any_changes:
+            counts[SyncStatus.UNCHANGED] -= 1
+            counts[SyncStatus.UPDATED] += 1
+
     except Exception:
         log.exception(
             "ERROR inesperado al sincronizar interfaces de '%s'", machine_name
@@ -3574,6 +3570,9 @@ def _print_summary_and_exit(
 
 
 def main() -> None:
+    """
+    Punto de entrada principal para la sincronización del inventario con NetBox.
+    """
     parser = argparse.ArgumentParser(
         description="Exporta merged_inventory.csv a NetBox 4.6+"
     )
