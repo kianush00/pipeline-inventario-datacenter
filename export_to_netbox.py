@@ -148,12 +148,22 @@ class CastType(str, Enum):
 
 
 NetBoxObject: TypeAlias = Union[Record, "MockNetBoxRecord"]
-SyncResult: TypeAlias = tuple[SyncStatus, int, NetBoxObject | None]
 CsvRow: TypeAlias = dict[str, str]
 FieldValue: TypeAlias = str | int | float | bool | list[str] | None
 CustomFieldsPayload: TypeAlias = dict[str, FieldValue]
 SyncCounts: TypeAlias = dict[SyncStatus, int]
 NetBoxPayload: TypeAlias = dict[str, Any]
+
+
+class SyncResult(NamedTuple):
+    """
+    Resultado de la sincronización de un Device o VM.
+    Contiene: (estado de sincronización, ID del objeto en NetBox, objeto NetBox instanciado o None si hubo error/skip).
+    """
+
+    status: SyncStatus
+    obj_id: int
+    main_obj: NetBoxObject | None
 
 
 class Ipv4Candidate(NamedTuple):
@@ -2469,13 +2479,13 @@ def _execute_sync(
                 machine_name,
                 uuid,
             )
-            return SyncStatus.CREATED, 0, None
+            return SyncResult(SyncStatus.CREATED, 0, None)
 
         with netbox_error_wrap(f"Error al crear {node_type} '{machine_name}'"):
             obj = cast(Record, endpoint.create(**payload))
         obj_id = get_netbox_object_id(obj)
         log.info("CREATED %s: %s (ID=%d)", node_type, machine_name, obj_id)
-        return SyncStatus.CREATED, obj_id, obj
+        return SyncResult(SyncStatus.CREATED, obj_id, obj)
 
     existing_obj = existing[0]
     existing_id = get_netbox_object_id(existing_obj)
@@ -2492,7 +2502,7 @@ def _execute_sync(
             machine_name,
             uuid,
         )
-        return SyncStatus.UNCHANGED, existing_id, existing_obj
+        return SyncResult(SyncStatus.UNCHANGED, existing_id, existing_obj)
 
     if dry_run:
         log.info(
@@ -2502,18 +2512,18 @@ def _execute_sync(
             uuid,
             list(diff.keys()),
         )
-        return SyncStatus.UPDATED, existing_id, existing_obj
+        return SyncResult(SyncStatus.UPDATED, existing_id, existing_obj)
 
     with netbox_error_wrap(f"Error al actualizar {node_type} '{machine_name}'"):
         updated = existing_obj.update(payload)
 
     if updated:
         log.info("UPDATED %s: %s", node_type, machine_name)
-        return SyncStatus.UPDATED, existing_id, existing_obj
+        return SyncResult(SyncStatus.UPDATED, existing_id, existing_obj)
 
     # Fallback si updated == False pero diff no estaba vacío (comportamiento defensivo)
     log.info("UNCHANGED %s: %s", node_type, machine_name)
-    return SyncStatus.UNCHANGED, existing_id, existing_obj
+    return SyncResult(SyncStatus.UNCHANGED, existing_id, existing_obj)
 
 
 def _validate_sync(

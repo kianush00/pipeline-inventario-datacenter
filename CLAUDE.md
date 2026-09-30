@@ -21,7 +21,7 @@ Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes prin
 
 - Todo el código Python debe estar fuertemente tipado utilizando las anotaciones del módulo `typing` nativo.
 - Evita a toda costa el uso injustificado de `Any`, salvo que sea estrictamente necesario.
-- Utiliza elementos como `TypeAlias`, `TypedDict`, `dataclasses` y Modelos Pydantic (`BaseModel`) para definir estructuras de datos complejas o payloads de APIs, garantizando una semántica clara.
+- Utiliza elementos como `TypeAlias`, `TypedDict`, `NamedTuple`, `dataclasses` y Modelos Pydantic (`BaseModel`) para definir estructuras de datos complejas o payloads de APIs, garantizando una semántica clara.
 - **Reutilización de tipos existentes:** Antes de importar o definir nuevos tipos de datos, evalúa y prioriza siempre el uso de clases ya declaradas en el archivo de trabajo. No introduzcas tipos redundantes o alternativos provenientes de librerías externas de forma innecesaria.
 - Asegúrate de que el código base esté diseñado para pasar verificadores de tipo estáticos sin advertencias (Pylance/MyPy/Pyright).
 
