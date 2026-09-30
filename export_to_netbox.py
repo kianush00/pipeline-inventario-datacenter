@@ -766,15 +766,41 @@ def generate_fallback_slug(base_slug: str, original_name: str) -> str:
     return f"{base_slug}-{hash_suffix}"
 
 
+def _is_custom_field_changed(curr_val: Any, new_val: Any) -> bool:
+    """Determina si un payload de custom_fields presenta cambios reales."""
+    if not isinstance(new_val, dict):
+        return curr_val != new_val
+    if not isinstance(curr_val, dict):
+        return True
+    return any(curr_val.get(k) != v for k, v in new_val.items())
+
+
+def _is_relation_changed(curr_val: Any, new_val: Any) -> bool | None:
+    """
+    Evalúa cambios en objetos anidados de pynetbox (FKs o Choices).
+    Retorna None si el valor no califica como una relación manejable.
+    """
+    if curr_val is None:
+        return None
+
+    if hasattr(curr_val, "id"):
+        if isinstance(new_val, int):
+            return curr_val.id != new_val
+        if isinstance(new_val, dict) and "id" in new_val:
+            return curr_val.id != new_val["id"]
+
+    if hasattr(curr_val, "value") and isinstance(new_val, str):
+        return curr_val.value != new_val
+
+    return None
+
+
 def check_record_changes(
     record: Record,
     payload: NetBoxPayload,
 ) -> NetBoxPayload:
     """
-    Determina qué campos cambiarían en el Record al aplicar el payload,
-    comparando explícitamente atributo por atributo para evitar dependencias
-    de APIs privadas de pynetbox.
-
+    Determina qué campos cambiarían en el Record al aplicar el payload.
     Retorna un diccionario con las modificaciones detectadas.
     """
     updates: NetBoxPayload = {}
@@ -786,46 +812,17 @@ def check_record_changes(
 
         curr_val = getattr(record, key)
 
-        # 1. Caso Custom Fields (Merge de diccionarios parciales)
-        if key == "custom_fields" and isinstance(new_val, dict):
-            if not isinstance(curr_val, dict):
-                updates[key] = new_val
-                continue
-
-            changed = False
-            for cf_k, cf_v in new_val.items():
-                if curr_val.get(cf_k) != cf_v:
-                    changed = True
-                    break
-            if changed:
+        if key == "custom_fields":
+            if _is_custom_field_changed(curr_val, new_val):
                 updates[key] = new_val
             continue
 
-        # 2. Caso Relaciones u Objetos anidados de pynetbox
-        if curr_val is not None:
-            # Foreign Key enviada como ID (int)
-            if hasattr(curr_val, "id") and isinstance(new_val, int):
-                if curr_val.id != new_val:
-                    updates[key] = new_val
-                continue
+        rel_changed = _is_relation_changed(curr_val, new_val)
+        if rel_changed is not None:
+            if rel_changed:
+                updates[key] = new_val
+            continue
 
-            # Foreign Key enviada como diccionario (ej. {"id": X})
-            if (
-                hasattr(curr_val, "id")
-                and isinstance(new_val, dict)
-                and "id" in new_val
-            ):
-                if curr_val.id != new_val["id"]:
-                    updates[key] = new_val
-                continue
-
-            # Selectores por Value (ej. status="active")
-            if hasattr(curr_val, "value") and isinstance(new_val, str):
-                if curr_val.value != new_val:
-                    updates[key] = new_val
-                continue
-
-        # 3. Caso Base: Comparación plana de equivalencia
         if curr_val != new_val:
             updates[key] = new_val
 

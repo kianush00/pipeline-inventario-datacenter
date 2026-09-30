@@ -41,7 +41,9 @@ from export_to_netbox import (
     _extract_raw_source_value,
     _find_existing_object,
     _get_or_create_cached,
+    _is_custom_field_changed,
     _is_name_safely_unique,
+    _is_relation_changed,
     _parse_network_interfaces,
     _parse_single_network_interface,
     _prune_orphan_interfaces,
@@ -2263,3 +2265,58 @@ class TestCheckRecordChanges:
         # Con cambios (añade 1 campo nuevo)
         diff = check_record_changes(record, {"custom_fields": {"new_tag": "test"}})
         assert diff == {"custom_fields": {"new_tag": "test"}}
+
+
+class TestIsCustomFieldChanged:
+    """QA Tester verification para _is_custom_field_changed."""
+
+    def test_custom_field_changed(self) -> None:
+        """Verifica la lógica de detección de cambios en custom_fields."""
+        # 1. new_val no es dict
+        assert _is_custom_field_changed("prod", "dev") is True
+        assert _is_custom_field_changed("prod", "prod") is False
+
+        # 2. curr_val no es dict
+        assert _is_custom_field_changed(None, {"env": "prod"}) is True
+
+        # 3. Ambos dicts, sin cambios en las llaves especificadas
+        assert (
+            _is_custom_field_changed({"env": "prod", "owner": "IT"}, {"env": "prod"})
+            is False
+        )
+
+        # 4. Ambos dicts, con cambios en valor
+        assert _is_custom_field_changed({"env": "prod"}, {"env": "dev"}) is True
+
+        # 5. Ambos dicts, llave nueva en new_val
+        assert _is_custom_field_changed({"env": "prod"}, {"new_tag": "test"}) is True
+
+
+class TestIsRelationChanged:
+    """QA Tester verification para _is_relation_changed."""
+
+    def test_relation_changed(self) -> None:
+        """Verifica la lógica de detección de cambios en FKs y Choices."""
+        # 1. curr_val es None
+        assert _is_relation_changed(None, 5) is None
+
+        # 2. Atributos primitivos (sin id ni value)
+        curr_val_str = "simple_string"
+        assert _is_relation_changed(curr_val_str, 5) is None
+
+        # 3. ID de FK
+        curr_val_fk = MagicMock(id=5)
+        assert _is_relation_changed(curr_val_fk, 5) is False
+        assert _is_relation_changed(curr_val_fk, 6) is True
+
+        # 4. ID dentro de un dict
+        assert _is_relation_changed(curr_val_fk, {"id": 5}) is False
+        assert _is_relation_changed(curr_val_fk, {"id": 6}) is True
+
+        # 5. Selector por value
+        curr_val_choice = MagicMock(value="active")
+        assert _is_relation_changed(curr_val_choice, "active") is False
+        assert _is_relation_changed(curr_val_choice, "offline") is True
+
+        # 6. Tipo no manejable (ej. new_val es lista, falla el isinstance)
+        assert _is_relation_changed(curr_val_fk, [5]) is None
