@@ -18,12 +18,15 @@ from export_to_netbox import (
     ConfigValidationError,
     CustomFieldConfig,
     DeviceRoleConfig,
+    Endpoint,
     FieldMappingConfig,
     FieldParseError,
     MockNetBoxRecord,
     NetBoxApiError,
+    NetBoxEndpoints,
     NetBoxMappingConfig,
     NetBoxObject,
+    NetworkInterfaceData,
     NodeType,
     RowSkipCondition,
     RowValidationError,
@@ -47,6 +50,7 @@ from export_to_netbox import (
     _sanitize_mac_address,
     _sync_device_type_u_height,
     _sync_single_device_role,
+    _sync_single_interface,
     _validate_csv_headers,
     _validate_interface_ip,
     _validate_select_choice,
@@ -2073,3 +2077,57 @@ class TestProcessInterfacesAndIps:
         assert any_changes is True
         mock_assign_ipv4.assert_called_once()
         mock_assign_mac.assert_called_once()
+
+
+class TestSyncSingleInterface:
+    @patch("export_to_netbox._upsert_interface_record")
+    @patch("export_to_netbox._assign_ip")
+    @patch("export_to_netbox._assign_mac")
+    def test_sync_single_interface_returns_cache(
+        self,
+        mock_assign_mac: MagicMock,
+        mock_assign_ip: MagicMock,
+        mock_upsert: MagicMock,
+    ) -> None:
+        # Configurar mocks
+        mock_iface = MagicMock()
+        mock_upsert.return_value = (mock_iface, True)
+        mock_assign_ip.return_value = (MagicMock(), False)
+        mock_assign_mac.return_value = (MagicMock(), False)
+
+        # Mock de endpoints
+        mock_endpoints = MagicMock(spec=NetBoxEndpoints)
+
+        existing_ifaces: dict[str, NetBoxObject] = {
+            "eth0": MagicMock(spec=NetBoxObject)
+        }
+        iface_data = cast(
+            NetworkInterfaceData,
+            {
+                "name": "eth1",
+                "enabled": True,
+                "cidr": "1.1.1.1/24",
+                "mac": "AA:BB",
+                "ip": "1.1.1.1",
+                "prefix": "24",
+            },
+        )
+
+        mock_endpoint = MagicMock(spec=Endpoint)
+        mock_endpoint.url = "http://localhost/api/dcim/interfaces/"
+
+        _, _, _, any_changes, returned_cache = _sync_single_interface(
+            iface_data=iface_data,
+            obj_id=1,
+            iface_endpoint=mock_endpoint,
+            existing_ifaces=existing_ifaces,
+            endpoints=mock_endpoints,
+            dry_run=False,
+        )
+
+        # Assert: the cache returned is the same object
+        assert returned_cache is existing_ifaces
+        # Assert: eth1 was added to the cache
+        assert "eth1" in returned_cache
+        assert returned_cache["eth1"] == mock_iface
+        assert any_changes is True
