@@ -1775,7 +1775,10 @@ class TestSyncDevice:
             },
             mock_caches,
         )
-        mock_validate_sync.return_value = (SyncStatus.CREATED, 1, MagicMock())
+        mock_device_type.return_value = (1, mock_caches)
+        mock_validate_sync.return_value = export_to_netbox.SyncResult(
+            export_to_netbox.SyncStatus.CREATED, 1, MagicMock()
+        )
 
         _, returned_caches = sync_device(
             endpoints=MagicMock(),

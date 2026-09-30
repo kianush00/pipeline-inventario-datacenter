@@ -1140,7 +1140,8 @@ def build_netbox_endpoints(nb: Api) -> NetBoxEndpoints:
 def _read_csv(path: Path) -> tuple[list[str], list[CsvRow]]:
     """
     Lee merged_inventory.csv.
-    Devuelve (headers, rows) donde cada row es {header: value}.
+    Retorna una tupla: (cabeceras, filas), donde cada fila es
+    un diccionario {cabecera: valor}.
     """
     if not path.is_file():
         raise ConfigValidationError(f"No se encontró el CSV de entrada: {path}")
@@ -1222,6 +1223,7 @@ def _create_with_fallback_slug(
     """
     Intenta crear un objeto en NetBox. Si ocurre colisión de slug (RequestError),
     genera un slug determinista de respaldo y reintenta la creación.
+    Retorna el objeto creado.
     """
     slug: str = kwargs.get("slug", "")
     try:
@@ -1312,7 +1314,8 @@ def ensure_site(
     site_cfg: SiteConfig,
     dry_run: bool,
 ) -> NetBoxObject:
-    """Garantiza que el Site definido en el YAML exista en NetBox."""
+    """Garantiza que el Site definido en el YAML exista en NetBox.
+    Retorna el objeto Site creado."""
     name = site_cfg.name
     slug = cast(str, site_cfg.slug)
 
@@ -1383,7 +1386,8 @@ def _ensure_cluster_type(
     slug: str,
     dry_run: bool,
 ) -> NetBoxObject:
-    """Garantiza que el ClusterType exista en NetBox."""
+    """Garantiza que el ClusterType exista en NetBox.
+    Retorna el objeto ClusterType creado"""
     obj, _ = _get_or_create_cached(
         endpoint=cluster_type_endpoint,
         cache={},  # Similar al Site, el caché real de cluster_types se maneja externamente
@@ -1505,7 +1509,8 @@ def ensure_platform(
     cache: dict[str, NetBoxObject],
     dry_run: bool,
 ) -> tuple[NetBoxObject, dict[str, NetBoxObject]]:
-    """Garantiza que el Platform exista en NetBox."""
+    """Garantiza que el Platform exista en NetBox.
+    Retorna el objeto Platform creado y la caché actualizada."""
     slug = slugify(name)
     return _get_or_create_cached(
         endpoint=platforms_endpoint,
@@ -1528,7 +1533,8 @@ def ensure_cluster(
     cache: dict[tuple[int, str], NetBoxObject],
     dry_run: bool,
 ) -> tuple[NetBoxObject, dict[tuple[int, str], NetBoxObject]]:
-    """Garantiza que el Cluster exista en NetBox."""
+    """Garantiza que el Cluster exista en NetBox.
+    Retorna el objeto Cluster creado y la caché actualizada."""
     site_id = get_netbox_object_id(site)
     cache_key = (site_id, name)
     cluster_type_id = get_netbox_object_id(cluster_type)
@@ -1551,7 +1557,8 @@ def ensure_manufacturer(
     cache: dict[str, NetBoxObject],
     dry_run: bool,
 ) -> tuple[NetBoxObject, dict[str, NetBoxObject]]:
-    """Garantiza que el Manufacturer exista en NetBox."""
+    """Garantiza que el Manufacturer exista en NetBox.
+    Retorna el objeto Manufacturer creado y la caché actualizada."""
     slug = slugify(name)
     return _get_or_create_cached(
         endpoint=manufacturers_endpoint,
@@ -1609,7 +1616,8 @@ def ensure_device_type(
     cache: dict[tuple[str, str], NetBoxObject],
     dry_run: bool,
 ) -> tuple[NetBoxObject, dict[tuple[str, str], NetBoxObject]]:
-    """Garantiza que el DeviceType exista en NetBox."""
+    """Garantiza que el DeviceType exista en NetBox.
+    Retorna el objeto DeviceType creado y la caché actualizada."""
     manufacturer_id = get_netbox_object_id(manufacturer)
 
     # El ID numérico se retiene solo como fallback.
@@ -1653,7 +1661,8 @@ def ensure_rack(
     cache: dict[tuple[int, str], NetBoxObject],
     dry_run: bool,
 ) -> tuple[NetBoxObject, dict[tuple[int, str], NetBoxObject]]:
-    """Garantiza que el Rack exista en NetBox."""
+    """Garantiza que el Rack exista en NetBox.
+    Retorna el objeto Rack creado y la caché actualizada."""
     site_id = get_netbox_object_id(site)
     cache_key = (site_id, name)
 
@@ -1692,7 +1701,8 @@ def _sync_choice_set_choices(
     choices: list[list[str]],
     dry_run: bool,
 ) -> int:
-    """Sincroniza las opciones (choices) de un choice set."""
+    """Sincroniza las opciones (choices) de un choice set.
+    Retorna el ID del choice set."""
 
     def _get_choice_set_id(ch_set: Record) -> int:
         """
@@ -1733,7 +1743,9 @@ def _ensure_choice_set(
     choice_set_cfg: ChoiceSetConfig,
     dry_run: bool,
 ) -> tuple[int, dict[str, NetBoxObject]]:
-    """Crea un choice set si no existe en NetBox."""
+    """Crea un choice set si no existe en NetBox.
+    Retorna el ID del choice set y la caché actualizada.
+    """
 
     def _get_choice_set_choices(choices: list[ChoiceItemConfig]) -> list[list[str]]:
         """
@@ -1765,9 +1777,10 @@ def _ensure_choice_set(
         ) from e
 
     if getattr(choice_set, "id", 0) != 0:
-        return _sync_choice_set_choices(
+        choice_set_id = _sync_choice_set_choices(
             cast(Record, choice_set), choice_set_name, choices, dry_run
-        ), existing_choice_sets
+        )
+        return choice_set_id, existing_choice_sets
 
     return 0, existing_choice_sets
 
@@ -1904,7 +1917,14 @@ def _extract_concat_dot_value(
     source: list[str],
     config: NetBoxMappingConfig,
 ) -> str:
-    """Resuelve un campo multi-columna vía concatenación con punto."""
+    """Resuelve un campo multi-columna vía concatenación con punto.
+
+    Retorna la concatenación de los valores de las columnas source.
+    Si todas las columnas source están vacías, retorna un string vacío.
+
+    Raises:
+        RowValidationError: Si hay múltiples valores no nulos en las columnas source.
+    """
     parts = [row.get(s, "") for s in source]
     return concat_dot(parts, config)
 
@@ -1917,7 +1937,7 @@ def _extract_coalesce_value(
     """
     Resuelve un campo multi-columna mediante coalesce.
     Falla rápidamente si más de un campo contiene un valor.
-    Devuelve el primer valor encontrado, o un string vacío si ninguno tiene valor.
+    Retorna el primer valor encontrado, o un string vacío si ninguno tiene valor.
     """
     values = []
     for s in source:
@@ -1953,6 +1973,7 @@ def _validate_select_choice(
     """
     Valida value contra choice_set cuando el Custom Field es de tipo
     'select' o 'multiselect'. No-op para cualquier otro tipo de campo.
+    Retorna el valor transformado o lanza RowValidationError si falla.
     """
     if not (
         custom_field_def
@@ -2013,6 +2034,7 @@ def _resolve_field_value(
     Maneja concatenaciones y campos simples. Aplica el patrón "Pipe and Filter",
     delegando cada una a una función de responsabilidad única; corta
     temprano (fail-fast) en cuanto una etapa determina el valor final.
+    Retorna el valor transformado o lanza RowValidationError si falla.
     """
     source = field_def.source
     target = field_def.target
@@ -2049,7 +2071,8 @@ def _resolve_field_value(
 def _assign_if_valid(
     target_payload: dict[str, Any], fd: FieldMappingConfig, val: FieldValue
 ) -> dict[str, Any]:
-    """Sanitiza y asigna el valor al payload solo si es válido. Retorna el payload actualizado."""
+    """Sanitiza y asigna el valor al payload solo si es válido.
+    Retorna el payload actualizado."""
     if fd.is_unique and val == "":
         val = None
 
@@ -2066,7 +2089,8 @@ def _process_maps(
     target_payload: dict[str, Any],
     is_custom: bool,
 ) -> dict[str, Any]:
-    """Procesa una lista de mapeos y puebla el payload destino."""
+    """Procesa una lista de mapeos y puebla el payload destino.
+    Retorna el payload actualizado."""
     for fd in maps:
         cf_def = None
         default = None
@@ -2114,6 +2138,8 @@ def build_payload(
     - Los campos resultantes con valor `None` (ej. celdas vacías donde `is_optional=True`)
       se excluyen proactivamente del payload para evitar borrar datos preexistentes
       o violar constraints en NetBox.
+
+    Retorna el payload transformado.
     """
     payload: NetBoxPayload = {}
     cf_payload: CustomFieldsPayload = {}
@@ -2139,7 +2165,8 @@ def _resolve_platform(
     dry_run: bool,
     config: NetBoxMappingConfig,
 ) -> tuple[int | None, dict[str, NetBoxObject]]:
-    """Resuelve el Platform desde la columna OS y retorna su ID (si existe)."""
+    """Resuelve el Platform desde la columna OS.
+    Retorna una tupla con el ID del Platform y el Platform cache actualizado."""
     plt_name = extract_csv_value(row, "os", config)
     if not plt_name:
         return None, plt_cache
@@ -2190,6 +2217,8 @@ def _resolve_netbox_status(
 
     Si el valor no existe en status_map, se aplica el fallback
     correspondiente al tipo de nodo.
+
+    Retorna el status NetBox.
     """
     status_csv = extract_csv_value(row, "status", config)
 
@@ -2213,11 +2242,13 @@ def _resolve_cluster(
     config: NetBoxMappingConfig,
 ) -> tuple[int | None, dict[tuple[int, str], NetBoxObject]]:
     """
-    Resuelve el Cluster desde la columna correspondiente y retorna su ID.
+    Resuelve el Cluster desde la columna correspondiente.
 
     Determina el ClusterType correcto usando el mapa pre-computado
     (cluster_name → hypervisor_os → ClusterType). Si el clúster no
     tiene una tecnología asociada, usa el fallback genérico del YAML.
+
+    Retorna una tupla con el ID del Cluster y el Cluster cache actualizado.
     """
     cluster_name = extract_csv_value(row, "cluster_name", config)
     if not cluster_name:
@@ -2244,10 +2275,11 @@ def _resolve_device_type(
     caches: CacheStore,
     config: NetBoxMappingConfig,
     dry_run: bool,
-) -> int:
+) -> tuple[int, CacheStore]:
     """
     Resuelve y retorna el ID del DeviceType utilizando el manufacturer y el modelo.
     Si la altura ('hei_u') no se proporciona o es inválida, asume 1 por defecto.
+    Retorna una tupla con el ID del DeviceType y la caché (CacheStore) actualizada.
     """
     manufacturer = extract_csv_value(row, "manufacturer", config)
     model = extract_csv_value(row, "model", config)
@@ -2279,7 +2311,7 @@ def _resolve_device_type(
         caches.device_types,
         dry_run,
     )
-    return get_netbox_object_id(device_type)
+    return get_netbox_object_id(device_type), caches
 
 
 def _resolve_host_device(
@@ -2289,15 +2321,15 @@ def _resolve_host_device(
     machine_name: str,
     cache: dict[tuple[int, str], int | None],
     config: NetBoxMappingConfig,
-) -> int | None:
+) -> tuple[int | None, dict[tuple[int, str], int | None]]:
     """
     Resuelve y cachea el ID del Device correspondiente al hipervisor host,
     acotado estrictamente al site configurado.
-    Retorna el ID del host o None si no se encuentra.
+    Retorna una tupla con el ID del host (o None) y la caché actualizada.
     """
     host_name_csv = extract_csv_value(row, "host_device", config)
     if not host_name_csv:
-        return None
+        return None, cache
 
     site_id = get_netbox_object_id(site)
     cache_key = (site_id, host_name_csv)
@@ -2331,7 +2363,7 @@ def _resolve_host_device(
             host_name_csv,
         )
 
-    return dev_id
+    return dev_id, cache
 
 
 # ============================================================
@@ -2643,13 +2675,14 @@ def sync_device(
         payload["rack"] = get_netbox_object_id(rack)
 
     # DeviceType (busca el Manufacturer por dentro).
-    payload["device_type"] = _resolve_device_type(
+    device_type_id, caches = _resolve_device_type(
         endpoints,
         row,
         caches,
         config,
         dry_run,
     )
+    payload["device_type"] = device_type_id
 
     # ── GET o CREATE/UPDATE ──────────────────────────────────
     sync_res = _validate_sync(
@@ -2722,7 +2755,7 @@ def sync_vm(
         raise RowSkipCondition(f"Falló la resolución del cluster '{cluster_name}'.")
 
     # Device del hipervisor host (acotado a site y cacheado).
-    host_dev_id = _resolve_host_device(
+    host_dev_id, caches.host_devices = _resolve_host_device(
         endpoints.devices,
         row,
         site,
@@ -2842,7 +2875,7 @@ def _parse_network_interfaces(
     config: NetBoxMappingConfig,
 ) -> list[NetworkInterfaceData]:
     """
-    Parsea las columnas de red del CSV y devuelve una lista de interfaces.
+    Parsea las columnas de red del CSV y retorna una lista de interfaces.
     Lanza RowValidationError si los arrays tienen longitudes distintas.
 
     Reglas de validación:
