@@ -1317,7 +1317,7 @@ def ensure_dynamic_cluster_types(
     fallback_cfg: ClusterTypeConfig,
     cache: dict[str, NetBoxObject],
     dry_run: bool,
-) -> NetBoxObject:
+) -> tuple[NetBoxObject, dict[str, NetBoxObject]]:
     """
     Crea los ClusterTypes dinámicos en NetBox a partir de los valores
     únicos de hypervisor_os y los almacena en el caché.
@@ -1325,7 +1325,7 @@ def ensure_dynamic_cluster_types(
     Siempre garantiza el fallback estático del YAML como respaldo
     para clústeres sin información de SO.
 
-    Retorna el ClusterType fallback.
+    Retorna una tupla (ClusterType fallback, cache actualizado).
     """
     # Garantizar el fallback estático del YAML.
     fallback_name = fallback_cfg.default.name
@@ -1344,7 +1344,7 @@ def ensure_dynamic_cluster_types(
         ct = _ensure_cluster_type(endpoints.cluster_types, os_name, os_slug, dry_run)
         cache[os_name] = ct
 
-    return fallback
+    return fallback, cache
 
 
 def _sync_single_device_role(
@@ -1352,17 +1352,17 @@ def _sync_single_device_role(
     role_def: DeviceRoleConfig,
     device_roles_cache: dict[str, NetBoxObject],
     dry_run: bool,
-) -> NetBoxObject:
+) -> tuple[NetBoxObject, dict[str, NetBoxObject]]:
     """
     Sincroniza un único DeviceRole y asegura que permita VMs.
-    Retorna el objeto DeviceRole.
+    Retorna una tupla (DeviceRole, caché actualizado).
     """
     name = role_def.name
     key = name.lower()
     slug = cast(str, role_def.slug)
 
     try:
-        obj, _ = _get_or_create_cached(
+        obj, device_roles_cache = _get_or_create_cached(
             endpoint=endpoints.device_roles,
             cache=device_roles_cache,
             cache_key=key,
@@ -1389,7 +1389,7 @@ def _sync_single_device_role(
 
         device_roles_cache[key] = obj
 
-    return obj
+    return obj, device_roles_cache
 
 
 def ensure_all_device_roles(
@@ -1397,21 +1397,21 @@ def ensure_all_device_roles(
     device_roles: list[DeviceRoleConfig],
     device_roles_cache: dict[str, NetBoxObject],
     dry_run: bool,
-) -> dict[str, NetBoxObject]:
+) -> tuple[dict[str, NetBoxObject], dict[str, NetBoxObject]]:
     """
     Garantiza que todos los device roles definidos en el YAML
     existen en NetBox (/api/dcim/device-roles/).
     Todos los roles se habilitan para su uso en Virtual Machines.
-    Puebla caches.device_roles con {nombre_lower: objeto}.
-    Retorna un diccionario con los DeviceRoles sincronizados.
+    Retorna una tupla (Roles asegurados, caché actualizado).
     """
     ensured_roles: dict[str, NetBoxObject] = {}
     for role_def in device_roles:
         key = role_def.name.lower()
-        ensured_roles[key] = _sync_single_device_role(
+        obj, device_roles_cache = _sync_single_device_role(
             endpoints, role_def, device_roles_cache, dry_run
         )
-    return ensured_roles
+        ensured_roles[key] = obj
+    return ensured_roles, device_roles_cache
 
 
 def ensure_platform(
@@ -1419,10 +1419,10 @@ def ensure_platform(
     name: str,
     cache: dict[str, NetBoxObject],
     dry_run: bool,
-) -> NetBoxObject:
+) -> tuple[NetBoxObject, dict[str, NetBoxObject]]:
     """Garantiza que el Platform exista en NetBox."""
     slug = slugify(name)
-    obj, _ = _get_or_create_cached(
+    return _get_or_create_cached(
         endpoint=platforms_endpoint,
         cache=cache,
         cache_key=name,
@@ -1433,7 +1433,6 @@ def ensure_platform(
         use_fallback_slug=True,
         preventive_slug_search=True,
     )
-    return obj
 
 
 def ensure_cluster(
@@ -1443,13 +1442,13 @@ def ensure_cluster(
     site: NetBoxObject,
     cache: dict[tuple[int, str], NetBoxObject],
     dry_run: bool,
-) -> NetBoxObject:
+) -> tuple[NetBoxObject, dict[tuple[int, str], NetBoxObject]]:
     """Garantiza que el Cluster exista en NetBox."""
     site_id = get_netbox_object_id(site)
     cache_key = (site_id, name)
     cluster_type_id = get_netbox_object_id(cluster_type)
 
-    obj, _ = _get_or_create_cached(
+    return _get_or_create_cached(
         endpoint=clusters_endpoint,
         cache=cache,
         cache_key=cache_key,
@@ -1459,7 +1458,6 @@ def ensure_cluster(
         dry_run=dry_run,
         skip_filter=(site_id == 0),
     )
-    return obj
 
 
 def ensure_manufacturer(
@@ -1467,10 +1465,10 @@ def ensure_manufacturer(
     name: str,
     cache: dict[str, NetBoxObject],
     dry_run: bool,
-) -> NetBoxObject:
+) -> tuple[NetBoxObject, dict[str, NetBoxObject]]:
     """Garantiza que el Manufacturer exista en NetBox."""
     slug = slugify(name)
-    obj, _ = _get_or_create_cached(
+    return _get_or_create_cached(
         endpoint=manufacturers_endpoint,
         cache=cache,
         cache_key=name,
@@ -1481,7 +1479,6 @@ def ensure_manufacturer(
         use_fallback_slug=True,
         preventive_slug_search=True,
     )
-    return obj
 
 
 def _sync_device_type_u_height(
@@ -1526,7 +1523,7 @@ def ensure_device_type(
     u_height: float,
     cache: dict[tuple[str, str], NetBoxObject],
     dry_run: bool,
-) -> NetBoxObject:
+) -> tuple[NetBoxObject, dict[tuple[str, str], NetBoxObject]]:
     """Garantiza que el DeviceType exista en NetBox."""
     manufacturer_id = get_netbox_object_id(manufacturer)
 
@@ -1536,7 +1533,7 @@ def ensure_device_type(
 
     slug = slugify(f"{manufacturer_name} {model}")
 
-    obj, _ = _get_or_create_cached(
+    obj, cache = _get_or_create_cached(
         endpoint=device_types_endpoint,
         cache=cache,
         cache_key=key,
@@ -1560,8 +1557,8 @@ def ensure_device_type(
         )
         if updated_obj is not obj:
             cache[key] = updated_obj
-            return updated_obj
-    return obj
+            return updated_obj, cache
+    return obj, cache
 
 
 def ensure_rack(
@@ -1570,12 +1567,12 @@ def ensure_rack(
     site: NetBoxObject,
     cache: dict[tuple[int, str], NetBoxObject],
     dry_run: bool,
-) -> NetBoxObject:
+) -> tuple[NetBoxObject, dict[tuple[int, str], NetBoxObject]]:
     """Garantiza que el Rack exista en NetBox."""
     site_id = get_netbox_object_id(site)
     cache_key = (site_id, name)
 
-    obj, _ = _get_or_create_cached(
+    return _get_or_create_cached(
         endpoint=racks_endpoint,
         cache=cache,
         cache_key=cache_key,
@@ -1585,7 +1582,6 @@ def ensure_rack(
         dry_run=dry_run,
         skip_filter=(site_id == 0),
     )
-    return obj
 
 
 # ============================================================
@@ -1647,7 +1643,7 @@ def _ensure_choice_set(
     existing_choice_sets: dict[str, NetBoxObject],
     choice_set_cfg: ChoiceSetConfig,
     dry_run: bool,
-) -> int:
+) -> tuple[int, dict[str, NetBoxObject]]:
     """Crea un choice set si no existe en NetBox."""
 
     def _get_choice_set_choices(choices: list[ChoiceItemConfig]) -> list[list[str]]:
@@ -1657,7 +1653,7 @@ def _ensure_choice_set(
     choices: list[list[str]] = _get_choice_set_choices(choice_set_cfg.choices)
 
     try:
-        choice_set, _ = _get_or_create_cached(
+        choice_set, existing_choice_sets = _get_or_create_cached(
             endpoint=choice_sets_endpoint,
             cache=existing_choice_sets,
             cache_key=choice_set_name,
@@ -1678,9 +1674,9 @@ def _ensure_choice_set(
     if getattr(choice_set, "id", 0) != 0:
         return _sync_choice_set_choices(
             cast(Record, choice_set), choice_set_name, choices, dry_run
-        )
+        ), existing_choice_sets
 
-    return 0
+    return 0, existing_choice_sets
 
 
 def _ensure_custom_field(
@@ -1690,10 +1686,10 @@ def _ensure_custom_field(
     object_types: list[str],
     choice_set_id: int | None,
     dry_run: bool,
-) -> NetBoxObject:
+) -> tuple[NetBoxObject, dict[str, NetBoxObject]]:
     """
     Crea un custom field si no existe en NetBox.
-    Retorna el objeto Custom Field.
+    Retorna el objeto Custom Field y el caché actualizado.
     """
     name: str = cf_def.name
 
@@ -1713,7 +1709,7 @@ def _ensure_custom_field(
         create_kwargs["default"] = default_value
 
     try:
-        obj, _ = _get_or_create_cached(
+        return _get_or_create_cached(
             endpoint=custom_fields_endpoint,
             cache=existing_cfs,
             cache_key=name,
@@ -1722,7 +1718,6 @@ def _ensure_custom_field(
             name=name,
             dry_run=dry_run,
         )
-        return obj
     except NetBoxApiError as e:
         raise ConfigValidationError(f"Error al crear custom field '{name}': {e}") from e
 
@@ -1772,7 +1767,7 @@ def ensure_custom_fields(
         choice_set_cfg: ChoiceSetConfig | None = cf_def.choice_set
 
         if cf_def.type == "select" and choice_set_cfg:
-            choice_set_id = _ensure_choice_set(
+            choice_set_id, existing_choice_sets = _ensure_choice_set(
                 endpoints.choice_sets,
                 existing_choice_sets,
                 choice_set_cfg,
@@ -1780,7 +1775,7 @@ def ensure_custom_fields(
             )
 
         # Crear el Custom Field si no existe.
-        cf_obj = _ensure_custom_field(
+        cf_obj, existing_cfs = _ensure_custom_field(
             endpoints.custom_fields,
             existing_cfs,
             cf_def,
@@ -2050,19 +2045,19 @@ def _resolve_platform(
     plt_cache: dict[str, NetBoxObject],
     dry_run: bool,
     config: NetBoxMappingConfig,
-) -> int | None:
+) -> tuple[int | None, dict[str, NetBoxObject]]:
     """Resuelve el Platform desde la columna OS y retorna su ID (si existe)."""
     plt_name = extract_csv_value(row, "os", config)
     if not plt_name:
-        return None
+        return None, plt_cache
 
-    platform = ensure_platform(
+    platform, plt_cache = ensure_platform(
         plt_endpoint,
         plt_name,
         plt_cache,
         dry_run,
     )
-    return get_netbox_object_id(platform)
+    return get_netbox_object_id(platform), plt_cache
 
 
 def _resolve_device_role(
@@ -2123,7 +2118,7 @@ def _resolve_cluster(
     cluster_cache: dict[tuple[int, str], NetBoxObject],
     dry_run: bool,
     config: NetBoxMappingConfig,
-) -> int | None:
+) -> tuple[int | None, dict[tuple[int, str], NetBoxObject]]:
     """
     Resuelve el Cluster desde la columna correspondiente y retorna su ID.
 
@@ -2133,13 +2128,13 @@ def _resolve_cluster(
     """
     cluster_name = extract_csv_value(row, "cluster_name", config)
     if not cluster_name:
-        return None
+        return None, cluster_cache
 
     # Resolver el ClusterType correcto para este clúster.
     os_name = cluster_type_map.get(cluster_name)
     cluster_type = cluster_type_cache[os_name] if os_name else fallback_cluster_type
 
-    cluster = ensure_cluster(
+    cluster, cluster_cache = ensure_cluster(
         cluster_endpoint,
         cluster_name,
         cluster_type,
@@ -2147,7 +2142,7 @@ def _resolve_cluster(
         cluster_cache,
         dry_run,
     )
-    return get_netbox_object_id(cluster)
+    return get_netbox_object_id(cluster), cluster_cache
 
 
 def _resolve_device_type(
@@ -2165,7 +2160,7 @@ def _resolve_device_type(
     model = extract_csv_value(row, "model", config)
 
     # Manufacturer.
-    manufacturer_obj = ensure_manufacturer(
+    manufacturer_obj, caches.manufacturers = ensure_manufacturer(
         endpoints.manufacturers,
         manufacturer,
         caches.manufacturers,
@@ -2183,7 +2178,7 @@ def _resolve_device_type(
                 f"Valor numérico inválido '{raw_u_height}' para 'hei_u'."
             )
 
-    device_type = ensure_device_type(
+    device_type, caches.device_types = ensure_device_type(
         endpoints.device_types,
         manufacturer_obj,
         model,
@@ -2270,7 +2265,7 @@ def _resolve_base_node(
 
     payload = build_payload(row, native_maps, custom_maps, config)
 
-    platform_id = _resolve_platform(
+    platform_id, caches.platforms = _resolve_platform(
         endpoints.platforms, row, caches.platforms, dry_run, config
     )
     if platform_id is not None:
@@ -2524,7 +2519,7 @@ def sync_device(
 
     # Cluster para hipervisores.
     if is_hypervisor:
-        cluster_id = _resolve_cluster(
+        cluster_id, caches.clusters = _resolve_cluster(
             endpoints.clusters,
             row,
             cluster_type_map,
@@ -2543,7 +2538,7 @@ def sync_device(
     # Rack.
     rack_name = extract_csv_value(row, "rack", config)
     if rack_name:
-        rack = ensure_rack(
+        rack, caches.racks = ensure_rack(
             endpoints.racks,
             rack_name,
             site,
@@ -3568,7 +3563,7 @@ def main() -> None:
 
     # ── Pre-escaneo: asociar clústeres con su tecnología ─────
     cluster_type_map = precompute_cluster_type_map(rows, config)
-    fallback_cluster_type = ensure_dynamic_cluster_types(
+    fallback_cluster_type, caches.cluster_types = ensure_dynamic_cluster_types(
         endpoints,
         cluster_type_map,
         config.cluster_type,
@@ -3577,7 +3572,7 @@ def main() -> None:
     )
 
     # ── Garantizar taxonomía local ──────────────────────────
-    ensure_all_device_roles(
+    _, caches.device_roles = ensure_all_device_roles(
         endpoints, config.device_roles, caches.device_roles, args.dry_run
     )
 

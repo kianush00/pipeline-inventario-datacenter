@@ -1372,8 +1372,10 @@ class TestEnsureManufacturer:
         endpoint = MagicMock()
         cache: dict[str, NetBoxObject] = {"Dell": MockNetBoxRecord(id=5, name="Dell")}
 
-        result = ensure_manufacturer(endpoint, "Dell", cache, dry_run=False)
+        result, returned_cache = ensure_manufacturer(endpoint, "Dell", cache, dry_run=False)
         assert result.id == 5
+        assert returned_cache is cache
+        assert returned_cache["Dell"].id == 5
         endpoint.filter.assert_not_called()
 
     def test_found_by_name(self) -> None:
@@ -1382,9 +1384,10 @@ class TestEnsureManufacturer:
         endpoint.filter.return_value = [mock_mfg]
         cache: dict[str, NetBoxObject] = {}
 
-        result = ensure_manufacturer(endpoint, "HP", cache, dry_run=False)
+        result, returned_cache = ensure_manufacturer(endpoint, "HP", cache, dry_run=False)
         assert result.id == 6
-        assert cache["HP"].id == 6
+        assert returned_cache is cache
+        assert returned_cache["HP"].id == 6
         endpoint.filter.assert_called_once_with(name="HP")
 
     def test_found_by_slug_fallback(self) -> None:
@@ -1394,9 +1397,10 @@ class TestEnsureManufacturer:
         endpoint.filter.side_effect = [[], [mock_mfg]]
         cache: dict[str, NetBoxObject] = {}
 
-        result = ensure_manufacturer(endpoint, "H.P.", cache, dry_run=False)
+        result, returned_cache = ensure_manufacturer(endpoint, "H.P.", cache, dry_run=False)
         assert result.id == 7
-        assert cache["H.P."].id == 7
+        assert returned_cache is cache
+        assert returned_cache["H.P."].id == 7
         assert endpoint.filter.call_count == 2
 
     def test_created_when_not_found(self) -> None:
@@ -1407,9 +1411,10 @@ class TestEnsureManufacturer:
         endpoint.create.return_value = mock_created
         cache: dict[str, NetBoxObject] = {}
 
-        result = ensure_manufacturer(endpoint, "Lenovo", cache, dry_run=False)
+        result, returned_cache = ensure_manufacturer(endpoint, "Lenovo", cache, dry_run=False)
         assert result.id == 8
-        assert cache["Lenovo"].id == 8
+        assert returned_cache is cache
+        assert returned_cache["Lenovo"].id == 8
         endpoint.create.assert_called_once_with(name="Lenovo", slug="lenovo")
 
 
@@ -1510,10 +1515,10 @@ class TestResolveDeviceTypeUHeight:
     def test_fractional_u_height(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Mock dependencias para aislar _resolve_device_type
         monkeypatch.setattr(
-            export_to_netbox, "ensure_manufacturer", lambda *args, **kwargs: MagicMock()
+            export_to_netbox, "ensure_manufacturer", lambda *args, **kwargs: (MagicMock(), MagicMock())
         )
 
-        mock_ensure_device_type = MagicMock()
+        mock_ensure_device_type = MagicMock(return_value=(MagicMock(), MagicMock()))
         monkeypatch.setattr(
             export_to_netbox, "ensure_device_type", mock_ensure_device_type
         )
@@ -1548,9 +1553,9 @@ class TestResolveDeviceTypeUHeight:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            export_to_netbox, "ensure_manufacturer", lambda *args, **kwargs: MagicMock()
+            export_to_netbox, "ensure_manufacturer", lambda *args, **kwargs: (MagicMock(), MagicMock())
         )
-        mock_ensure_device_type = MagicMock()
+        mock_ensure_device_type = MagicMock(return_value=(MagicMock(), MagicMock()))
         monkeypatch.setattr(
             export_to_netbox, "ensure_device_type", mock_ensure_device_type
         )
@@ -1769,8 +1774,10 @@ class TestGetOrCreateCached:
     def test_returns_from_cache(self) -> None:
         endpoint = MagicMock()
         cache: dict[Any, Any] = {"key1": "mock_obj"}
-        result, _ = _get_or_create_cached(endpoint, cache, "key1", {}, {}, "Test", False)
+        result, returned_cache = _get_or_create_cached(endpoint, cache, "key1", {}, {}, "Test", False)
         assert result == "mock_obj"
+        assert returned_cache is cache
+        assert returned_cache["key1"] == "mock_obj"
         endpoint.filter.assert_not_called()
         endpoint.create.assert_not_called()
 
@@ -1779,7 +1786,7 @@ class TestGetOrCreateCached:
         cache: dict[Any, Any] = {}
         endpoint.name = "test_endpoints"
         endpoint.create.return_value = "created_obj"
-        result, _ = _get_or_create_cached(
+        result, returned_cache = _get_or_create_cached(
             endpoint,
             cache,
             "key1",
@@ -1790,7 +1797,8 @@ class TestGetOrCreateCached:
             skip_filter=True,
         )
         assert result == "created_obj"
-        assert cache["key1"] == "created_obj"
+        assert "key1" in returned_cache
+        assert returned_cache["key1"] == "created_obj"
         endpoint.filter.assert_not_called()
         endpoint.create.assert_called_once_with(name="Test")
 
@@ -1799,11 +1807,12 @@ class TestGetOrCreateCached:
         endpoint.filter.return_value = []
         cache: dict[Any, Any] = {}
         endpoint.name = "test_endpoints"
-        result, _ = _get_or_create_cached(
+        result, returned_cache = _get_or_create_cached(
             endpoint, cache, "key1", {}, {"name": "Test"}, "Test", True
         )
         assert result.id == 0
         assert result.name == "Test"
+        assert returned_cache["key1"] is result
         endpoint.create.assert_not_called()
 
     def test_create_error_raises_netbox_api_error(self) -> None:
