@@ -2490,15 +2490,19 @@ def _execute_sync(
     dry_run: bool,
 ) -> SyncResult:
     """
-    Ejecuta CREATE, UPDATE, UNCHANGED o DRY-RUN según el objeto encontrado.
+    Ejecuta la operación final de sincronización (CREATE, UPDATE, UNCHANGED) contra NetBox.
 
-    Si una fila llega a esta función con `existing`, es porque superó
-    la validación de unicidad previa, por lo que se actualiza con confianza.
+    Decisiones de diseño:
+    - Confianza delegada: Si una fila llega a esta función con la lista `existing` poblada,
+      asumimos que ya superó la validación estricta de unicidad previa.
+    - Idempotencia y Optimización: Antes de emitir un UPDATE a la API, evaluamos
+      las diferencias (diff) localmente. Si no hay cambios reales, se clasifica
+      como UNCHANGED para ahorrar ancho de banda y tiempo de procesamiento.
 
-    Retorna una tupla (SyncStatus, obj_id) donde obj_id es el ID del
-    objeto en NetBox (int).
-    En modo dry-run con objetos existentes se retorna su ID real;
-    en creación dry-run se retorna 0 (mock).
+    Retorna:
+        SyncResult: Resultado estructurado con el estado (CREATED/UPDATED/UNCHANGED),
+        el ID del objeto final en NetBox, y la instancia del objeto (mock en caso
+        de creaciones bajo dry-run).
     """
     uuid = raw_uuid or "N/A"
     node_type = get_node_type_from_object(endpoint)
@@ -2567,7 +2571,20 @@ def _validate_sync(
     config: NetBoxMappingConfig,
     dry_run: bool,
 ) -> SyncResult:
-    """Busca un objeto en NetBox, valida su unicidad si coincide por nombre y ejecuta la sincronización."""
+    """
+    Coordina la búsqueda, validación de seguridad y ejecución de sincronización.
+
+    Decisiones de diseño:
+    - Protección contra colisiones: Si un nodo no se encuentra por su UUID único,
+      se hace un fallback por 'nombre'. Sin embargo, si existen múltiples nodos
+      con el mismo nombre en NetBox o en el CSV, actualizar basándose solo en
+      el nombre provocaría corrupción de datos cruzada.
+    - Fail-Fast: Se aborta tempranamente lanzando `RowSkipCondition` si no se puede
+      garantizar la unicidad absoluta.
+
+    Retorna:
+        SyncResult: El resultado final de la operación.
+    """
     existing, found_by_uuid, found_by_name = _find_existing_object(
         uuid,
         machine_name,
@@ -2603,8 +2620,18 @@ def sync_device(
     dry_run: bool,
 ) -> tuple[SyncResult, CacheStore]:
     """
-    Sincroniza una fila de tipo "device" o "hipervisor" con NetBox.
-    Retorna una tupla con el resultado del sincronizado y la caché actualizada.
+    Orquesta la sincronización completa de una fila clasificada como Device o Hipervisor.
+
+    Decisiones de diseño:
+    - Requisitos estrictos (Fail-Fast): 'manufacturer' y 'model' son campos mandatorios
+      en la jerarquía de NetBox; se aborta de inmediato si faltan.
+    - Constraints de API: NetBox exige que si un dispositivo tiene 'position' (U-Location),
+      también debe tener obligatoriamente un 'face' (front/rear). Se inyecta preventivamente.
+    - Hipervisores: Los dispositivos físicos que actúan como hipervisores deben asignarse
+      a un Cluster explícito para poder albergar Virtual Machines posteriormente.
+
+    Retorna:
+        tuple[SyncResult, CacheStore]: El resultado final y el estado de la caché puramente inyectado.
     """
     # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
     manufacturer = extract_csv_value(row, "manufacturer", config)
@@ -2709,8 +2736,16 @@ def sync_vm(
     dry_run: bool,
 ) -> tuple[SyncResult, CacheStore]:
     """
-    Sincroniza una fila de tipo "virtual_machine" con NetBox.
-    Retorna una tupla con el resultado del sincronizado y la caché actualizada.
+    Orquesta la sincronización completa de una fila clasificada como Virtual Machine.
+
+    Decisiones de diseño:
+    - Requisitos estrictos (Fail-Fast): En NetBox, toda VM DEBE pertenecer a un Cluster.
+      Se descarta el registro inmediatamente si 'cluster_name' está ausente.
+    - Host Device (Opcional): Se intenta asociar la VM con el hipervisor físico (Device)
+      especificado. Esto permite mapear la topología virtualizada sobre el hardware real.
+
+    Retorna:
+        tuple[SyncResult, CacheStore]: El resultado final y el estado de la caché puramente inyectado.
     """
     # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
     cluster_name = extract_csv_value(row, "cluster_name", config)
@@ -2965,7 +3000,17 @@ def parse_row_interfaces(
     machine_name: str,
     config: NetBoxMappingConfig,
 ) -> list[NetworkInterfaceData]:
-    """Parsea las interfaces de la fila CSV y advierte si están vacías."""
+    """
+    Parsea estructuralmente las columnas de interfaces para la fila actual.
+
+    Decisiones de diseño:
+    - Visibilidad de Gaps: Si no se detectan interfaces, se lanza una advertencia.
+      Esto indica un posible hueco en la estructura del CSV o un equipo que
+      perderá su telemetría (in-band/out-of-band) en NetBox.
+
+    Retorna:
+        list[NetworkInterfaceData]: Lista de diccionarios validados con datos de red.
+    """
     interfaces = _parse_network_interfaces(row, config)
     if not interfaces:
         ifaces_col = config.csv_columns["iface_names"].source
@@ -2991,7 +3036,19 @@ def _assign_network_resource(
     iface_obj: NetBoxObject,
     dry_run: bool,
 ) -> tuple[NetBoxObject, bool]:
-    """Lógica común para asignar recursos de red (IP, MAC) a una interfaz."""
+    """
+    Centraliza la asignación polimórfica de recursos de red (IP o MAC) a una interfaz.
+
+    Decisiones de diseño:
+    - Interfaz Polimórfica: Tanto las direcciones IP como las MACs en NetBox se asignan
+      mediante ContentTypes (`assigned_object_type`, `assigned_object_id`).
+    - Reciclaje (Evitar Duplicidad Global): Antes de crear un nuevo recurso, se verifica
+      si ya existe uno libre (huérfano) con el mismo valor, y se reasigna a la interfaz.
+      Esto previene colisiones y uso excesivo de espacio en el IPAM de NetBox.
+
+    Retorna:
+        tuple[NetBoxObject, bool]: El objeto (IP/MAC) NetBox y un booleano indicando si hubo cambios.
+    """
     node_type = get_node_type_from_object(iface_obj)
     assigned_type: str = (
         "dcim.interface"
@@ -3430,8 +3487,15 @@ def process_interfaces_and_ips(
     machine_name: str,
 ) -> tuple[int, bool]:
     """
-    Sincroniza interfaces y asigna la IP/MAC primaria.
-    Retorna una tupla: (cantidad de errores, booleano indicando si hubo cambios).
+    Orquesta la sincronización de interfaces hijas y gestiona la asignación de redes primarias.
+
+    Decisiones de diseño:
+    - Asignación Primaria Segura: Si (y solo si) existe un único candidato IPv4/MAC válido
+      para todo el nodo, se le asigna de forma automática como IP/MAC primaria del dispositivo.
+      Si hay múltiples, NetBox exige resolución manual para evitar ambigüedades destructivas.
+
+    Retorna:
+        tuple[int, bool]: Una tupla con (cantidad_de_errores, boolean_hubo_cambios_reales).
     """
     iface_errors, ipv4_candidates, ifaces_changed = _sync_interfaces_for_object(
         endpoints,
@@ -3477,8 +3541,18 @@ def _process_node_sync(
     dry_run: bool,
 ) -> tuple[SyncResult, CacheStore]:
     """
-    Procesa el sincronizado de un nodo (Device o VM) en NetBox.
-    Retorna una tupla con el resultado del sincronizado y la caché actualizada.
+    Actúa como despachador (dispatcher) polimórfico para sincronizar nodos (Device o VM).
+
+    Decisiones de diseño:
+    - Abstracción: Oculta la complejidad de las diferentes jerarquías requeridas por
+      físicos y virtuales al pipeline principal.
+    - Propagación de Caché: En caso de crear/actualizar un Device, se guarda inmediatamente
+      su ID en `caches.host_devices`. Así, si una VM subsecuente en el mismo CSV lo
+      declara como su hipervisor, evitamos un viaje de red costoso (API call) inyectando
+      directamente el ID cacheado.
+
+    Retorna:
+        tuple[SyncResult, CacheStore]: El resultado final y la caché propagada.
     """
     if node_type == NodeType.DEVICE:
         sync_res, caches = sync_device(
@@ -3526,12 +3600,19 @@ def _sync_row(
     prune_interfaces: bool = False,
 ) -> tuple[SyncCounts, CacheStore]:
     """
-    Sincroniza una fila individual del CSV con NetBox, incluyendo
-    la creación/actualización del objeto principal y sus interfaces de red.
-    Gestiona internamente todas las excepciones esperadas y actualiza
-    los contadores de resultado en el diccionario mutable `counts`.
+    Unidad de trabajo (Unit of Work) para procesar de forma atómica una fila completa del CSV.
 
-    Retorna una tupla con los contadores actualizados y la caché actualizada.
+    Decisiones de diseño:
+    - Tolerancia a Fallos (Fault Tolerance): Captura proactivamente todas las excepciones
+      de dominio (Skip, Error de API, Validación) garantizando que un nodo corrupto no
+      quiebre todo el pipeline ETL, permitiendo que el resto de filas se procesen.
+    - Escalada de Estado: Si el objeto padre (Device/VM) no sufrió cambios (UNCHANGED),
+      pero alguna de sus interfaces hijas sí fue creada o actualizada, se escala el
+      estado final del nodo a UPDATED para que los reportes de ejecución reflejen
+      el cambio global de la entidad.
+
+    Retorna:
+        tuple[SyncCounts, CacheStore]: El acumulador de métricas mutado y la caché propagada.
     """
     machine_name = extract_csv_value(row, "machine_name", config) or f"fila {row_num}"
 
