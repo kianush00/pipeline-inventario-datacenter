@@ -1769,7 +1769,7 @@ class TestGetOrCreateCached:
     def test_returns_from_cache(self) -> None:
         endpoint = MagicMock()
         cache: dict[Any, Any] = {"key1": "mock_obj"}
-        result = _get_or_create_cached(endpoint, cache, "key1", {}, {}, "Test", False)
+        result, _ = _get_or_create_cached(endpoint, cache, "key1", {}, {}, "Test", False)
         assert result == "mock_obj"
         endpoint.filter.assert_not_called()
         endpoint.create.assert_not_called()
@@ -1779,7 +1779,7 @@ class TestGetOrCreateCached:
         cache: dict[Any, Any] = {}
         endpoint.name = "test_endpoints"
         endpoint.create.return_value = "created_obj"
-        result = _get_or_create_cached(
+        result, _ = _get_or_create_cached(
             endpoint,
             cache,
             "key1",
@@ -1799,7 +1799,7 @@ class TestGetOrCreateCached:
         endpoint.filter.return_value = []
         cache: dict[Any, Any] = {}
         endpoint.name = "test_endpoints"
-        result = _get_or_create_cached(
+        result, _ = _get_or_create_cached(
             endpoint, cache, "key1", {}, {"name": "Test"}, "Test", True
         )
         assert result.id == 0
@@ -1896,7 +1896,7 @@ class TestEnsureTaxonomyQACases:
         endpoint.create.return_value = mock_created
 
         cache: dict[str, NetBoxObject] = {}
-        result = _get_or_create_cached(
+        result, _ = _get_or_create_cached(
             endpoint,
             cache=cache,
             cache_key="key",

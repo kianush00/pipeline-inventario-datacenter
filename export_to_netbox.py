@@ -1169,23 +1169,19 @@ def _get_or_create_cached(
     use_fallback_slug: bool = False,
     skip_filter: bool = False,
     preventive_slug_search: bool = False,
-) -> NetBoxObject:
+) -> tuple[NetBoxObject, dict[Any, NetBoxObject]]:
     """
     Helper genérico que reduce el boilerplate del patrón get-or-create con caché y dry-run.
-
-    El uso de `use_fallback_slug` está reservado exclusivamente para taxonomía dinámica/sucia
-    (Manufacturer, DeviceRole, etc.) proveniente de nodos, implementando un diseño Fail-Safe
-    contra colisiones de slug en NetBox. Para taxonomía estática (Site, ClusterType), se omite
-    para aplicar un enfoque Fail-Fast (ver docs/architecture.md).
+    Retorna una tupla con (Objeto, caché_actualizado) para evitar side-effects silenciosos.
     """
     if cache_key in cache:
-        return cache[cache_key]
+        return cache[cache_key], cache
 
     if not skip_filter:
         results: list[Record] = list(endpoint.filter(**filter_kwargs))
         if results:
             cache[cache_key] = results[0]
-            return results[0]
+            return results[0], cache
 
     if preventive_slug_search and "slug" in create_kwargs:
         slug_val = create_kwargs["slug"]
@@ -1200,14 +1196,14 @@ def _get_or_create_cached(
                 getattr(slug_results[0], "name", "?"),
             )
             cache[cache_key] = slug_results[0]
-            return slug_results[0]
+            return slug_results[0], cache
 
     if dry_run:
         log.info("[DRY-RUN] Crearía objeto en '%s': %s", endpoint.name, name)
         mock_kwargs = create_kwargs.copy()
         obj: NetBoxObject = MockNetBoxRecord(id=0, **mock_kwargs)
         cache[cache_key] = obj
-        return obj
+        return obj, cache
 
     if use_fallback_slug:
         obj = _create_with_fallback_slug(
@@ -1223,7 +1219,7 @@ def _get_or_create_cached(
 
     log.info("Objeto creado en '%s': %s", endpoint.name, name)
     cache[cache_key] = obj
-    return obj
+    return obj, cache
 
 
 def ensure_site(
@@ -1237,7 +1233,7 @@ def ensure_site(
 
     # Utilizamos un caché efímero solo para reutilizar la lógica de _get_or_create_cached,
     # aunque realmente site se evalúa una sola vez por ejecución en _execute_pipeline.
-    return _get_or_create_cached(
+    obj, _ = _get_or_create_cached(
         endpoint=sites_endpoint,
         cache={},
         cache_key=name,
@@ -1246,6 +1242,7 @@ def ensure_site(
         name=name,
         dry_run=dry_run,
     )
+    return obj
 
 
 def precompute_cluster_type_map(
@@ -1302,7 +1299,7 @@ def _ensure_cluster_type(
     dry_run: bool,
 ) -> NetBoxObject:
     """Garantiza que el ClusterType exista en NetBox."""
-    return _get_or_create_cached(
+    obj, _ = _get_or_create_cached(
         endpoint=cluster_type_endpoint,
         cache={},  # Similar al Site, el caché real de cluster_types se maneja externamente
         cache_key=name,
@@ -1311,6 +1308,7 @@ def _ensure_cluster_type(
         name=name,
         dry_run=dry_run,
     )
+    return obj
 
 
 def ensure_dynamic_cluster_types(
@@ -1364,7 +1362,7 @@ def _sync_single_device_role(
     slug = cast(str, role_def.slug)
 
     try:
-        obj = _get_or_create_cached(
+        obj, _ = _get_or_create_cached(
             endpoint=endpoints.device_roles,
             cache=device_roles_cache,
             cache_key=key,
@@ -1424,7 +1422,7 @@ def ensure_platform(
 ) -> NetBoxObject:
     """Garantiza que el Platform exista en NetBox."""
     slug = slugify(name)
-    return _get_or_create_cached(
+    obj, _ = _get_or_create_cached(
         endpoint=platforms_endpoint,
         cache=cache,
         cache_key=name,
@@ -1435,6 +1433,7 @@ def ensure_platform(
         use_fallback_slug=True,
         preventive_slug_search=True,
     )
+    return obj
 
 
 def ensure_cluster(
@@ -1450,7 +1449,7 @@ def ensure_cluster(
     cache_key = (site_id, name)
     cluster_type_id = get_netbox_object_id(cluster_type)
 
-    return _get_or_create_cached(
+    obj, _ = _get_or_create_cached(
         endpoint=clusters_endpoint,
         cache=cache,
         cache_key=cache_key,
@@ -1460,6 +1459,7 @@ def ensure_cluster(
         dry_run=dry_run,
         skip_filter=(site_id == 0),
     )
+    return obj
 
 
 def ensure_manufacturer(
@@ -1470,7 +1470,7 @@ def ensure_manufacturer(
 ) -> NetBoxObject:
     """Garantiza que el Manufacturer exista en NetBox."""
     slug = slugify(name)
-    return _get_or_create_cached(
+    obj, _ = _get_or_create_cached(
         endpoint=manufacturers_endpoint,
         cache=cache,
         cache_key=name,
@@ -1481,6 +1481,7 @@ def ensure_manufacturer(
         use_fallback_slug=True,
         preventive_slug_search=True,
     )
+    return obj
 
 
 def _sync_device_type_u_height(
@@ -1535,7 +1536,7 @@ def ensure_device_type(
 
     slug = slugify(f"{manufacturer_name} {model}")
 
-    obj = _get_or_create_cached(
+    obj, _ = _get_or_create_cached(
         endpoint=device_types_endpoint,
         cache=cache,
         cache_key=key,
@@ -1574,7 +1575,7 @@ def ensure_rack(
     site_id = get_netbox_object_id(site)
     cache_key = (site_id, name)
 
-    return _get_or_create_cached(
+    obj, _ = _get_or_create_cached(
         endpoint=racks_endpoint,
         cache=cache,
         cache_key=cache_key,
@@ -1584,6 +1585,7 @@ def ensure_rack(
         dry_run=dry_run,
         skip_filter=(site_id == 0),
     )
+    return obj
 
 
 # ============================================================
@@ -1655,7 +1657,7 @@ def _ensure_choice_set(
     choices: list[list[str]] = _get_choice_set_choices(choice_set_cfg.choices)
 
     try:
-        choice_set = _get_or_create_cached(
+        choice_set, _ = _get_or_create_cached(
             endpoint=choice_sets_endpoint,
             cache=existing_choice_sets,
             cache_key=choice_set_name,
@@ -1711,7 +1713,7 @@ def _ensure_custom_field(
         create_kwargs["default"] = default_value
 
     try:
-        return _get_or_create_cached(
+        obj, _ = _get_or_create_cached(
             endpoint=custom_fields_endpoint,
             cache=existing_cfs,
             cache_key=name,
@@ -1720,6 +1722,7 @@ def _ensure_custom_field(
             name=name,
             dry_run=dry_run,
         )
+        return obj
     except NetBoxApiError as e:
         raise ConfigValidationError(f"Error al crear custom field '{name}': {e}") from e
 
