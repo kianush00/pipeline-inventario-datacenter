@@ -31,9 +31,11 @@ from export_to_netbox import (
     RowSkipCondition,
     RowValidationError,
     SiteConfig,
+    SyncResult,
     SyncStatus,
     _assign_primary_ipv4,
     _build_interface_cidr,
+    _classify_rows,
     _create_with_fallback_slug,
     _execute_sync,
     _extract_raw_source_value,
@@ -45,6 +47,7 @@ from export_to_netbox import (
     _prune_orphan_interfaces,
     _resolve_default_or_empty,
     _resolve_device_role,
+    _resolve_device_type,
     _resolve_field_value,
     _resolve_netbox_status,
     _sanitize_mac_address,
@@ -56,6 +59,7 @@ from export_to_netbox import (
     _validate_select_choice,
     apply_cast,
     build_payload,
+    check_record_changes,
     concat_dot,
     count_machine_names,
     ensure_cluster,
@@ -1549,7 +1553,7 @@ class TestResolveDeviceTypeUHeight:
         monkeypatch.setattr(export_to_netbox, "get_netbox_object_id", lambda x: 1)
 
         row = {"manufacturer": "Dell", "model": "R740", "hei_u": "1.5"}
-        export_to_netbox._resolve_device_type(
+        _resolve_device_type(
             endpoints=MagicMock(),
             row=row,
             caches=MagicMock(),
@@ -1588,7 +1592,7 @@ class TestResolveDeviceTypeUHeight:
         monkeypatch.setattr(export_to_netbox, "get_netbox_object_id", lambda x: 1)
 
         row = {"hei_u": ""}
-        export_to_netbox._resolve_device_type(
+        _resolve_device_type(
             endpoints=MagicMock(),
             row=row,
             caches=MagicMock(),
@@ -1776,9 +1780,7 @@ class TestSyncDevice:
             mock_caches,
         )
         mock_device_type.return_value = (1, mock_caches)
-        mock_validate_sync.return_value = export_to_netbox.SyncResult(
-            export_to_netbox.SyncStatus.CREATED, 1, MagicMock()
-        )
+        mock_validate_sync.return_value = SyncResult(SyncStatus.CREATED, 1, MagicMock())
 
         _, returned_caches = sync_device(
             endpoints=MagicMock(),
@@ -2161,7 +2163,7 @@ class TestClassifyRows:
 
         counts = {SyncStatus.ERROR: 0}
 
-        result, new_counts = export_to_netbox._classify_rows(rows, MagicMock(), counts)  # type: ignore
+        result, new_counts = _classify_rows(rows, MagicMock(), counts)  # type: ignore
 
         assert len(result.device_rows) == 2
         assert len(result.vm_rows) == 1
@@ -2178,7 +2180,7 @@ class TestClassifyRows:
 
         def mock_get_node_type(row: dict[str, str], config: Any) -> NodeType:
             if row.get("type") == "invalid":
-                raise export_to_netbox.RowValidationError("Invalid node type")
+                raise RowValidationError("Invalid node type")
             return NodeType.DEVICE
 
         monkeypatch.setattr(
@@ -2197,8 +2199,67 @@ class TestClassifyRows:
 
         counts = {SyncStatus.ERROR: 5}  # Empezamos con un estado previo
 
-        result, new_counts = export_to_netbox._classify_rows(rows, MagicMock(), counts)  # type: ignore
+        result, new_counts = _classify_rows(rows, MagicMock(), counts)  # type: ignore
 
         assert len(result.device_rows) == 1
         assert len(result.vm_rows) == 0
         assert new_counts[SyncStatus.ERROR] == 6  # Se sumó 1 error
+
+
+class TestCheckRecordChanges:
+    """QA Tester verification para check_record_changes (Pure Attribute Comparison)."""
+
+    def test_primitive_changes(self) -> None:
+        """Verifica que detecte cambios o igualdades en strings y enteros."""
+        record = MagicMock()
+        record.name = "Host 1"
+        record.u_height = 2
+
+        # Sin cambios
+        diff1 = check_record_changes(record, {"name": "Host 1", "u_height": 2})
+        assert diff1 == {}
+
+        # Con cambios
+        diff2 = check_record_changes(record, {"name": "Host 2", "u_height": 3})
+        assert diff2 == {"name": "Host 2", "u_height": 3}
+
+    def test_nested_object_changes(self) -> None:
+        """Verifica la lógica de FK anidadas (ej. record.cluster.id vs payload['cluster'])."""
+        record = MagicMock()
+        record.cluster = MagicMock(id=5)
+        record.status = MagicMock(value="active")
+
+        # 1. Payload pasa ID int
+        diff = check_record_changes(record, {"cluster": 5})
+        assert diff == {}
+        diff = check_record_changes(record, {"cluster": 6})
+        assert diff == {"cluster": 6}
+
+        # 2. Payload pasa dict {"id": X}
+        diff = check_record_changes(record, {"cluster": {"id": 5}})
+        assert diff == {}
+        diff = check_record_changes(record, {"cluster": {"id": 6}})
+        assert diff == {"cluster": {"id": 6}}
+
+        # 3. Selectores por Value
+        diff = check_record_changes(record, {"status": "active"})
+        assert diff == {}
+        diff = check_record_changes(record, {"status": "offline"})
+        assert diff == {"status": "offline"}
+
+    def test_custom_fields_changes(self) -> None:
+        """Verifica la lógica de merge e igualdades en custom_fields."""
+        record = MagicMock()
+        record.custom_fields = {"env": "prod", "owner": "IT"}
+
+        # Sin cambios (payload solo manda 1 campo, pero es igual)
+        diff = check_record_changes(record, {"custom_fields": {"env": "prod"}})
+        assert diff == {}
+
+        # Con cambios (payload cambia 1 campo)
+        diff = check_record_changes(record, {"custom_fields": {"env": "dev"}})
+        assert diff == {"custom_fields": {"env": "dev"}}
+
+        # Con cambios (añade 1 campo nuevo)
+        diff = check_record_changes(record, {"custom_fields": {"new_tag": "test"}})
+        assert diff == {"custom_fields": {"new_tag": "test"}}

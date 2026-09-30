@@ -772,26 +772,64 @@ def check_record_changes(
 ) -> NetBoxPayload:
     """
     Determina qué campos cambiarían en el Record al aplicar el payload,
-    sin persistir cambios ni realizar llamadas HTTP.
+    comparando explícitamente atributo por atributo para evitar dependencias
+    de APIs privadas de pynetbox.
+
     Retorna un diccionario con las modificaciones detectadas.
-
-    Nota: Utiliza Record._init_cache (API interna de pynetbox, verificado
-    en v7.8.0) para clonar el estado original. Si la API interna cambia
-    en una versión futura, el fallback asume conservadoramente que todos
-    los campos del payload han cambiado.
     """
-    try:
-        temp = Record(dict(record._init_cache), record.api, record.endpoint)
-    except (AttributeError, TypeError):
-        log.debug(
-            "Fallback en check_record_changes: _init_cache no disponible; "
-            "se asume que todos los campos del payload han cambiado."
-        )
-        return dict(payload)
+    updates: NetBoxPayload = {}
 
-    for k, v in payload.items():
-        setattr(temp, k, v)
-    return temp.updates()
+    for key, new_val in payload.items():
+        if not hasattr(record, key):
+            updates[key] = new_val
+            continue
+
+        curr_val = getattr(record, key)
+
+        # 1. Caso Custom Fields (Merge de diccionarios parciales)
+        if key == "custom_fields" and isinstance(new_val, dict):
+            if not isinstance(curr_val, dict):
+                updates[key] = new_val
+                continue
+
+            changed = False
+            for cf_k, cf_v in new_val.items():
+                if curr_val.get(cf_k) != cf_v:
+                    changed = True
+                    break
+            if changed:
+                updates[key] = new_val
+            continue
+
+        # 2. Caso Relaciones u Objetos anidados de pynetbox
+        if curr_val is not None:
+            # Foreign Key enviada como ID (int)
+            if hasattr(curr_val, "id") and isinstance(new_val, int):
+                if curr_val.id != new_val:
+                    updates[key] = new_val
+                continue
+
+            # Foreign Key enviada como diccionario (ej. {"id": X})
+            if (
+                hasattr(curr_val, "id")
+                and isinstance(new_val, dict)
+                and "id" in new_val
+            ):
+                if curr_val.id != new_val["id"]:
+                    updates[key] = new_val
+                continue
+
+            # Selectores por Value (ej. status="active")
+            if hasattr(curr_val, "value") and isinstance(new_val, str):
+                if curr_val.value != new_val:
+                    updates[key] = new_val
+                continue
+
+        # 3. Caso Base: Comparación plana de equivalencia
+        if curr_val != new_val:
+            updates[key] = new_val
+
+    return updates
 
 
 def parse_int(value: Any) -> int:
