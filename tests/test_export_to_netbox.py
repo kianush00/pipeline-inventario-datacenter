@@ -1372,7 +1372,9 @@ class TestEnsureManufacturer:
         endpoint = MagicMock()
         cache: dict[str, NetBoxObject] = {"Dell": MockNetBoxRecord(id=5, name="Dell")}
 
-        result, returned_cache = ensure_manufacturer(endpoint, "Dell", cache, dry_run=False)
+        result, returned_cache = ensure_manufacturer(
+            endpoint, "Dell", cache, dry_run=False
+        )
         assert result.id == 5
         assert returned_cache is cache
         assert returned_cache["Dell"].id == 5
@@ -1384,7 +1386,9 @@ class TestEnsureManufacturer:
         endpoint.filter.return_value = [mock_mfg]
         cache: dict[str, NetBoxObject] = {}
 
-        result, returned_cache = ensure_manufacturer(endpoint, "HP", cache, dry_run=False)
+        result, returned_cache = ensure_manufacturer(
+            endpoint, "HP", cache, dry_run=False
+        )
         assert result.id == 6
         assert returned_cache is cache
         assert returned_cache["HP"].id == 6
@@ -1397,7 +1401,9 @@ class TestEnsureManufacturer:
         endpoint.filter.side_effect = [[], [mock_mfg]]
         cache: dict[str, NetBoxObject] = {}
 
-        result, returned_cache = ensure_manufacturer(endpoint, "H.P.", cache, dry_run=False)
+        result, returned_cache = ensure_manufacturer(
+            endpoint, "H.P.", cache, dry_run=False
+        )
         assert result.id == 7
         assert returned_cache is cache
         assert returned_cache["H.P."].id == 7
@@ -1411,7 +1417,9 @@ class TestEnsureManufacturer:
         endpoint.create.return_value = mock_created
         cache: dict[str, NetBoxObject] = {}
 
-        result, returned_cache = ensure_manufacturer(endpoint, "Lenovo", cache, dry_run=False)
+        result, returned_cache = ensure_manufacturer(
+            endpoint, "Lenovo", cache, dry_run=False
+        )
         assert result.id == 8
         assert returned_cache is cache
         assert returned_cache["Lenovo"].id == 8
@@ -1515,7 +1523,9 @@ class TestResolveDeviceTypeUHeight:
     def test_fractional_u_height(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Mock dependencias para aislar _resolve_device_type
         monkeypatch.setattr(
-            export_to_netbox, "ensure_manufacturer", lambda *args, **kwargs: (MagicMock(), MagicMock())
+            export_to_netbox,
+            "ensure_manufacturer",
+            lambda *args, **kwargs: (MagicMock(), MagicMock()),
         )
 
         mock_ensure_device_type = MagicMock(return_value=(MagicMock(), MagicMock()))
@@ -1553,7 +1563,9 @@ class TestResolveDeviceTypeUHeight:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            export_to_netbox, "ensure_manufacturer", lambda *args, **kwargs: (MagicMock(), MagicMock())
+            export_to_netbox,
+            "ensure_manufacturer",
+            lambda *args, **kwargs: (MagicMock(), MagicMock()),
         )
         mock_ensure_device_type = MagicMock(return_value=(MagicMock(), MagicMock()))
         monkeypatch.setattr(
@@ -1697,11 +1709,15 @@ class TestSyncSkips:
             "inventory_uuid": MagicMock(source="inventory_uuid"),
         }
 
-        mock_base_node.return_value = {
-            "machine_name": "vm1",
-            "inventory_uuid": "1234",
-            "payload": {},
-        }
+        mock_base_node.return_value = (
+            {
+                "machine_name": "vm1",
+                "inventory_uuid": "1234",
+                "machine_type": "vm",
+                "payload": {},
+            },
+            MagicMock(),
+        )
 
         with pytest.raises(
             RowSkipCondition, match="Falló la resolución del cluster 'Cluster-X'"
@@ -1744,22 +1760,26 @@ class TestSyncDevice:
             "machine_type": MagicMock(source="machine_type"),
         }
 
-        mock_base_node.return_value = {
-            "machine_name": "srv1",
-            "inventory_uuid": "1234",
-            "machine_type": "server",
-            "payload": {"position": 10},  # NetBox API exige face si hay position
-        }
+        mock_caches = MagicMock()
+        mock_base_node.return_value = (
+            {
+                "machine_name": "srv1",
+                "inventory_uuid": "1234",
+                "machine_type": "server",
+                "payload": {"position": 10},  # NetBox API exige face si hay position
+            },
+            mock_caches,
+        )
         mock_validate_sync.return_value = (SyncStatus.CREATED, 1, MagicMock())
 
-        _ = sync_device(
+        _, returned_caches = sync_device(
             endpoints=MagicMock(),
             row=row,
             config=mock_config,
             site=MagicMock(),
             cluster_type_map={},
             fallback_cluster_type=MagicMock(),
-            caches=MagicMock(),
+            caches=mock_caches,
             csv_name_counts=Counter(),
             dry_run=False,
         )
@@ -1768,13 +1788,16 @@ class TestSyncDevice:
         payload_passed = mock_validate_sync.call_args[0][1]
         assert payload_passed["face"] == "front"
         assert payload_passed["position"] == 10
+        assert returned_caches is mock_caches
 
 
 class TestGetOrCreateCached:
     def test_returns_from_cache(self) -> None:
         endpoint = MagicMock()
         cache: dict[Any, Any] = {"key1": "mock_obj"}
-        result, returned_cache = _get_or_create_cached(endpoint, cache, "key1", {}, {}, "Test", False)
+        result, returned_cache = _get_or_create_cached(
+            endpoint, cache, "key1", {}, {}, "Test", False
+        )
         assert result == "mock_obj"
         assert returned_cache is cache
         assert returned_cache["key1"] == "mock_obj"
@@ -1965,3 +1988,51 @@ class TestEnsureTaxonomyQACases:
             _sync_device_type_u_height(
                 existing_dt=mock_record, model="R640", target_height=2.0, dry_run=False
             )
+
+
+class TestSyncVM:
+    @patch("export_to_netbox._resolve_base_node")
+    @patch("export_to_netbox._resolve_cluster")
+    @patch("export_to_netbox._validate_sync")
+    def test_sync_vm_cache_propagation(
+        self,
+        mock_validate_sync: MagicMock,
+        mock_cluster: MagicMock,
+        mock_base_node: MagicMock,
+    ) -> None:
+        row = {"machine_name": "vm1", "cluster_name": "Cluster-X"}
+
+        mock_config = MagicMock()
+        mock_config.is_empty.return_value = False
+        mock_config.csv_columns = {
+            "cluster_name": MagicMock(source="cluster_name"),
+            "machine_name": MagicMock(source="machine_name"),
+            "host_device": MagicMock(source="host_device"),
+        }
+
+        mock_caches = MagicMock()
+        mock_base_node.return_value = (
+            {
+                "machine_name": "vm1",
+                "inventory_uuid": "1234",
+                "machine_type": "vm",
+                "payload": {},
+            },
+            mock_caches,
+        )
+        mock_cluster.return_value = (1, mock_caches.clusters)
+        mock_validate_sync.return_value = (SyncStatus.CREATED, 1, MagicMock())
+
+        _, returned_caches = sync_vm(
+            endpoints=MagicMock(),
+            row=row,
+            config=mock_config,
+            site=MagicMock(),
+            cluster_type_map={},
+            fallback_cluster_type=MagicMock(),
+            caches=mock_caches,
+            csv_name_counts=Counter(),
+            dry_run=False,
+        )
+
+        assert returned_caches is mock_caches

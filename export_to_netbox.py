@@ -2255,7 +2255,7 @@ def _resolve_base_node(
     native_maps: list[FieldMappingConfig],
     custom_maps: list[FieldMappingConfig],
     dry_run: bool,
-) -> BaseNodeData:
+) -> tuple[BaseNodeData, CacheStore]:
     """
     Resuelve los campos comunes entre device y virtual_machine.
     """
@@ -2280,7 +2280,7 @@ def _resolve_base_node(
         "inventory_uuid": uuid,
         "machine_type": machine_type,
         "payload": payload,
-    }
+    }, caches
 
 
 def _find_existing_object(
@@ -2474,7 +2474,7 @@ def sync_device(
     caches: CacheStore,
     csv_name_counts: Counter[str],
     dry_run: bool,
-) -> SyncResult:
+) -> tuple[SyncResult, CacheStore]:
     """
     Sincroniza una fila de tipo "device" o "hipervisor" con NetBox.
     Retorna: (SyncStatus, obj_id)
@@ -2488,7 +2488,7 @@ def sync_device(
     node_cfg = config.node_types.get_config(NodeType.DEVICE)
 
     # Resolvemos los campos base
-    base = _resolve_base_node(
+    base, caches = _resolve_base_node(
         NodeType.DEVICE,
         endpoints,
         row,
@@ -2557,7 +2557,7 @@ def sync_device(
     )
 
     # ── GET o CREATE/UPDATE ──────────────────────────────────
-    return _validate_sync(
+    sync_res = _validate_sync(
         endpoints.devices,
         payload,
         machine_name,
@@ -2566,6 +2566,7 @@ def sync_device(
         config,
         dry_run,
     )
+    return sync_res, caches
 
 
 def sync_vm(
@@ -2578,7 +2579,7 @@ def sync_vm(
     caches: CacheStore,
     csv_name_counts: Counter[str],
     dry_run: bool,
-) -> SyncResult:
+) -> tuple[SyncResult, CacheStore]:
     """
     Sincroniza una fila de tipo "virtual_machine" con NetBox.
     Retorna: (SyncStatus, obj_id)
@@ -2591,7 +2592,7 @@ def sync_vm(
     node_cfg = config.node_types.get_config(NodeType.VIRTUAL_MACHINE)
 
     # Resolvemos los campos base
-    base = _resolve_base_node(
+    base, caches = _resolve_base_node(
         NodeType.VIRTUAL_MACHINE,
         endpoints,
         row,
@@ -2638,7 +2639,7 @@ def sync_vm(
         payload["device"] = host_dev_id
 
     # ── GET o CREATE/UPDATE ──────────────────────────────────
-    return _validate_sync(
+    sync_res = _validate_sync(
         endpoints.virtual_machines,
         payload,
         machine_name,
@@ -2647,6 +2648,7 @@ def sync_vm(
         config,
         dry_run,
     )
+    return sync_res, caches
 
 
 # ============================================================
@@ -3330,10 +3332,10 @@ def _process_node_sync(
     caches: CacheStore,
     csv_name_counts: Counter[str],
     dry_run: bool,
-) -> tuple[SyncStatus, int, NetBoxObject | None]:
+) -> tuple[tuple[SyncStatus, int, NetBoxObject | None], CacheStore]:
     """Sincroniza el nodo principal (Device o VM) en NetBox."""
     if node_type == NodeType.DEVICE:
-        result, obj_id, main_obj = sync_device(
+        sync_res, caches = sync_device(
             endpoints,
             row,
             config,
@@ -3344,10 +3346,11 @@ def _process_node_sync(
             csv_name_counts,
             dry_run,
         )
+        result, obj_id, main_obj = sync_res
         site_id = get_netbox_object_id(site)
         caches.host_devices[(site_id, machine_name)] = obj_id
     else:
-        result, obj_id, main_obj = sync_vm(
+        sync_res, caches = sync_vm(
             endpoints,
             row,
             config,
@@ -3358,7 +3361,8 @@ def _process_node_sync(
             csv_name_counts,
             dry_run,
         )
-    return result, obj_id, main_obj
+        result, obj_id, main_obj = sync_res
+    return (result, obj_id, main_obj), caches
 
 
 def _sync_row(
@@ -3375,7 +3379,7 @@ def _sync_row(
     counts: SyncCounts,
     dry_run: bool,
     prune_interfaces: bool = False,
-) -> SyncCounts:
+) -> tuple[SyncCounts, CacheStore]:
     """
     Sincroniza una fila individual del CSV con NetBox, incluyendo
     la creación/actualización del objeto principal y sus interfaces de red.
@@ -3386,7 +3390,7 @@ def _sync_row(
     machine_name = extract_csv_value(row, "machine_name", config) or f"fila {row_num}"
 
     try:
-        result, obj_id, main_obj = _process_node_sync(
+        sync_res, caches = _process_node_sync(
             machine_name,
             row,
             node_type,
@@ -3399,6 +3403,7 @@ def _sync_row(
             csv_name_counts,
             dry_run,
         )
+        result, obj_id, main_obj = sync_res
     except ConfigValidationError as e:
         raise ConfigValidationError(
             f"Error de configuración en fila {row_num}: {e}"
@@ -3406,11 +3411,11 @@ def _sync_row(
     except RowSkipCondition as e:
         log.warning("SKIP fila %d: %s", row_num, e)
         counts[SyncStatus.SKIPPED] += 1
-        return counts
+        return counts, caches
     except (NetBoxApiError, RowValidationError, RequestError):
         log.exception("ERROR de API o validación en fila %d", row_num)
         counts[SyncStatus.ERROR] += 1
-        return counts
+        return counts, caches
     except Exception:
         log.exception(
             "ERROR inesperado al procesar fila %d ('%s')",
@@ -3418,7 +3423,7 @@ def _sync_row(
             machine_name,
         )
         counts[SyncStatus.ERROR] += 1
-        return counts
+        return counts, caches
 
     counts[result] += 1
 
@@ -3426,7 +3431,7 @@ def _sync_row(
     if not obj_id:
         if not dry_run:
             log.warning("SKIP interfaces de '%s': el objeto no tiene ID.", machine_name)
-        return counts
+        return counts, caches
 
     # ── Parsear interfaces ────────────────────────────────
     try:
@@ -3434,11 +3439,11 @@ def _sync_row(
     except RowValidationError as e:
         log.warning("Omitiendo interfaces de '%s': %s", machine_name, e)
         counts[SyncStatus.ERROR] += 1
-        return counts
+        return counts, caches
     except Exception:
         log.exception("ERROR inesperado al parsear interfaces de '%s'", machine_name)
         counts[SyncStatus.ERROR] += 1
-        return counts
+        return counts, caches
 
     # ── Sincronizar interfaces del objeto ─────────────────
     try:
@@ -3460,7 +3465,7 @@ def _sync_row(
         )
         counts[SyncStatus.ERROR] += 1
 
-    return counts
+    return counts, caches
 
 
 def _print_summary_and_exit(
@@ -3613,7 +3618,7 @@ def main() -> None:
     # ── Fase 1: Sincronizar Devices ──────────────────────────
     log.info("── Fase 1: Sincronizando %d Device(s) ──", len(device_rows))
     for row_num, row in device_rows:
-        counts = _sync_row(
+        counts, caches = _sync_row(
             row_num,
             row,
             NodeType.DEVICE,
@@ -3632,7 +3637,7 @@ def main() -> None:
     # ── Fase 2: Sincronizar VMs ──────────────────────────────
     log.info("── Fase 2: Sincronizando %d VM(s) ──", len(vm_rows))
     for row_num, row in vm_rows:
-        counts = _sync_row(
+        counts, caches = _sync_row(
             row_num,
             row,
             NodeType.VIRTUAL_MACHINE,
