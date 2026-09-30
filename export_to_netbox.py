@@ -228,6 +228,10 @@ class SiteConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def generate_slug_if_missing(cls, data: Any) -> Any:
+        """
+        Genera un slug automáticamente a partir del nombre si el valor está vacío.
+        Retorna el slug generado o el valor original.
+        """
         if isinstance(data, dict):
             raw_slug = data.get("slug") or data.get("name")
             if raw_slug:
@@ -237,6 +241,10 @@ class SiteConfig(BaseModel):
     @field_validator("name", "slug")
     @classmethod
     def validate_no_unresolved_vars(cls, v: str | None) -> str | None:
+        """
+        Valida que el string no contenga variables sin resolver (marcadas con @@).
+        Retorna el valor original si es válido.
+        """
         if v is not None and "$" in v and re.search(r"\$\{?\w+\}?", v):
             raise ValueError(
                 f"El valor contiene variables de entorno no resueltas: '{v}'"
@@ -252,6 +260,10 @@ class ClusterTypeDefaultConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def generate_slug_if_missing(cls, data: Any) -> Any:
+        """
+        Genera un slug automáticamente a partir del nombre si el valor está vacío.
+        Retorna el slug generado o el valor original.
+        """
         if isinstance(data, dict):
             raw_slug = data.get("slug") or data.get("name")
             if raw_slug:
@@ -279,6 +291,10 @@ class DeviceRoleConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def generate_slug_if_missing(cls, data: Any) -> Any:
+        """
+        Genera un slug automáticamente a partir del nombre si el valor está vacío.
+        Retorna el slug generado o el valor original.
+        """
         if isinstance(data, dict):
             raw_slug = data.get("slug") or data.get("name")
             if raw_slug:
@@ -337,6 +353,10 @@ class CustomFieldConfig(BaseModel):
     @field_validator("object_types")
     @classmethod
     def validate_object_types(cls, v: list[str]) -> list[str]:
+        """
+        Valida que los tipos de objeto estén en la lista permitida.
+        Retorna la lista de object_types si es válida.
+        """
         for ot in v:
             if not OBJECT_TYPE_PATTERN.match(ot):
                 raise ValueError(
@@ -347,6 +367,10 @@ class CustomFieldConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_choice_set_if_select(self) -> "CustomFieldConfig":
+        """
+        Valida que un campo de tipo select tenga definido un choice_set.
+        Retorna la configuración actual si es válida.
+        """
         if self.type in ("select", "multiselect") and not self.choice_set:
             raise ValueError(
                 "Los campos de tipo 'select' o 'multiselect' deben definir un 'choice_set'."
@@ -368,6 +392,10 @@ class FieldMappingConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_transform_and_source(self) -> "FieldMappingConfig":
+        """
+        Valida las configuraciones de transformación y columna de origen.
+        Retorna la configuración actual si es válida.
+        """
         source_list = self.source if isinstance(self.source, list) else [self.source]
 
         if not source_list:
@@ -459,7 +487,9 @@ class NetBoxMappingConfig(BaseModel):
     )
 
     def model_post_init(self, __context: Any, /) -> None:
-        """Inicializa los valores vacíos y el mapa indexado de Custom Fields O(1)."""
+        """
+        Inicializa los valores vacíos y el mapa indexado de Custom Fields O(1).
+        """
         empty_vals_lower = {v.lower() for v in self.empty_values}
         object.__setattr__(
             self,
@@ -474,6 +504,10 @@ class NetBoxMappingConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_config_cross_references(self) -> "NetBoxMappingConfig":
+        """
+        Valida que las referencias cruzadas dentro de la configuración sean correctas.
+        Retorna la configuración completa si es válida.
+        """
         # 1. Validar que exista el rol "Others" (insensible a mayúsculas) para fallback
         role_names_lower = {r.name.strip().lower() for r in self.device_roles}
         if "others" not in role_names_lower:
@@ -527,7 +561,10 @@ class NetBoxMappingConfig(BaseModel):
         return {v.source for v in self.csv_columns.values()}
 
     def get_column_def_by_source(self, source_name: str) -> CsvColumnDef | None:
-        """Busca y retorna la definición de la columna a partir de su nombre exacto (source) en el CSV."""
+        """
+        Busca la definición de la columna a partir de su nombre exacto (source) en el CSV.
+        Retorna la definición de la columna si existe, None en caso contrario.
+        """
         for col_def in self.csv_columns.values():
             if col_def.source == source_name:
                 return col_def
@@ -536,6 +573,10 @@ class NetBoxMappingConfig(BaseModel):
     def _apply_map(
         self, col_def: CsvColumnDef | None, value: str, identifier: str, strict: bool
     ) -> Any:
+        """
+        Aplica un diccionario de mapeo a un valor dado.
+        Retorna el valor mapeado, o lanza una excepción si strict=True y no hay coincidencia.
+        """
         if not col_def or not col_def.map:
             return value
 
@@ -552,17 +593,17 @@ class NetBoxMappingConfig(BaseModel):
 
     def map_value(self, alias: str, value: str, strict: bool = True) -> Any:
         """
-        Aplica el mapa de transformación de la columna identificada por su `alias`.
-        Si la columna no tiene mapa, devuelve el `value` original.
-        Si la columna tiene mapa y el valor no existe en él:
-            - Si strict=True, levanta RowValidationError.
-            - Si strict=False, devuelve None.
+        Aplica el mapa de transformación de la columna identificada por su alias.
+        Retorna el valor transformado.
         """
         col_def = self.csv_columns.get(alias)
         return self._apply_map(col_def, value, f"columna '{alias}'", strict)
 
     def map_value_by_source(self, source: str, value: str, strict: bool = True) -> Any:
-        """Igual que map_value, pero busca la columna por su nombre exacto (source) en el CSV."""
+        """
+        Igual que map_value, pero busca la columna por su nombre exacto (source) en el CSV.
+        Retorna el valor transformado.
+        """
         col_def = self.get_column_def_by_source(source)
         return self._apply_map(col_def, value, f"columna de origen '{source}'", strict)
 
@@ -575,16 +616,19 @@ class NetBoxMappingConfig(BaseModel):
         return list(self._custom_field_defs_map.values())
 
     def is_empty(self, value: Any) -> bool:
-        """Determina si un valor es considerado vacío según empty_values."""
+        """
+        Determina si un valor es considerado vacío según empty_values.
+        Retorna True si el valor se considera vacío, False de lo contrario.
+        """
         if value is None:
             return True
         return str(value).strip().lower() in self._empty_values_set
 
     def resolve_node_type(self, machine_type: str) -> NodeType:
         """
-        Resuelve el NodeType ('device' o 'virtual_machine') basándose en las listas
-        semánticas de virtual_machine_types.
+        Resuelve el NodeType basándose en las listas semánticas.
         Lanza RowValidationError si el campo está vacío.
+        Retorna el NodeType correspondiente.
         """
         if not machine_type:
             raise RowValidationError("El campo 'machine_type' está vacío.")
@@ -1610,6 +1654,10 @@ def _sync_choice_set_choices(
     """Sincroniza las opciones (choices) de un choice set."""
 
     def _get_choice_set_id(ch_set: Record) -> int:
+        """
+        Busca un Choice Set por su nombre.
+        Retorna el ID del Choice Set encontrado, o lanza una excepción si no existe.
+        """
         return cast(int, getattr(ch_set, "id", 0))
 
     extra_choices: Any = getattr(choice_set, "extra_choices", None)
@@ -1647,6 +1695,10 @@ def _ensure_choice_set(
     """Crea un choice set si no existe en NetBox."""
 
     def _get_choice_set_choices(choices: list[ChoiceItemConfig]) -> list[list[str]]:
+        """
+        Busca un Choice Set por su nombre y obtiene sus opciones (choices).
+        Retorna una lista de listas con los valores y etiquetas de cada opción.
+        """
         return [[choice.value, choice.label] for choice in choices]
 
     choice_set_name: str = choice_set_cfg.name
@@ -2200,6 +2252,7 @@ def _resolve_host_device(
     """
     Resuelve y cachea el ID del Device correspondiente al hipervisor host,
     acotado estrictamente al site configurado.
+    Retorna el ID del host o None si no se encuentra.
     """
     host_name_csv = extract_csv_value(row, "host_device", config)
     if not host_name_csv:
@@ -2258,6 +2311,7 @@ def _resolve_base_node(
 ) -> tuple[BaseNodeData, CacheStore]:
     """
     Resuelve los campos comunes entre device y virtual_machine.
+    Retorna una tupla con los datos del nodo base y la caché actualizada.
     """
     machine_name = extract_csv_value(row, "machine_name", config, required=True)
     uuid = extract_csv_value(row, "inventory_uuid", config).lower()
@@ -2477,7 +2531,7 @@ def sync_device(
 ) -> tuple[SyncResult, CacheStore]:
     """
     Sincroniza una fila de tipo "device" o "hipervisor" con NetBox.
-    Retorna: (SyncStatus, obj_id)
+    Retorna una tupla con el resultado del sincronizado y la caché actualizada.
     """
     # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
     manufacturer = extract_csv_value(row, "manufacturer", config)
@@ -2582,7 +2636,7 @@ def sync_vm(
 ) -> tuple[SyncResult, CacheStore]:
     """
     Sincroniza una fila de tipo "virtual_machine" con NetBox.
-    Retorna: (SyncStatus, obj_id)
+    Retorna una tupla con el resultado del sincronizado y la caché actualizada.
     """
     # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
     cluster_name = extract_csv_value(row, "cluster_name", config)
@@ -2709,7 +2763,10 @@ def _parse_single_network_interface(
         )
 
     def get_raw_value_or_none(raw_value: str) -> str | None:
-        """Obtiene el valor crudo si no está vacío, None en caso contrario."""
+        """
+        Filtra el valor crudo.
+        Retorna el valor original si no está vacío, o None en caso contrario.
+        """
         return raw_value if not config.is_empty(raw_value) else None
 
     enabled = status_map.get(status_raw.lower().strip(), True)
@@ -2772,6 +2829,10 @@ def _parse_network_interfaces(
     """
 
     def split_col(col_name: str) -> list[str]:
+        """
+        Divide una celda CSV separada por comas.
+        Retorna una lista de strings con espacios en blanco removidos.
+        """
         raw = row.get(col_name, "")
         return [v.strip() for v in raw.split(",")] if not config.is_empty(raw) else []
 
@@ -2799,6 +2860,10 @@ def _parse_network_interfaces(
         )
 
     def fill_if_empty(lst: list[str]) -> list[str]:
+        """
+        Asegura que la lista tenga el tamaño requerido si está vacía.
+        Retorna la lista original si tiene elementos, o una lista de strings vacíos de tamaño max_len.
+        """
         return lst if lst else [""] * max_len
 
     cols = {k: fill_if_empty(lst) for k, lst in cols.items()}
@@ -3191,7 +3256,10 @@ def _assign_primary_resource(
     dry_run: bool,
     resource_type_label: str,
 ) -> bool:
-    """Helper genérico para asignar recursos primarios (IP primaria, MAC primaria)."""
+    """
+    Helper genérico para asignar recursos primarios (IP primaria, MAC primaria).
+    Retorna True si se asignó exitosamente (o se simuló en dry-run), False de lo contrario.
+    """
     current_primary = getattr(target_obj, field_name, None)
     current_primary_id = (
         getattr(current_primary, "id", None) if current_primary else None
@@ -3251,7 +3319,10 @@ def _assign_primary_mac(
     mac_obj: NetBoxObject | None,
     dry_run: bool,
 ) -> bool:
-    """Asigna la MAC como primaria en la interfaz si aún no lo está."""
+    """
+    Asigna la MAC como primaria en la interfaz si aún no lo está.
+    Retorna True si se asignó exitosamente (o se simuló en dry-run), False de lo contrario.
+    """
     if not mac_obj:
         return False
 
@@ -3282,7 +3353,10 @@ def process_interfaces_and_ips(
     counts: SyncCounts,
     result: SyncStatus,
 ) -> SyncCounts:
-    """Sincroniza interfaces y asigna la IP/MAC primaria, mutando los contadores."""
+    """
+    Sincroniza interfaces y asigna la IP/MAC primaria, mutando los contadores.
+    Retorna un objeto SyncCounts con los contadores de las operaciones realizadas.
+    """
     iface_errors, ipv4_candidates, ifaces_changed = _sync_interfaces_for_object(
         endpoints,
         obj_id,
@@ -3332,8 +3406,11 @@ def _process_node_sync(
     caches: CacheStore,
     csv_name_counts: Counter[str],
     dry_run: bool,
-) -> tuple[tuple[SyncStatus, int, NetBoxObject | None], CacheStore]:
-    """Sincroniza el nodo principal (Device o VM) en NetBox."""
+) -> tuple[SyncResult, CacheStore]:
+    """
+    Procesa el sincronizado de un nodo (Device o VM) en NetBox.
+    Retorna una tupla con el resultado del sincronizado y la caché actualizada.
+    """
     if node_type == NodeType.DEVICE:
         sync_res, caches = sync_device(
             endpoints,
@@ -3346,9 +3423,9 @@ def _process_node_sync(
             csv_name_counts,
             dry_run,
         )
-        result, obj_id, main_obj = sync_res
         site_id = get_netbox_object_id(site)
-        caches.host_devices[(site_id, machine_name)] = obj_id
+        caches.host_devices[(site_id, machine_name)] = sync_res[1]
+        return sync_res, caches
     else:
         sync_res, caches = sync_vm(
             endpoints,
@@ -3361,8 +3438,7 @@ def _process_node_sync(
             csv_name_counts,
             dry_run,
         )
-        result, obj_id, main_obj = sync_res
-    return (result, obj_id, main_obj), caches
+        return sync_res, caches
 
 
 def _sync_row(
@@ -3383,9 +3459,10 @@ def _sync_row(
     """
     Sincroniza una fila individual del CSV con NetBox, incluyendo
     la creación/actualización del objeto principal y sus interfaces de red.
-
     Gestiona internamente todas las excepciones esperadas y actualiza
     los contadores de resultado en el diccionario mutable `counts`.
+
+    Retorna una tupla con los contadores actualizados y la caché actualizada.
     """
     machine_name = extract_csv_value(row, "machine_name", config) or f"fila {row_num}"
 
@@ -3473,7 +3550,10 @@ def _print_summary_and_exit(
     counts: SyncCounts,
     dry_run: bool,
 ) -> NoReturn:
-    """Imprime el resumen de la operación y finaliza la ejecución."""
+    """
+    Imprime el resumen de la operación y finaliza la ejecución.
+    Finaliza con sys.exit().
+    """
     summary = (
         "\n" + "=" * 50 + "\n"
         "Resumen de exportación a NetBox\n" + "=" * 50 + "\n"
