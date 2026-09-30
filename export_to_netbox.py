@@ -52,7 +52,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, NoReturn, TypeAlias, TypedDict, Union, cast
+from typing import Any, Literal, NamedTuple, NoReturn, TypeAlias, TypedDict, Union, cast
 
 import requests
 import urllib3
@@ -154,6 +154,37 @@ FieldValue: TypeAlias = str | int | float | bool | list[str] | None
 CustomFieldsPayload: TypeAlias = dict[str, FieldValue]
 SyncCounts: TypeAlias = dict[SyncStatus, int]
 NetBoxPayload: TypeAlias = dict[str, Any]
+
+
+class Ipv4Candidate(NamedTuple):
+    """Tupla que representa un candidato a IPv4 primaria: (ip_id, iface_obj, mac_obj)."""
+
+    ip_id: int
+    iface_obj: NetBoxObject
+    mac_obj: NetBoxObject | None
+
+
+class SingleInterfaceResult(NamedTuple):
+    """
+    Resultado de procesar una única interfaz.
+    Contiene: (Interfaz, IP asignada o None, MAC asignada o None, booleano indicando si hubo cambios).
+    """
+
+    iface_obj: NetBoxObject
+    ip_obj: NetBoxObject | None
+    mac_obj: NetBoxObject | None
+    any_changes: bool
+
+
+class InterfaceSyncResult(NamedTuple):
+    """
+    Resultado global de procesar una lista de interfaces para un nodo.
+    Contiene: (cantidad de errores, lista de candidatos a IP primaria, booleano indicando si hubo cambios).
+    """
+
+    errors: int
+    ipv4_candidates: list[Ipv4Candidate]
+    any_changes: bool
 
 
 class NetworkInterfaceData(TypedDict):
@@ -3078,17 +3109,10 @@ def _sync_single_interface(
     existing_ifaces: dict[str, NetBoxObject],
     endpoints: NetBoxEndpoints,
     dry_run: bool,
-) -> tuple[
-    NetBoxObject,
-    NetBoxObject | None,
-    NetBoxObject | None,
-    bool,
-    dict[str, NetBoxObject],
-]:
+) -> tuple[SingleInterfaceResult, dict[str, NetBoxObject]]:
     """
     Sincroniza una interfaz individual y le asigna su IP y MAC.
-    Retorna una tupla con (Interfaz, IP asignada o None, MAC asignada o None, hubo
-    cambios, caché actualizada).
+    Retorna una tupla: (SingleInterfaceResult, caché actualizada).
     """
     name = iface_data["name"]
     payload: NetBoxPayload = {"name": name, "enabled": iface_data["enabled"]}
@@ -3124,7 +3148,9 @@ def _sync_single_interface(
         )
 
     any_changes = iface_changed or ip_changed or mac_changed
-    return iface_obj, ip_obj, mac_obj, any_changes, existing_ifaces
+    return SingleInterfaceResult(
+        iface_obj, ip_obj, mac_obj, any_changes
+    ), existing_ifaces
 
 
 def _prune_orphan_interfaces(
@@ -3192,44 +3218,37 @@ def _process_interfaces_sync(
     existing_ifaces: dict[str, NetBoxObject],
     endpoints: NetBoxEndpoints,
     dry_run: bool,
-) -> tuple[
-    int,
-    list[tuple[int, NetBoxObject, NetBoxObject | None]],
-    bool,
-    dict[str, NetBoxObject],
-]:
+) -> tuple[InterfaceSyncResult, dict[str, NetBoxObject]]:
     """Ejecuta la sincronización de una lista de interfaces y recopila IPs asignadas.
-    Retorna una tupla: (cantidad de errores, lista de (ip_id, iface_obj, mac_obj),
-    hubo cambios, caché actualizada)."""
+    Retorna una tupla: (InterfaceSyncResult, caché actualizada)."""
     errors = 0
-    ipv4_candidates: list[tuple[int, NetBoxObject, NetBoxObject | None]] = []
+    ipv4_candidates: list[Ipv4Candidate] = []
     any_changes = False
 
     for iface_data in interfaces:
         try:
-            iface_obj, ip_obj, mac_obj, iface_changed, existing_ifaces = (
-                _sync_single_interface(
-                    iface_data,
-                    obj_id,
-                    iface_endpoint,
-                    existing_ifaces,
-                    endpoints,
-                    dry_run,
-                )
+            single_result, existing_ifaces = _sync_single_interface(
+                iface_data,
+                obj_id,
+                iface_endpoint,
+                existing_ifaces,
+                endpoints,
+                dry_run,
             )
+            iface_obj, ip_obj, mac_obj, iface_changed = single_result
             any_changes |= iface_changed
 
             if ip_obj is not None:
                 address = getattr(ip_obj, "address", "")
                 if address and ":" not in str(address):
                     ipv4_candidates.append(
-                        (getattr(ip_obj, "id", 0), iface_obj, mac_obj)
+                        Ipv4Candidate(int(getattr(ip_obj, "id", 0)), iface_obj, mac_obj)
                     )
         except NetBoxApiError:
             log.exception("ERROR de API sincronizando interfaz")
             errors += 1
 
-    return errors, ipv4_candidates, any_changes, existing_ifaces
+    return InterfaceSyncResult(errors, ipv4_candidates, any_changes), existing_ifaces
 
 
 def _sync_interfaces_for_object(
@@ -3239,17 +3258,18 @@ def _sync_interfaces_for_object(
     interfaces: list[NetworkInterfaceData],
     dry_run: bool,
     prune_interfaces: bool = False,
-) -> tuple[int, list[tuple[int, NetBoxObject, NetBoxObject | None]], bool]:
+) -> InterfaceSyncResult:
     """Sincroniza interfaces y sus IPs para un Device o VM.
-    Retorna una tupla: (cantidad de errores, candidatos IPv4, hubo cambios)."""
+    Retorna: InterfaceSyncResult."""
     iface_endpoint, iface_filter = _get_interface_endpoint_and_filter(
         endpoints, obj_id, node_type
     )
     existing_ifaces = _fetch_existing_interfaces(iface_endpoint, iface_filter, obj_id)
 
-    errors, ipv4_candidates, any_changes, existing_ifaces = _process_interfaces_sync(
+    sync_res, existing_ifaces = _process_interfaces_sync(
         interfaces, obj_id, iface_endpoint, existing_ifaces, endpoints, dry_run
     )
+    errors, ipv4_candidates, any_changes = sync_res
 
     if prune_interfaces and obj_id != 0:
         csv_names = {iface["name"] for iface in interfaces}
@@ -3259,7 +3279,7 @@ def _sync_interfaces_for_object(
         errors += prune_errors
         any_changes |= pruned_count > 0
 
-    return errors, ipv4_candidates, any_changes
+    return InterfaceSyncResult(errors, ipv4_candidates, any_changes)
 
 
 def _assign_primary_resource(

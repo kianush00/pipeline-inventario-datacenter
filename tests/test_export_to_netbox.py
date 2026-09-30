@@ -2095,8 +2095,9 @@ class TestSyncSingleInterface:
         mock_assign_ip.return_value = (MagicMock(), False)
         mock_assign_mac.return_value = (MagicMock(), False)
 
-        # Mock de endpoints
         mock_endpoints = MagicMock(spec=NetBoxEndpoints)
+        mock_endpoints.ip_addresses = MagicMock()
+        mock_endpoints.mac_addresses = MagicMock()
 
         existing_ifaces: dict[str, NetBoxObject] = {
             "eth0": MagicMock(spec=NetBoxObject)
@@ -2116,7 +2117,7 @@ class TestSyncSingleInterface:
         mock_endpoint = MagicMock(spec=Endpoint)
         mock_endpoint.url = "http://localhost/api/dcim/interfaces/"
 
-        _, _, _, any_changes, returned_cache = _sync_single_interface(
+        single_result, returned_cache = _sync_single_interface(
             iface_data=iface_data,
             obj_id=1,
             iface_endpoint=mock_endpoint,
@@ -2124,6 +2125,7 @@ class TestSyncSingleInterface:
             endpoints=mock_endpoints,
             dry_run=False,
         )
+        _, _, _, any_changes = single_result
 
         # Assert: the cache returned is the same object
         assert returned_cache is existing_ifaces
