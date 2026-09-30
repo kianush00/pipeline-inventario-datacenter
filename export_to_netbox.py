@@ -1221,6 +1221,222 @@ def read_and_validate_csv(
 
 
 # ============================================================
+# CUSTOM FIELDS: ensure_custom_fields
+# ============================================================
+
+
+def _normalize_choices(extra_choices: Any) -> list[list[str]]:
+    """Convierte las opciones de un choice set a una lista de listas de strings."""
+    if not isinstance(extra_choices, (list, tuple)):
+        return []
+
+    return [
+        [str(choice[0]), str(choice[1])]
+        for choice in extra_choices
+        if isinstance(choice, (list, tuple)) and len(choice) >= 2
+    ]
+
+
+def _sync_choice_set_choices(
+    choice_set: Record,
+    choice_set_name: str,
+    choices: list[list[str]],
+    dry_run: bool,
+) -> int:
+    """Sincroniza las opciones (choices) de un choice set.
+    Retorna el ID del choice set."""
+
+    def _get_choice_set_id(ch_set: Record) -> int:
+        """
+        Busca un Choice Set por su nombre.
+        Retorna el ID del Choice Set encontrado, o lanza una excepción si no existe.
+        """
+        return cast(int, getattr(ch_set, "id", 0))
+
+    extra_choices: Any = getattr(choice_set, "extra_choices", None)
+    current_choices: list[list[str]] = _normalize_choices(extra_choices)
+
+    if current_choices == choices:
+        return _get_choice_set_id(choice_set)
+
+    if dry_run:
+        log.info("[DRY-RUN] Actualizaría Choice Set: %s", choice_set_name)
+        return _get_choice_set_id(choice_set)
+
+    try:
+        choice_set.update(
+            {
+                "extra_choices": choices,
+                "order_alphabetically": False,
+            }
+        )
+        log.info("Choice Set actualizado: %s", choice_set_name)
+    except RequestError as e:
+        raise ConfigValidationError(
+            f"Error al actualizar Choice Set '{choice_set_name}': {e}"
+        ) from e
+
+    return _get_choice_set_id(choice_set)
+
+
+def _ensure_choice_set(
+    choice_sets_endpoint: Endpoint,
+    existing_choice_sets: dict[str, NetBoxObject],
+    choice_set_cfg: ChoiceSetConfig,
+    dry_run: bool,
+) -> tuple[int, dict[str, NetBoxObject]]:
+    """Crea un choice set si no existe en NetBox.
+    Retorna el ID del choice set y la caché actualizada.
+    """
+
+    def _get_choice_set_choices(choices: list[ChoiceItemConfig]) -> list[list[str]]:
+        """
+        Busca un Choice Set por su nombre y obtiene sus opciones (choices).
+        Retorna una lista de listas con los valores y etiquetas de cada opción.
+        """
+        return [[choice.value, choice.label] for choice in choices]
+
+    choice_set_name: str = choice_set_cfg.name
+    choices: list[list[str]] = _get_choice_set_choices(choice_set_cfg.choices)
+
+    try:
+        choice_set, existing_choice_sets = _get_or_create_cached(
+            endpoint=choice_sets_endpoint,
+            cache=existing_choice_sets,
+            cache_key=choice_set_name,
+            filter_kwargs={"name": choice_set_name},
+            create_kwargs={
+                "name": choice_set_name,
+                "extra_choices": choices,
+                "order_alphabetically": False,
+            },
+            name=choice_set_name,
+            dry_run=dry_run,
+        )
+    except NetBoxApiError as e:
+        raise ConfigValidationError(
+            f"Error al crear Choice Set '{choice_set_name}': {e}"
+        ) from e
+
+    if getattr(choice_set, "id", 0) != 0:
+        choice_set_id = _sync_choice_set_choices(
+            cast(Record, choice_set), choice_set_name, choices, dry_run
+        )
+        return choice_set_id, existing_choice_sets
+
+    return 0, existing_choice_sets
+
+
+def _ensure_custom_field(
+    custom_fields_endpoint: Endpoint,
+    existing_cfs: dict[str, NetBoxObject],
+    cf_def: CustomFieldConfig,
+    object_types: list[str],
+    choice_set_id: int | None,
+    dry_run: bool,
+) -> tuple[NetBoxObject, dict[str, NetBoxObject]]:
+    """
+    Crea un custom field si no existe en NetBox.
+    Retorna el objeto Custom Field y el caché actualizado.
+    """
+    name: str = cf_def.name
+
+    create_kwargs: NetBoxPayload = {
+        "name": name,
+        "label": cf_def.label or name,
+        "type": cf_def.type,
+        "required": cf_def.required,
+        "object_types": object_types,
+    }
+
+    if choice_set_id is not None:
+        create_kwargs["choice_set"] = choice_set_id
+
+    default_value: FieldValue = cf_def.default
+    if default_value is not None:
+        create_kwargs["default"] = default_value
+
+    try:
+        return _get_or_create_cached(
+            endpoint=custom_fields_endpoint,
+            cache=existing_cfs,
+            cache_key=name,
+            filter_kwargs={"name": name},
+            create_kwargs=create_kwargs,
+            name=name,
+            dry_run=dry_run,
+        )
+    except NetBoxApiError as e:
+        raise ConfigValidationError(f"Error al crear custom field '{name}': {e}") from e
+
+
+def ensure_custom_fields(
+    endpoints: NetBoxEndpoints,
+    cfg: NetBoxMappingConfig,
+    dry_run: bool,
+) -> dict[str, NetBoxObject]:
+    """
+    Garantiza que todos los custom fields definidos en el YAML
+    existan en NetBox.
+
+    Además de los custom fields definidos en 'custom_fields',
+    procesa las definiciones especiales:
+        - machine_type
+        - environment
+
+    Para los custom fields de tipo 'select', garantiza también
+    la existencia del Choice Set asociado.
+
+    NetBox 4.5+:
+    - Los Object Types se consultan mediante /api/core/object-types/.
+    - El endpoint /api/extras/object-types/ fue eliminado en NetBox 4.5.
+    - Los Choice Sets se gestionan mediante
+    /api/extras/custom-field-choice-sets/.
+
+    Retorna un diccionario mapeando el nombre del Custom Field a su objeto en NetBox.
+    """
+    # Obtener Custom Fields y Choice Sets existentes.
+    custom_fields = cast(list[Record], endpoints.custom_fields.all())
+    choice_sets = cast(list[Record], endpoints.choice_sets.all())
+
+    existing_cfs: dict[str, NetBoxObject] = {str(cf.name): cf for cf in custom_fields}
+
+    existing_choice_sets: dict[str, NetBoxObject] = {
+        str(ch_set.name): ch_set for ch_set in choice_sets
+    }
+
+    # Obtener lista unificada de definiciones de Custom Field O(1).
+    cf_definitions: list[CustomFieldConfig] = cfg.get_all_custom_field_defs()
+
+    ensured_cfs: dict[str, NetBoxObject] = {}
+
+    for cf_def in cf_definitions:
+        choice_set_id: int | None = None
+        choice_set_cfg: ChoiceSetConfig | None = cf_def.choice_set
+
+        if cf_def.type == "select" and choice_set_cfg:
+            choice_set_id, existing_choice_sets = _ensure_choice_set(
+                endpoints.choice_sets,
+                existing_choice_sets,
+                choice_set_cfg,
+                dry_run,
+            )
+
+        # Crear el Custom Field si no existe.
+        cf_obj, existing_cfs = _ensure_custom_field(
+            endpoints.custom_fields,
+            existing_cfs,
+            cf_def,
+            cf_def.object_types,
+            choice_set_id,
+            dry_run,
+        )
+        ensured_cfs[cf_def.name] = cf_obj
+
+    return ensured_cfs
+
+
+# ============================================================
 # TAXONOMÍA: ensure_* (GET o CREATE)
 # ============================================================
 
@@ -1686,222 +1902,6 @@ def ensure_rack(
         dry_run=dry_run,
         skip_filter=(site_id == 0),
     )
-
-
-# ============================================================
-# CUSTOM FIELDS: ensure_custom_fields
-# ============================================================
-
-
-def _normalize_choices(extra_choices: Any) -> list[list[str]]:
-    """Convierte las opciones de un choice set a una lista de listas de strings."""
-    if not isinstance(extra_choices, (list, tuple)):
-        return []
-
-    return [
-        [str(choice[0]), str(choice[1])]
-        for choice in extra_choices
-        if isinstance(choice, (list, tuple)) and len(choice) >= 2
-    ]
-
-
-def _sync_choice_set_choices(
-    choice_set: Record,
-    choice_set_name: str,
-    choices: list[list[str]],
-    dry_run: bool,
-) -> int:
-    """Sincroniza las opciones (choices) de un choice set.
-    Retorna el ID del choice set."""
-
-    def _get_choice_set_id(ch_set: Record) -> int:
-        """
-        Busca un Choice Set por su nombre.
-        Retorna el ID del Choice Set encontrado, o lanza una excepción si no existe.
-        """
-        return cast(int, getattr(ch_set, "id", 0))
-
-    extra_choices: Any = getattr(choice_set, "extra_choices", None)
-    current_choices: list[list[str]] = _normalize_choices(extra_choices)
-
-    if current_choices == choices:
-        return _get_choice_set_id(choice_set)
-
-    if dry_run:
-        log.info("[DRY-RUN] Actualizaría Choice Set: %s", choice_set_name)
-        return _get_choice_set_id(choice_set)
-
-    try:
-        choice_set.update(
-            {
-                "extra_choices": choices,
-                "order_alphabetically": False,
-            }
-        )
-        log.info("Choice Set actualizado: %s", choice_set_name)
-    except RequestError as e:
-        raise ConfigValidationError(
-            f"Error al actualizar Choice Set '{choice_set_name}': {e}"
-        ) from e
-
-    return _get_choice_set_id(choice_set)
-
-
-def _ensure_choice_set(
-    choice_sets_endpoint: Endpoint,
-    existing_choice_sets: dict[str, NetBoxObject],
-    choice_set_cfg: ChoiceSetConfig,
-    dry_run: bool,
-) -> tuple[int, dict[str, NetBoxObject]]:
-    """Crea un choice set si no existe en NetBox.
-    Retorna el ID del choice set y la caché actualizada.
-    """
-
-    def _get_choice_set_choices(choices: list[ChoiceItemConfig]) -> list[list[str]]:
-        """
-        Busca un Choice Set por su nombre y obtiene sus opciones (choices).
-        Retorna una lista de listas con los valores y etiquetas de cada opción.
-        """
-        return [[choice.value, choice.label] for choice in choices]
-
-    choice_set_name: str = choice_set_cfg.name
-    choices: list[list[str]] = _get_choice_set_choices(choice_set_cfg.choices)
-
-    try:
-        choice_set, existing_choice_sets = _get_or_create_cached(
-            endpoint=choice_sets_endpoint,
-            cache=existing_choice_sets,
-            cache_key=choice_set_name,
-            filter_kwargs={"name": choice_set_name},
-            create_kwargs={
-                "name": choice_set_name,
-                "extra_choices": choices,
-                "order_alphabetically": False,
-            },
-            name=choice_set_name,
-            dry_run=dry_run,
-        )
-    except NetBoxApiError as e:
-        raise ConfigValidationError(
-            f"Error al crear Choice Set '{choice_set_name}': {e}"
-        ) from e
-
-    if getattr(choice_set, "id", 0) != 0:
-        choice_set_id = _sync_choice_set_choices(
-            cast(Record, choice_set), choice_set_name, choices, dry_run
-        )
-        return choice_set_id, existing_choice_sets
-
-    return 0, existing_choice_sets
-
-
-def _ensure_custom_field(
-    custom_fields_endpoint: Endpoint,
-    existing_cfs: dict[str, NetBoxObject],
-    cf_def: CustomFieldConfig,
-    object_types: list[str],
-    choice_set_id: int | None,
-    dry_run: bool,
-) -> tuple[NetBoxObject, dict[str, NetBoxObject]]:
-    """
-    Crea un custom field si no existe en NetBox.
-    Retorna el objeto Custom Field y el caché actualizado.
-    """
-    name: str = cf_def.name
-
-    create_kwargs: NetBoxPayload = {
-        "name": name,
-        "label": cf_def.label or name,
-        "type": cf_def.type,
-        "required": cf_def.required,
-        "object_types": object_types,
-    }
-
-    if choice_set_id is not None:
-        create_kwargs["choice_set"] = choice_set_id
-
-    default_value: FieldValue = cf_def.default
-    if default_value is not None:
-        create_kwargs["default"] = default_value
-
-    try:
-        return _get_or_create_cached(
-            endpoint=custom_fields_endpoint,
-            cache=existing_cfs,
-            cache_key=name,
-            filter_kwargs={"name": name},
-            create_kwargs=create_kwargs,
-            name=name,
-            dry_run=dry_run,
-        )
-    except NetBoxApiError as e:
-        raise ConfigValidationError(f"Error al crear custom field '{name}': {e}") from e
-
-
-def ensure_custom_fields(
-    endpoints: NetBoxEndpoints,
-    cfg: NetBoxMappingConfig,
-    dry_run: bool,
-) -> dict[str, NetBoxObject]:
-    """
-    Garantiza que todos los custom fields definidos en el YAML
-    existan en NetBox.
-
-    Además de los custom fields definidos en 'custom_fields',
-    procesa las definiciones especiales:
-        - machine_type
-        - environment
-
-    Para los custom fields de tipo 'select', garantiza también
-    la existencia del Choice Set asociado.
-
-    NetBox 4.5+:
-    - Los Object Types se consultan mediante /api/core/object-types/.
-    - El endpoint /api/extras/object-types/ fue eliminado en NetBox 4.5.
-    - Los Choice Sets se gestionan mediante
-    /api/extras/custom-field-choice-sets/.
-
-    Retorna un diccionario mapeando el nombre del Custom Field a su objeto en NetBox.
-    """
-    # Obtener Custom Fields y Choice Sets existentes.
-    custom_fields = cast(list[Record], endpoints.custom_fields.all())
-    choice_sets = cast(list[Record], endpoints.choice_sets.all())
-
-    existing_cfs: dict[str, NetBoxObject] = {str(cf.name): cf for cf in custom_fields}
-
-    existing_choice_sets: dict[str, NetBoxObject] = {
-        str(ch_set.name): ch_set for ch_set in choice_sets
-    }
-
-    # Obtener lista unificada de definiciones de Custom Field O(1).
-    cf_definitions: list[CustomFieldConfig] = cfg.get_all_custom_field_defs()
-
-    ensured_cfs: dict[str, NetBoxObject] = {}
-
-    for cf_def in cf_definitions:
-        choice_set_id: int | None = None
-        choice_set_cfg: ChoiceSetConfig | None = cf_def.choice_set
-
-        if cf_def.type == "select" and choice_set_cfg:
-            choice_set_id, existing_choice_sets = _ensure_choice_set(
-                endpoints.choice_sets,
-                existing_choice_sets,
-                choice_set_cfg,
-                dry_run,
-            )
-
-        # Crear el Custom Field si no existe.
-        cf_obj, existing_cfs = _ensure_custom_field(
-            endpoints.custom_fields,
-            existing_cfs,
-            cf_def,
-            cf_def.object_types,
-            choice_set_id,
-            dry_run,
-        )
-        ensured_cfs[cf_def.name] = cf_obj
-
-    return ensured_cfs
 
 
 # ============================================================
