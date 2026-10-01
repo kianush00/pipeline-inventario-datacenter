@@ -956,7 +956,7 @@ def extract_csv_value(
     col_alias: str,
     config: NetBoxMappingConfig,
     strict_extract: bool = False,
-    strict_map: bool = False,
+    strict_map: bool = True,
     fallback: Any = None,
 ) -> Any:
     """
@@ -2303,7 +2303,7 @@ def _resolve_netbox_status(
     """
     node_cfg = config.node_types.get_config(node_type)
     return extract_csv_value(
-        row, "status", config, strict_map=False, fallback=node_cfg.status.default
+        row, "status", config, fallback=node_cfg.status.default
     )
 
 
@@ -2466,7 +2466,7 @@ def _resolve_base_node(
     machine_name = extract_csv_value(row, "machine_name", config, strict_extract=True)
     uuid = extract_csv_value(row, "inventory_uuid", config).lower()
     machine_type = extract_csv_value(
-        row, "machine_type", config, strict_extract=True, strict_map=False
+        row, "machine_type", config, strict_extract=True
     )
 
     payload = build_payload(row, native_maps, custom_maps, config)

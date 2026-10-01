@@ -403,6 +403,46 @@ class TestExtractCsvValue:
         row = {col_name: "N/A"}
         assert extract_csv_value(row, "machine_name", config) == ""
 
+    def test_strict_map_raises_error_when_unmapped(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        """Prueba destructiva: si se provee un valor que NO está en el map, strict_map=True lanza error"""
+        col_name = config.csv_columns["machine_type"].source
+        row = {col_name: "INVALID_TYPE"}
+        with pytest.raises(
+            RowValidationError, match="no está definido en el mapa configurado"
+        ):
+            extract_csv_value(row, "machine_type", config, strict_map=True)
+
+    def test_non_strict_map_returns_fallback_when_unmapped(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        """Prueba de fallback: si falla el mapeo y strict_map=False, debe devolver el fallback (o el raw_val si fallback=None)"""
+        col_name = config.csv_columns["machine_type"].source
+        row = {col_name: "INVALID_TYPE"}
+
+        # Con fallback definido
+        assert (
+            extract_csv_value(
+                row, "machine_type", config, strict_map=False, fallback="default_vm"
+            )
+            == "default_vm"
+        )
+
+        # Sin fallback definido, devuelve crudo
+        assert (
+            extract_csv_value(row, "machine_type", config, strict_map=False)
+            == "INVALID_TYPE"
+        )
+
+    def test_fallback_returned_when_cell_empty(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        """Prueba de celda vacía: el fallback actúa directamente sin intentar el mapeo"""
+        col_name = config.csv_columns["status"].source
+        row = {col_name: ""}
+        assert extract_csv_value(row, "status", config, fallback="active") == "active"
+
     def test_required_empty_field_raises_error(
         self, config: NetBoxMappingConfig
     ) -> None:
@@ -861,10 +901,13 @@ class TestResolveNetboxStatus:
         }
         assert _resolve_netbox_status(row, config, NodeType.DEVICE) == "active"
 
-    def test_unmapped_status_fallback(self, config: NetBoxMappingConfig) -> None:
+    def test_unmapped_status_raises_error(self, config: NetBoxMappingConfig) -> None:
         col_name = config.csv_columns["status"].source
         row = {col_name: "Desconocido", config.csv_columns["machine_type"].source: "VM"}
-        assert _resolve_netbox_status(row, config, NodeType.VIRTUAL_MACHINE) == "staged"
+        with pytest.raises(
+            RowValidationError, match="no está definido en el mapa configurado"
+        ):
+            _resolve_netbox_status(row, config, NodeType.VIRTUAL_MACHINE)
 
     def test_empty_status_fallback(self, config: NetBoxMappingConfig) -> None:
         row = {config.csv_columns["machine_type"].source: "Dedicada"}
