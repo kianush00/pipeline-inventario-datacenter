@@ -154,6 +154,12 @@ CustomFieldsPayload: TypeAlias = dict[str, FieldValue]
 SyncCounts: TypeAlias = dict[SyncStatus, int]
 NetBoxPayload: TypeAlias = dict[str, Any]
 
+# Alias de Tipos para los Cachés de NetBox
+NameCache: TypeAlias = dict[str, NetBoxObject]
+SiteNameCache: TypeAlias = dict[tuple[int, str], NetBoxObject]
+ManufModelCache: TypeAlias = dict[tuple[str, str], NetBoxObject]
+HostDeviceCache: TypeAlias = dict[tuple[int, str], int | None]
+
 
 class SyncResult(NamedTuple):
     """
@@ -735,14 +741,14 @@ class CacheStore(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    manufacturers: dict[str, NetBoxObject] = Field(default_factory=dict)
-    device_types: dict[tuple[str, str], NetBoxObject] = Field(default_factory=dict)
-    platforms: dict[str, NetBoxObject] = Field(default_factory=dict)
-    racks: dict[tuple[int, str], NetBoxObject] = Field(default_factory=dict)
-    clusters: dict[str, NetBoxObject] = Field(default_factory=dict)
-    cluster_types: dict[str, NetBoxObject] = Field(default_factory=dict)
-    device_roles: dict[str, NetBoxObject] = Field(default_factory=dict)
-    host_devices: dict[tuple[int, str], int | None] = Field(default_factory=dict)
+    manufacturers: NameCache = Field(default_factory=dict)
+    device_types: ManufModelCache = Field(default_factory=dict)
+    platforms: NameCache = Field(default_factory=dict)
+    racks: SiteNameCache = Field(default_factory=dict)
+    clusters: NameCache = Field(default_factory=dict)
+    cluster_types: NameCache = Field(default_factory=dict)
+    device_roles: NameCache = Field(default_factory=dict)
+    host_devices: HostDeviceCache = Field(default_factory=dict)
 
 
 # ============================================================
@@ -1570,7 +1576,7 @@ def ensure_custom_fields(
     choice_sets = cast(list[Record], endpoints.choice_sets.all())
 
     existing_cfs: dict[str, NetBoxObject] = {str(cf.name): cf for cf in custom_fields}
-
+    # TODO: vale la pena reemplazar estos diccionarios por el NameCache? evaluar ese caso.
     existing_choice_sets: dict[str, NetBoxObject] = {
         str(ch_set.name): ch_set for ch_set in choice_sets
     }
@@ -1808,9 +1814,9 @@ def ensure_all_device_roles(
 def ensure_platform(
     platforms_endpoint: Endpoint,
     name: str,
-    cache: dict[str, NetBoxObject],
+    cache: NameCache,
     dry_run: bool,
-) -> tuple[NetBoxObject, dict[str, NetBoxObject]]:
+) -> tuple[NetBoxObject, NameCache]:
     """Garantiza que el Platform exista en NetBox.
     Retorna el objeto Platform creado y la caché actualizada."""
     slug = slugify(name)
@@ -1831,9 +1837,9 @@ def ensure_cluster(
     clusters_endpoint: Endpoint,
     name: str,
     cluster_type: NetBoxObject,
-    cache: dict[str, NetBoxObject],
+    cache: NameCache,
     dry_run: bool,
-) -> tuple[NetBoxObject, dict[str, NetBoxObject]]:
+) -> tuple[NetBoxObject, NameCache]:
     """Garantiza que el Cluster exista en NetBox.
     Retorna el objeto Cluster creado y la caché actualizada."""
     cache_key = name
@@ -1853,9 +1859,9 @@ def ensure_cluster(
 def ensure_manufacturer(
     manufacturers_endpoint: Endpoint,
     name: str,
-    cache: dict[str, NetBoxObject],
+    cache: NameCache,
     dry_run: bool,
-) -> tuple[NetBoxObject, dict[str, NetBoxObject]]:
+) -> tuple[NetBoxObject, NameCache]:
     """Garantiza que el Manufacturer exista en NetBox.
     Retorna el objeto Manufacturer creado y la caché actualizada."""
     slug = slugify(name)
@@ -1912,9 +1918,9 @@ def ensure_device_type(
     manufacturer: NetBoxObject,
     model: str,
     u_height: float,
-    cache: dict[tuple[str, str], NetBoxObject],
+    cache: ManufModelCache,
     dry_run: bool,
-) -> tuple[NetBoxObject, dict[tuple[str, str], NetBoxObject]]:
+) -> tuple[NetBoxObject, ManufModelCache]:
     """Garantiza que el DeviceType exista en NetBox.
     Retorna el objeto DeviceType creado y la caché actualizada."""
     manufacturer_id = get_netbox_object_id(manufacturer)
@@ -1957,9 +1963,9 @@ def ensure_rack(
     racks_endpoint: Endpoint,
     name: str,
     site: NetBoxObject,
-    cache: dict[tuple[int, str], NetBoxObject],
+    cache: SiteNameCache,
     dry_run: bool,
-) -> tuple[NetBoxObject, dict[tuple[int, str], NetBoxObject]]:
+) -> tuple[NetBoxObject, SiteNameCache]:
     """Garantiza que el Rack exista en NetBox.
     Retorna el objeto Rack creado y la caché actualizada."""
     site_id = get_netbox_object_id(site)
@@ -2311,12 +2317,12 @@ def _resolve_cluster(
     cluster_endpoint: Endpoint,
     row: CsvRow,
     cluster_type_map: dict[str, str],
-    cluster_type_cache: dict[str, NetBoxObject],
+    cluster_type_cache: NameCache,
     fallback_cluster_type: NetBoxObject,
-    cluster_cache: dict[str, NetBoxObject],
+    cluster_cache: NameCache,
     dry_run: bool,
     config: NetBoxMappingConfig,
-) -> tuple[int | None, dict[str, NetBoxObject]]:
+) -> tuple[int | None, NameCache]:
     """
     Resuelve el Cluster desde la columna correspondiente.
 
