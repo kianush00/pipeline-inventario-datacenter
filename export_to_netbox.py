@@ -289,6 +289,7 @@ class SiteConfig(BaseModel):
         Genera un slug automáticamente a partir del nombre si el valor está vacío.
         Retorna el slug generado o el valor original.
         """
+        # TODO: tal vez encapsular en una helper function (se repite tambien en ClusterTypeDefaultConfig y DeviceRoleConfig)
         if isinstance(data, dict):
             raw_slug = data.get("slug") or data.get("name")
             if raw_slug:

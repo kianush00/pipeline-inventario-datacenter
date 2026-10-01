@@ -46,6 +46,7 @@ from export_to_netbox import (
     _parse_network_interfaces,
     _parse_single_network_interface,
     _prune_orphan_interfaces,
+    _resolve_cluster,
     _resolve_default_or_empty,
     _resolve_device_role,
     _resolve_device_type,
@@ -1552,6 +1553,136 @@ class TestAssignPrimaryIPv4:
         mock_obj.update.assert_called_once_with({"primary_ip4": 15})
 
 
+class TestResolveCluster:
+    """Verifica los edge cases de _resolve_cluster."""
+
+    @pytest.fixture
+    def mock_endpoints(self) -> MagicMock:
+        endpoints = MagicMock()
+        endpoints.clusters = MagicMock()
+        endpoints.clusters.name = "clusters"
+        return endpoints
+
+    @pytest.fixture
+    def mock_config(self) -> MagicMock:
+        config = MagicMock(spec=NetBoxMappingConfig)
+        config.fields = {
+            "cluster_name": MagicMock(
+                source="Nombre Cluster",
+                target="cluster_name",
+                default=None,
+                transform=None,
+                is_unique=False,
+                type="str",
+            ),
+        }
+        config.is_empty.side_effect = lambda v: v in (None, "", "NaN", "NA")
+        config.map_value_by_source.side_effect = lambda s, v, strict: v
+        return config
+
+    @patch("export_to_netbox.extract_csv_value")
+    @patch("export_to_netbox.ensure_cluster")
+    def test_cluster_name_present_os_empty(
+        self,
+        mock_ensure_cluster: MagicMock,
+        mock_extract: MagicMock,
+        mock_endpoints: MagicMock,
+        mock_config: MagicMock,
+    ) -> None:
+        """Si cluster_name está presente pero SO está vacío, debe usar fallback_cluster_type."""
+        row = {"Nombre Cluster": "Cluster 1", "SO hipervisor": ""}
+        mock_extract.side_effect = lambda r, k, c: (
+            "Cluster 1" if k == "cluster_name" else ""
+        )
+
+        cluster_type_map: dict[str, str] = {}
+        fallback_cluster_type = MockNetBoxRecord(id=99, name="FallbackType")
+        cluster_type_cache: dict[str, NetBoxObject] = {}
+        cluster_cache: dict[str, NetBoxObject] = {}
+
+        mock_cluster = MockNetBoxRecord(id=42, name="Cluster 1")
+        mock_ensure_cluster.return_value = (mock_cluster, {"Cluster 1": mock_cluster})
+
+        cluster_id, cache = _resolve_cluster(
+            mock_endpoints.clusters,
+            row,
+            cluster_type_map,
+            cluster_type_cache,
+            fallback_cluster_type,
+            cluster_cache,
+            dry_run=False,
+            config=mock_config,
+        )
+
+        assert cluster_id == 42
+        assert "Cluster 1" in cache
+        mock_ensure_cluster.assert_called_once_with(
+            mock_endpoints.clusters,
+            "Cluster 1",
+            fallback_cluster_type,
+            cluster_cache,
+            False,
+        )
+
+    @patch("export_to_netbox.extract_csv_value")
+    def test_cluster_name_empty_os_present(
+        self, mock_extract: MagicMock, mock_endpoints: MagicMock, mock_config: MagicMock
+    ) -> None:
+        """Si cluster_name está vacío (incluso si SO está presente), aborta y retorna None."""
+        row = {"Nombre Cluster": "", "SO hipervisor": "VMware"}
+        mock_extract.side_effect = lambda r, k, c: (
+            "" if k == "cluster_name" else "VMware"
+        )
+
+        cluster_type_map = {"": "VMware"}
+        fallback_cluster_type = MockNetBoxRecord(id=99, name="FallbackType")
+        cluster_type_cache: dict[str, NetBoxObject] = {
+            "VMware": MockNetBoxRecord(id=1, name="VMware")
+        }
+        cluster_cache: dict[str, NetBoxObject] = {}
+
+        cluster_id, cache = _resolve_cluster(
+            mock_endpoints.clusters,
+            row,
+            cluster_type_map,
+            cluster_type_cache,
+            fallback_cluster_type,
+            cluster_cache,
+            dry_run=False,
+            config=mock_config,
+        )
+
+        assert cluster_id is None
+        assert cache == {}
+
+    @patch("export_to_netbox.extract_csv_value")
+    def test_both_empty(
+        self, mock_extract: MagicMock, mock_endpoints: MagicMock, mock_config: MagicMock
+    ) -> None:
+        """Si ambos están vacíos, aborta y retorna None."""
+        row = {"Nombre Cluster": "", "SO hipervisor": ""}
+        mock_extract.side_effect = lambda r, k, c: ""
+
+        cluster_type_map: dict[str, str] = {}
+        fallback_cluster_type = MockNetBoxRecord(id=99, name="FallbackType")
+        cluster_type_cache: dict[str, NetBoxObject] = {}
+        cluster_cache: dict[str, NetBoxObject] = {}
+
+        cluster_id, cache = _resolve_cluster(
+            mock_endpoints.clusters,
+            row,
+            cluster_type_map,
+            cluster_type_cache,
+            fallback_cluster_type,
+            cluster_cache,
+            dry_run=False,
+            config=mock_config,
+        )
+
+        assert cluster_id is None
+        assert cache == {}
+
+
 class TestSyncDeviceTypeUHeight:
     """Verifica la sincronización de u_height en DeviceTypes."""
 
@@ -2153,9 +2284,7 @@ class TestSyncSingleInterface:
         mock_endpoints.ip_addresses = MagicMock()
         mock_endpoints.mac_addresses = MagicMock()
 
-        ifaces_cache: dict[str, NetBoxObject] = {
-            "eth0": MagicMock(spec=NetBoxObject)
-        }
+        ifaces_cache: dict[str, NetBoxObject] = {"eth0": MagicMock(spec=NetBoxObject)}
         iface_data = cast(
             NetworkInterfaceData,
             {
