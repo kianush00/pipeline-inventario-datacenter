@@ -274,6 +274,15 @@ class NetBoxEndpoints(BaseModel):
 # ============================================================
 
 
+def _generate_slug_for_model(data: Any) -> Any:
+    """Helper compartido para autogenerar 'slug' a partir de 'name'."""
+    if isinstance(data, dict):
+        raw_slug = data.get("slug") or data.get("name")
+        if raw_slug:
+            data["slug"] = slugify(str(raw_slug))
+    return data
+
+
 class SiteConfig(BaseModel):
     """Configuración del Site en NetBox."""
 
@@ -289,12 +298,7 @@ class SiteConfig(BaseModel):
         Genera un slug automáticamente a partir del nombre si el valor está vacío.
         Retorna el slug generado o el valor original.
         """
-        # TODO: tal vez encapsular en una helper function (se repite tambien en ClusterTypeDefaultConfig y DeviceRoleConfig)
-        if isinstance(data, dict):
-            raw_slug = data.get("slug") or data.get("name")
-            if raw_slug:
-                data["slug"] = slugify(str(raw_slug))
-        return data
+        return _generate_slug_for_model(data)
 
     @field_validator("name", "slug")
     @classmethod
@@ -322,11 +326,7 @@ class ClusterTypeDefaultConfig(BaseModel):
         Genera un slug automáticamente a partir del nombre si el valor está vacío.
         Retorna el slug generado o el valor original.
         """
-        if isinstance(data, dict):
-            raw_slug = data.get("slug") or data.get("name")
-            if raw_slug:
-                data["slug"] = slugify(str(raw_slug))
-        return data
+        return _generate_slug_for_model(data)
 
 
 class ClusterTypeConfig(BaseModel):
@@ -353,11 +353,7 @@ class DeviceRoleConfig(BaseModel):
         Genera un slug automáticamente a partir del nombre si el valor está vacío.
         Retorna el slug generado o el valor original.
         """
-        if isinstance(data, dict):
-            raw_slug = data.get("slug") or data.get("name")
-            if raw_slug:
-                data["slug"] = slugify(str(raw_slug))
-        return data
+        return _generate_slug_for_model(data)
 
 
 class ChoiceItemConfig(BaseModel):
