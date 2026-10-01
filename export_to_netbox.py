@@ -1457,10 +1457,10 @@ def _sync_choice_set_choices(
 
 def _ensure_choice_set(
     choice_sets_endpoint: Endpoint,
-    existing_choice_sets: dict[str, NetBoxObject],
+    cache: NameCache,
     choice_set_cfg: ChoiceSetConfig,
     dry_run: bool,
-) -> tuple[int, dict[str, NetBoxObject]]:
+) -> tuple[int, NameCache]:
     """Crea un choice set si no existe en NetBox.
     Retorna el ID del choice set y la caché actualizada.
     """
@@ -1476,9 +1476,9 @@ def _ensure_choice_set(
     choices: list[list[str]] = _get_choice_set_choices(choice_set_cfg.choices)
 
     try:
-        choice_set, existing_choice_sets = get_or_create_cached(
+        choice_set, cache = get_or_create_cached(
             endpoint=choice_sets_endpoint,
-            cache=existing_choice_sets,
+            cache=cache,
             cache_key=choice_set_name,
             filter_kwargs={"name": choice_set_name},
             create_kwargs={
@@ -1498,19 +1498,19 @@ def _ensure_choice_set(
         choice_set_id = _sync_choice_set_choices(
             cast(Record, choice_set), choice_set_name, choices, dry_run
         )
-        return choice_set_id, existing_choice_sets
+        return choice_set_id, cache
 
-    return 0, existing_choice_sets
+    return 0, cache
 
 
 def _ensure_custom_field(
     custom_fields_endpoint: Endpoint,
-    existing_cfs: dict[str, NetBoxObject],
+    cache: NameCache,
     cf_def: CustomFieldConfig,
     object_types: list[str],
     choice_set_id: int | None,
     dry_run: bool,
-) -> tuple[NetBoxObject, dict[str, NetBoxObject]]:
+) -> tuple[NetBoxObject, NameCache]:
     """
     Crea un custom field si no existe en NetBox.
     Retorna el objeto Custom Field y el caché actualizado.
@@ -1535,7 +1535,7 @@ def _ensure_custom_field(
     try:
         return get_or_create_cached(
             endpoint=custom_fields_endpoint,
-            cache=existing_cfs,
+            cache=cache,
             cache_key=name,
             filter_kwargs={"name": name},
             create_kwargs=create_kwargs,
@@ -1575,9 +1575,8 @@ def ensure_custom_fields(
     custom_fields = cast(list[Record], endpoints.custom_fields.all())
     choice_sets = cast(list[Record], endpoints.choice_sets.all())
 
-    existing_cfs: dict[str, NetBoxObject] = {str(cf.name): cf for cf in custom_fields}
-    # TODO: vale la pena reemplazar estos diccionarios por el NameCache? evaluar ese caso.
-    existing_choice_sets: dict[str, NetBoxObject] = {
+    cfs_cache: NameCache = {str(cf.name): cf for cf in custom_fields}
+    choice_sets_cache: NameCache = {
         str(ch_set.name): ch_set for ch_set in choice_sets
     }
 
@@ -1591,17 +1590,17 @@ def ensure_custom_fields(
         choice_set_cfg: ChoiceSetConfig | None = cf_def.choice_set
 
         if cf_def.type == "select" and choice_set_cfg:
-            choice_set_id, existing_choice_sets = _ensure_choice_set(
+            choice_set_id, choice_sets_cache = _ensure_choice_set(
                 endpoints.choice_sets,
-                existing_choice_sets,
+                choice_sets_cache,
                 choice_set_cfg,
                 dry_run,
             )
 
         # Crear el Custom Field si no existe.
-        cf_obj, existing_cfs = _ensure_custom_field(
+        cf_obj, cfs_cache = _ensure_custom_field(
             endpoints.custom_fields,
-            existing_cfs,
+            cfs_cache,
             cf_def,
             cf_def.object_types,
             choice_set_id,
