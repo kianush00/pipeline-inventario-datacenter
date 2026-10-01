@@ -267,19 +267,19 @@ class TestParseIntGbToMb:
     """Verifica la conversión de GB a MB (NetBox espera MB para RAM)."""
 
     def test_gb_integer(self) -> None:
-        """8 GB = 8192 MB."""
-        assert parse_int_gb_to_mb("8") == 8192
+        """8 GB = 8000 MB."""
+        assert parse_int_gb_to_mb("8") == 8000
 
     def test_gb_decimal(self) -> None:
-        """0.5 GB = 512 MB."""
-        assert parse_int_gb_to_mb("0.5") == 512
+        """0.5 GB = 500 MB."""
+        assert parse_int_gb_to_mb("0.5") == 500
 
     def test_gb_decimal_comma(self) -> None:
-        """Soporta formato hispano: 7,8 GB = 7987 MB."""
-        assert parse_int_gb_to_mb("7,8") == 7987
+        """Soporta formato hispano: 7,8 GB = 7800 MB."""
+        assert parse_int_gb_to_mb("7,8") == 7800
 
     def test_with_spaces(self) -> None:
-        assert parse_int_gb_to_mb("  16  ") == 16384
+        assert parse_int_gb_to_mb("  16  ") == 16000
 
     def test_invalid_value_raises_error(self) -> None:
         with pytest.raises(ValueError, match="No es un valor numérico válido"):
@@ -327,7 +327,7 @@ class TestApplyCast:
         assert apply_cast("42", CastType.INT, "cpu_cores") == 42
 
     def test_cast_int_gb_to_mb(self) -> None:
-        assert apply_cast("8", CastType.INT_GB_TO_MB, "memory") == 8192
+        assert apply_cast("8", CastType.INT_GB_TO_MB, "memory") == 8000
 
     def test_cast_bool_si_no(self) -> None:
         assert apply_cast("si", CastType.BOOL_SI_NO, "is_virtual") is True
@@ -360,8 +360,8 @@ class TestApplyCastEdgeCases:
         assert apply_cast("100", CastType.INT, "pos_u") == 100
 
     def test_gb_to_mb_precision(self) -> None:
-        """Verifica la precisión del redondeo: 1.5 GB = 1536 MB."""
-        assert apply_cast("1.5", CastType.INT_GB_TO_MB, "memory") == 1536
+        """Verifica la precisión del redondeo: 1.5 GB = 1500 MB."""
+        assert apply_cast("1.5", CastType.INT_GB_TO_MB, "memory") == 1500
 
 
 class TestGetNetboxObjectId:
@@ -777,7 +777,7 @@ class TestResolveFieldValue:
         field_def = FieldMappingConfig(
             target="memory", source="RAM", cast=CastType.INT_GB_TO_MB
         )
-        assert _resolve_field_value(row, field_def, config, is_optional=True) == 8192
+        assert _resolve_field_value(row, field_def, config, is_optional=True) == 8000
 
     def test_concat_dot_field(self, config: NetBoxMappingConfig) -> None:
         row = {"Nota1": "Hola", "Nota2": "Mundo"}
@@ -839,7 +839,7 @@ class TestBuildPayload:
         payload = build_payload(row, native_maps, custom_maps, config)
 
         assert payload["name"] == "SRV-01"
-        assert payload["memory"] == 8192
+        assert payload["memory"] == 8000
         assert "custom_fields" in payload
         assert payload["custom_fields"]["inventory_uuid"] == "10"
 

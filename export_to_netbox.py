@@ -881,10 +881,11 @@ def parse_float_to_int(value: Any) -> int:
 
 
 def parse_int_gb_to_mb(value: Any) -> int:
-    """Convierte GB (string/float) a MB (entero). NetBox espera MB para memory."""
+    """Convierte GB (string/float) a MB (entero) usando multiplicador 1000.
+    NetBox espera MB para memory/disk."""
     try:
         gb = _to_float(value)
-        return round(gb * 1024)
+        return round(gb * 1000)
     except (ValueError, TypeError) as e:
         raise ValueError("No es un valor numérico válido.") from e
 
@@ -1158,7 +1159,9 @@ def load_env() -> tuple[str, str, bool]:
 # ============================================================
 
 
-def _log_netbox_response(response: requests.Response, *args: Any, **kwargs: Any) -> None:
+def _log_netbox_response(
+    response: requests.Response, *args: Any, **kwargs: Any
+) -> None:
     """Hook para interceptar y registrar respuestas del API de NetBox."""
     log.debug(
         "[API %s] %s - Status: %s",
