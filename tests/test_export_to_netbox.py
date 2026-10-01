@@ -40,7 +40,6 @@ from export_to_netbox import (
     _execute_sync,
     _extract_raw_source_value,
     _find_existing_object,
-    _get_or_create_cached,
     _is_custom_field_changed,
     _is_name_safely_unique,
     _is_relation_changed,
@@ -73,6 +72,7 @@ from export_to_netbox import (
     generate_fallback_slug,
     get_netbox_object_id,
     get_node_type_from_row,
+    get_or_create_cached,
     load_config,
     parse_bool_si_no,
     parse_float,
@@ -1850,7 +1850,7 @@ class TestGetOrCreateCached:
     def test_returns_from_cache(self) -> None:
         endpoint = MagicMock()
         cache: dict[Any, Any] = {"key1": "mock_obj"}
-        result, returned_cache = _get_or_create_cached(
+        result, returned_cache = get_or_create_cached(
             endpoint, cache, "key1", {}, {}, "Test", False
         )
         assert result == "mock_obj"
@@ -1864,7 +1864,7 @@ class TestGetOrCreateCached:
         cache: dict[Any, Any] = {}
         endpoint.name = "test_endpoints"
         endpoint.create.return_value = "created_obj"
-        result, returned_cache = _get_or_create_cached(
+        result, returned_cache = get_or_create_cached(
             endpoint,
             cache,
             "key1",
@@ -1885,7 +1885,7 @@ class TestGetOrCreateCached:
         endpoint.filter.return_value = []
         cache: dict[Any, Any] = {}
         endpoint.name = "test_endpoints"
-        result, returned_cache = _get_or_create_cached(
+        result, returned_cache = get_or_create_cached(
             endpoint, cache, "key1", {}, {"name": "Test"}, "Test", True
         )
         assert result.id == 0
@@ -1905,7 +1905,7 @@ class TestGetOrCreateCached:
             NetBoxApiError,
             match="No se pudo crear el objeto en 'test_endpoints' con nombre 'Test'",
         ):
-            _get_or_create_cached(
+            get_or_create_cached(
                 endpoint, cache, "key1", {}, {"name": "Test"}, "Test", False
             )
 
@@ -1983,7 +1983,7 @@ class TestEnsureTaxonomyQACases:
         endpoint.create.return_value = mock_created
 
         cache: dict[str, NetBoxObject] = {}
-        result, _ = _get_or_create_cached(
+        result, _ = get_or_create_cached(
             endpoint,
             cache=cache,
             cache_key="key",

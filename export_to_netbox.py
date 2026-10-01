@@ -1281,6 +1281,116 @@ def read_and_validate_csv(
 
 
 # ============================================================
+# PATRÓN GET OR CREATE (CACHE)
+# ============================================================
+
+
+def _create_with_fallback_slug(
+    endpoint: Endpoint,
+    original_name: str,
+    **kwargs: Any,
+) -> Record:
+    """
+    Intenta crear un objeto en NetBox. Si ocurre colisión de slug (RequestError),
+    genera un slug determinista de respaldo y reintenta la creación.
+    Retorna el objeto creado.
+    """
+    slug: str = kwargs.get("slug", "")
+    try:
+        return cast(Record, endpoint.create(**kwargs))
+    except RequestError:
+        slug_fallback = generate_fallback_slug(slug, original_name)
+        log.warning(
+            "Slug '%s' colisionó al crear objeto en '%s' con nombre '%s'; reintentando con '%s'.",
+            slug,
+            endpoint.name,
+            original_name,
+            slug_fallback,
+        )
+        kwargs["slug"] = slug_fallback
+        with netbox_error_wrap(
+            f"Imposible crear objeto en '{endpoint.name}' con nombre '{original_name}' "
+            "debido a colisión persistente de slug o rechazo de NetBox"
+        ):
+            return cast(Record, endpoint.create(**kwargs))
+
+
+def get_or_create_cached(
+    endpoint: Endpoint,
+    cache: dict[Any, NetBoxObject],
+    cache_key: Any,
+    filter_kwargs: dict[str, Any],
+    create_kwargs: dict[str, Any],
+    name: str,
+    dry_run: bool,
+    use_fallback_slug: bool = False,
+    skip_filter: bool = False,
+    preventive_slug_search: bool = False,
+) -> tuple[NetBoxObject, dict[Any, NetBoxObject]]:
+    """
+    Motor centralizado de Identity Map (Caché) para el patrón Get-or-Create.
+
+    Decisiones de diseño:
+    - Eficiencia O(1) de Red: Evita avalanchas de peticiones HTTP (N+1 queries) contra
+      NetBox manteniendo un registro en memoria de las entidades ya creadas o consultadas.
+    - Prevención de Colisiones (preventive_slug_search): En NetBox, los slugs deben ser
+      estrictamente únicos. Si buscamos un objeto por nombre y no lo encontramos, NetBox
+      rechazará la creación si el slug generado colisiona con otro objeto (HTTP 400).
+      La búsqueda preventiva por slug evita el crash permitiendo reutilizar objetos similares.
+    - Pureza Monádica: Retornar la caché mutada evita side-effects silenciosos (paso por referencia).
+
+    Retorna:
+        tuple[NetBoxObject, dict[Any, NetBoxObject]]: El objeto final y la caché propagada.
+    """
+    if cache_key in cache:
+        return cache[cache_key], cache
+
+    if not skip_filter:
+        results: list[Record] = list(endpoint.filter(**filter_kwargs))
+        if results:
+            cache[cache_key] = results[0]
+            return results[0], cache
+
+    if preventive_slug_search and "slug" in create_kwargs:
+        slug_val = create_kwargs["slug"]
+        slug_results: list[Record] = list(endpoint.filter(slug=slug_val))
+        if slug_results:
+            log.warning(
+                "Objeto '%s' no existe por sus campos de filtro, pero su slug '%s' coincide "
+                "con un objeto existente en '%s' ('%s'). Se reutiliza.",
+                name,
+                slug_val,
+                endpoint.name,
+                getattr(slug_results[0], "name", "?"),
+            )
+            cache[cache_key] = slug_results[0]
+            return slug_results[0], cache
+
+    if dry_run:
+        log.info("[DRY-RUN] Crearía objeto en '%s': %s", endpoint.name, name)
+        mock_kwargs = create_kwargs.copy()
+        obj: NetBoxObject = MockNetBoxRecord(id=0, **mock_kwargs)
+        cache[cache_key] = obj
+        return obj, cache
+
+    if use_fallback_slug:
+        obj = _create_with_fallback_slug(
+            endpoint,
+            name,
+            **create_kwargs,
+        )
+    else:
+        with netbox_error_wrap(
+            f"No se pudo crear el objeto en '{endpoint.name}' con nombre '{name}'"
+        ):
+            obj = cast(Record, endpoint.create(**create_kwargs))
+
+    log.info("Objeto creado en '%s': %s", endpoint.name, name)
+    cache[cache_key] = obj
+    return obj, cache
+
+
+# ============================================================
 # CUSTOM FIELDS: ensure_custom_fields
 # ============================================================
 
@@ -1360,7 +1470,7 @@ def _ensure_choice_set(
     choices: list[list[str]] = _get_choice_set_choices(choice_set_cfg.choices)
 
     try:
-        choice_set, existing_choice_sets = _get_or_create_cached(
+        choice_set, existing_choice_sets = get_or_create_cached(
             endpoint=choice_sets_endpoint,
             cache=existing_choice_sets,
             cache_key=choice_set_name,
@@ -1417,7 +1527,7 @@ def _ensure_custom_field(
         create_kwargs["default"] = default_value
 
     try:
-        return _get_or_create_cached(
+        return get_or_create_cached(
             endpoint=custom_fields_endpoint,
             cache=existing_cfs,
             cache_key=name,
@@ -1501,111 +1611,6 @@ def ensure_custom_fields(
 # ============================================================
 
 
-def _create_with_fallback_slug(
-    endpoint: Endpoint,
-    original_name: str,
-    **kwargs: Any,
-) -> Record:
-    """
-    Intenta crear un objeto en NetBox. Si ocurre colisión de slug (RequestError),
-    genera un slug determinista de respaldo y reintenta la creación.
-    Retorna el objeto creado.
-    """
-    slug: str = kwargs.get("slug", "")
-    try:
-        return cast(Record, endpoint.create(**kwargs))
-    except RequestError:
-        slug_fallback = generate_fallback_slug(slug, original_name)
-        log.warning(
-            "Slug '%s' colisionó al crear objeto en '%s' con nombre '%s'; reintentando con '%s'.",
-            slug,
-            endpoint.name,
-            original_name,
-            slug_fallback,
-        )
-        kwargs["slug"] = slug_fallback
-        with netbox_error_wrap(
-            f"Imposible crear objeto en '{endpoint.name}' con nombre '{original_name}' "
-            "debido a colisión persistente de slug o rechazo de NetBox"
-        ):
-            return cast(Record, endpoint.create(**kwargs))
-
-
-def _get_or_create_cached(
-    endpoint: Endpoint,
-    cache: dict[Any, NetBoxObject],
-    cache_key: Any,
-    filter_kwargs: dict[str, Any],
-    create_kwargs: dict[str, Any],
-    name: str,
-    dry_run: bool,
-    use_fallback_slug: bool = False,
-    skip_filter: bool = False,
-    preventive_slug_search: bool = False,
-) -> tuple[NetBoxObject, dict[Any, NetBoxObject]]:
-    """
-    Motor centralizado de Identity Map (Caché) para el patrón Get-or-Create.
-
-    Decisiones de diseño:
-    - Eficiencia O(1) de Red: Evita avalanchas de peticiones HTTP (N+1 queries) contra
-      NetBox manteniendo un registro en memoria de las entidades ya creadas o consultadas.
-    - Prevención de Colisiones (preventive_slug_search): En NetBox, los slugs deben ser
-      estrictamente únicos. Si buscamos un objeto por nombre y no lo encontramos, NetBox
-      rechazará la creación si el slug generado colisiona con otro objeto (HTTP 400).
-      La búsqueda preventiva por slug evita el crash permitiendo reutilizar objetos similares.
-    - Pureza Monádica: Retornar la caché mutada evita side-effects silenciosos (paso por referencia).
-
-    Retorna:
-        tuple[NetBoxObject, dict[Any, NetBoxObject]]: El objeto final y la caché propagada.
-    """
-    if cache_key in cache:
-        return cache[cache_key], cache
-
-    if not skip_filter:
-        results: list[Record] = list(endpoint.filter(**filter_kwargs))
-        if results:
-            cache[cache_key] = results[0]
-            return results[0], cache
-
-    if preventive_slug_search and "slug" in create_kwargs:
-        slug_val = create_kwargs["slug"]
-        slug_results: list[Record] = list(endpoint.filter(slug=slug_val))
-        if slug_results:
-            log.warning(
-                "Objeto '%s' no existe por sus campos de filtro, pero su slug '%s' coincide "
-                "con un objeto existente en '%s' ('%s'). Se reutiliza.",
-                name,
-                slug_val,
-                endpoint.name,
-                getattr(slug_results[0], "name", "?"),
-            )
-            cache[cache_key] = slug_results[0]
-            return slug_results[0], cache
-
-    if dry_run:
-        log.info("[DRY-RUN] Crearía objeto en '%s': %s", endpoint.name, name)
-        mock_kwargs = create_kwargs.copy()
-        obj: NetBoxObject = MockNetBoxRecord(id=0, **mock_kwargs)
-        cache[cache_key] = obj
-        return obj, cache
-
-    if use_fallback_slug:
-        obj = _create_with_fallback_slug(
-            endpoint,
-            name,
-            **create_kwargs,
-        )
-    else:
-        with netbox_error_wrap(
-            f"No se pudo crear el objeto en '{endpoint.name}' con nombre '{name}'"
-        ):
-            obj = cast(Record, endpoint.create(**create_kwargs))
-
-    log.info("Objeto creado en '%s': %s", endpoint.name, name)
-    cache[cache_key] = obj
-    return obj, cache
-
-
 def ensure_site(
     sites_endpoint: Endpoint,
     site_cfg: SiteConfig,
@@ -1616,9 +1621,9 @@ def ensure_site(
     name = site_cfg.name
     slug = cast(str, site_cfg.slug)
 
-    # Utilizamos un caché efímero solo para reutilizar la lógica de _get_or_create_cached,
+    # Utilizamos un caché efímero solo para reutilizar la lógica de get_or_create_cached,
     # aunque realmente site se evalúa una sola vez por ejecución en _execute_pipeline.
-    obj, _ = _get_or_create_cached(
+    obj, _ = get_or_create_cached(
         endpoint=sites_endpoint,
         cache={},
         cache_key=name,
@@ -1685,7 +1690,7 @@ def _ensure_cluster_type(
 ) -> NetBoxObject:
     """Garantiza que el ClusterType exista en NetBox.
     Retorna el objeto ClusterType creado"""
-    obj, _ = _get_or_create_cached(
+    obj, _ = get_or_create_cached(
         endpoint=cluster_type_endpoint,
         cache={},  # Similar al Site, el caché real de cluster_types se maneja externamente
         cache_key=name,
@@ -1748,7 +1753,7 @@ def _sync_single_device_role(
     slug = cast(str, role_def.slug)
 
     try:
-        obj, device_roles_cache = _get_or_create_cached(
+        obj, device_roles_cache = get_or_create_cached(
             endpoint=endpoints.device_roles,
             cache=device_roles_cache,
             cache_key=key,
@@ -1809,7 +1814,7 @@ def ensure_platform(
     """Garantiza que el Platform exista en NetBox.
     Retorna el objeto Platform creado y la caché actualizada."""
     slug = slugify(name)
-    return _get_or_create_cached(
+    return get_or_create_cached(
         endpoint=platforms_endpoint,
         cache=cache,
         cache_key=name,
@@ -1836,7 +1841,7 @@ def ensure_cluster(
     cache_key = (site_id, name)
     cluster_type_id = get_netbox_object_id(cluster_type)
 
-    return _get_or_create_cached(
+    return get_or_create_cached(
         endpoint=clusters_endpoint,
         cache=cache,
         cache_key=cache_key,
@@ -1857,7 +1862,7 @@ def ensure_manufacturer(
     """Garantiza que el Manufacturer exista en NetBox.
     Retorna el objeto Manufacturer creado y la caché actualizada."""
     slug = slugify(name)
-    return _get_or_create_cached(
+    return get_or_create_cached(
         endpoint=manufacturers_endpoint,
         cache=cache,
         cache_key=name,
@@ -1923,7 +1928,7 @@ def ensure_device_type(
 
     slug = slugify(f"{manufacturer_name} {model}")
 
-    obj, cache = _get_or_create_cached(
+    obj, cache = get_or_create_cached(
         endpoint=device_types_endpoint,
         cache=cache,
         cache_key=key,
@@ -1963,7 +1968,7 @@ def ensure_rack(
     site_id = get_netbox_object_id(site)
     cache_key = (site_id, name)
 
-    return _get_or_create_cached(
+    return get_or_create_cached(
         endpoint=racks_endpoint,
         cache=cache,
         cache_key=cache_key,
@@ -2302,9 +2307,7 @@ def _resolve_netbox_status(
     Retorna el status NetBox.
     """
     node_cfg = config.node_types.get_config(node_type)
-    return extract_csv_value(
-        row, "status", config, fallback=node_cfg.status.default
-    )
+    return extract_csv_value(row, "status", config, fallback=node_cfg.status.default)
 
 
 def _resolve_cluster(
@@ -2465,9 +2468,7 @@ def _resolve_base_node(
     """
     machine_name = extract_csv_value(row, "machine_name", config, strict_extract=True)
     uuid = extract_csv_value(row, "inventory_uuid", config).lower()
-    machine_type = extract_csv_value(
-        row, "machine_type", config, strict_extract=True
-    )
+    machine_type = extract_csv_value(row, "machine_type", config, strict_extract=True)
 
     payload = build_payload(row, native_maps, custom_maps, config)
 
