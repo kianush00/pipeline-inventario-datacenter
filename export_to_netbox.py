@@ -816,6 +816,18 @@ def _is_relation_changed(curr_val: Any, new_val: Any) -> bool | None:
     return None
 
 
+def _is_field_changed(key: str, curr_val: Any, new_val: Any) -> bool:
+    """Evalúa si un campo específico difiere de su valor actual."""
+    if key == "custom_fields":
+        return _is_custom_field_changed(curr_val, new_val)
+
+    rel_changed = _is_relation_changed(curr_val, new_val)
+    if rel_changed is not None:
+        return rel_changed
+
+    return curr_val != new_val
+
+
 def check_record_changes(
     record: Record,
     payload: NetBoxPayload,
@@ -827,25 +839,14 @@ def check_record_changes(
     updates: NetBoxPayload = {}
 
     for key, new_val in payload.items():
-        if not hasattr(record, key):
+        if not hasattr(record, key) or _is_field_changed(
+            key, getattr(record, key), new_val
+        ):
             updates[key] = new_val
-            continue
 
-        curr_val = getattr(record, key)
-
-        if key == "custom_fields":
-            if _is_custom_field_changed(curr_val, new_val):
-                updates[key] = new_val
-            continue
-
-        rel_changed = _is_relation_changed(curr_val, new_val)
-        if rel_changed is not None:
-            if rel_changed:
-                updates[key] = new_val
-            continue
-
-        if curr_val != new_val:
-            updates[key] = new_val
+    if updates:
+        obj_name = getattr(record, "name", str(record))
+        log.debug("Cambios detectados en %s: %s", obj_name, updates)
 
     return updates
 
@@ -2270,6 +2271,7 @@ def build_payload(
     if cf_payload:
         payload["custom_fields"] = cf_payload
 
+    log.debug("Payload construido: %s", payload)
     return payload
 
 
