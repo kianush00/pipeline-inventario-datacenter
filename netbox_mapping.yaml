@@ -443,7 +443,7 @@ node_types:
       - source: *col_disk_cap
         target: "disk"
         required: false
-        cast: "float_to_int"
+        cast: "int_gb_to_mb"
 
       - source: [*col_desc, *col_notes]
         target: "description"

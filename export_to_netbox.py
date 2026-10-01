@@ -1158,6 +1158,20 @@ def load_env() -> tuple[str, str, bool]:
 # ============================================================
 
 
+def _log_netbox_response(response: requests.Response, *args: Any, **kwargs: Any) -> None:
+    """Hook para interceptar y registrar respuestas del API de NetBox."""
+    log.debug(
+        "[API %s] %s - Status: %s",
+        response.request.method,
+        response.url,
+        response.status_code,
+    )
+    if "X-Netbox-Warning" in response.headers:
+        log.warning("[API WARNING]: %s", response.headers["X-Netbox-Warning"])
+    if not response.ok:
+        log.debug("[API ERROR PAYLOAD]: %s", response.text)
+
+
 def build_nb_client(url: str, token: str, verify_ssl: bool) -> Api:
     """
     Construye y retorna un cliente API de NetBox completamente configurado.
@@ -1171,6 +1185,7 @@ def build_nb_client(url: str, token: str, verify_ssl: bool) -> Api:
 
     session = requests.Session()
     session.verify = verify_ssl
+    session.hooks["response"].append(_log_netbox_response)
 
     nb = Api(url, token=token)
     nb.http_session = session
@@ -1681,6 +1696,7 @@ def precompute_cluster_type_map(
         if not cluster_name or not hypervisor_os:
             continue
 
+        # Comprobar si existe un conflicto de SO en el clúster.
         existing_os = cluster_type_map.get(cluster_name)
         if existing_os is not None and existing_os != hypervisor_os:
             raise ConfigValidationError(
@@ -3331,9 +3347,7 @@ def _sync_single_interface(
         )
 
     any_changes = iface_changed or ip_changed or mac_changed
-    return SingleInterfaceResult(
-        iface_obj, ip_obj, mac_obj, any_changes
-    ), ifaces_cache
+    return SingleInterfaceResult(iface_obj, ip_obj, mac_obj, any_changes), ifaces_cache
 
 
 def _prune_orphan_interfaces(
