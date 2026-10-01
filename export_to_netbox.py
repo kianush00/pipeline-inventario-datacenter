@@ -1550,7 +1550,7 @@ def ensure_custom_fields(
     endpoints: NetBoxEndpoints,
     cfg: NetBoxMappingConfig,
     dry_run: bool,
-) -> dict[str, NetBoxObject]:
+) -> NameCache:
     """
     Garantiza que todos los custom fields definidos en el YAML
     existan en NetBox.
@@ -1576,14 +1576,12 @@ def ensure_custom_fields(
     choice_sets = cast(list[Record], endpoints.choice_sets.all())
 
     cfs_cache: NameCache = {str(cf.name): cf for cf in custom_fields}
-    choice_sets_cache: NameCache = {
-        str(ch_set.name): ch_set for ch_set in choice_sets
-    }
+    choice_sets_cache: NameCache = {str(ch_set.name): ch_set for ch_set in choice_sets}
 
     # Obtener lista unificada de definiciones de Custom Field O(1).
     cf_definitions: list[CustomFieldConfig] = cfg.get_all_custom_field_defs()
 
-    ensured_cfs: dict[str, NetBoxObject] = {}
+    ensured_cfs: NameCache = {}
 
     for cf_def in cf_definitions:
         choice_set_id: int | None = None
@@ -1711,9 +1709,9 @@ def ensure_dynamic_cluster_types(
     endpoints: NetBoxEndpoints,
     cluster_type_map: dict[str, str],
     fallback_cfg: ClusterTypeConfig,
-    cache: dict[str, NetBoxObject],
+    cache: NameCache,
     dry_run: bool,
-) -> tuple[NetBoxObject, dict[str, NetBoxObject]]:
+) -> tuple[NetBoxObject, NameCache]:
     """
     Crea los ClusterTypes dinámicos en NetBox a partir de los valores
     únicos de hypervisor_os y los almacena en el caché.
@@ -1746,9 +1744,9 @@ def ensure_dynamic_cluster_types(
 def _sync_single_device_role(
     endpoints: NetBoxEndpoints,
     role_def: DeviceRoleConfig,
-    device_roles_cache: dict[str, NetBoxObject],
+    device_roles_cache: NameCache,
     dry_run: bool,
-) -> tuple[NetBoxObject, dict[str, NetBoxObject]]:
+) -> tuple[NetBoxObject, NameCache]:
     """
     Sincroniza un único DeviceRole y asegura que permita VMs.
     Retorna una tupla (DeviceRole, caché actualizado).
@@ -1791,16 +1789,16 @@ def _sync_single_device_role(
 def ensure_all_device_roles(
     endpoints: NetBoxEndpoints,
     device_roles: list[DeviceRoleConfig],
-    device_roles_cache: dict[str, NetBoxObject],
+    device_roles_cache: NameCache,
     dry_run: bool,
-) -> tuple[dict[str, NetBoxObject], dict[str, NetBoxObject]]:
+) -> tuple[NameCache, NameCache]:
     """
     Garantiza que todos los device roles definidos en el YAML
     existen en NetBox (/api/dcim/device-roles/).
     Todos los roles se habilitan para su uso en Virtual Machines.
     Retorna una tupla (Roles asegurados, caché actualizado).
     """
-    ensured_roles: dict[str, NetBoxObject] = {}
+    ensured_roles: NameCache = {}
     for role_def in device_roles:
         key = role_def.name.lower()
         obj, device_roles_cache = _sync_single_device_role(
@@ -2249,10 +2247,10 @@ def build_payload(
 def _resolve_platform(
     plt_endpoint: Endpoint,
     row: CsvRow,
-    plt_cache: dict[str, NetBoxObject],
+    plt_cache: NameCache,
     dry_run: bool,
     config: NetBoxMappingConfig,
-) -> tuple[int | None, dict[str, NetBoxObject]]:
+) -> tuple[int | None, NameCache]:
     """Resuelve el Platform desde la columna OS.
     Retorna una tupla con el ID del Platform y el Platform cache actualizado."""
     plt_name = extract_csv_value(row, "os", config)
@@ -2270,7 +2268,7 @@ def _resolve_platform(
 
 def _resolve_device_role(
     row: CsvRow,
-    roles_cache: dict[str, NetBoxObject],
+    roles_cache: NameCache,
     config: NetBoxMappingConfig,
 ) -> int:
     """
@@ -3284,10 +3282,10 @@ def _sync_single_interface(
     iface_data: NetworkInterfaceData,
     obj_id: int,
     iface_endpoint: Endpoint,
-    existing_ifaces: dict[str, NetBoxObject],
+    existing_ifaces: NameCache,
     endpoints: NetBoxEndpoints,
     dry_run: bool,
-) -> tuple[SingleInterfaceResult, dict[str, NetBoxObject]]:
+) -> tuple[SingleInterfaceResult, NameCache]:
     """
     Sincroniza una interfaz individual y le asigna su IP y MAC.
     Retorna una tupla: (SingleInterfaceResult, caché actualizada).
@@ -3332,7 +3330,7 @@ def _sync_single_interface(
 
 
 def _prune_orphan_interfaces(
-    existing_ifaces: dict[str, NetBoxObject],
+    existing_ifaces: NameCache,
     csv_iface_names: set[str],
     obj_id: int,
     dry_run: bool,
@@ -3381,7 +3379,7 @@ def _fetch_existing_interfaces(
     iface_endpoint: Endpoint,
     iface_filter: dict[str, Any],
     obj_id: int,
-) -> dict[str, NetBoxObject]:
+) -> NameCache:
     """Obtiene las interfaces existentes de un nodo desde NetBox."""
     if obj_id == 0:
         return {}
@@ -3393,10 +3391,10 @@ def _process_interfaces_sync(
     interfaces: list[NetworkInterfaceData],
     obj_id: int,
     iface_endpoint: Endpoint,
-    existing_ifaces: dict[str, NetBoxObject],
+    existing_ifaces: NameCache,
     endpoints: NetBoxEndpoints,
     dry_run: bool,
-) -> tuple[InterfaceSyncResult, dict[str, NetBoxObject]]:
+) -> tuple[InterfaceSyncResult, NameCache]:
     """Ejecuta la sincronización de una lista de interfaces y recopila IPs asignadas.
     Retorna una tupla: (InterfaceSyncResult, caché actualizada)."""
     errors = 0
