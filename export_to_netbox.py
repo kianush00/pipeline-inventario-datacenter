@@ -3282,7 +3282,7 @@ def _sync_single_interface(
     iface_data: NetworkInterfaceData,
     obj_id: int,
     iface_endpoint: Endpoint,
-    existing_ifaces: NameCache,
+    ifaces_cache: NameCache,
     endpoints: NetBoxEndpoints,
     dry_run: bool,
 ) -> tuple[SingleInterfaceResult, NameCache]:
@@ -3302,12 +3302,12 @@ def _sync_single_interface(
     iface_obj, iface_changed = _upsert_interface_record(
         name,
         payload,
-        existing_ifaces.get(name),
+        ifaces_cache.get(name),
         iface_endpoint,
         obj_id,
         dry_run,
     )
-    existing_ifaces[name] = iface_obj
+    ifaces_cache[name] = iface_obj
 
     ip_obj = None
     ip_changed = False
@@ -3326,11 +3326,11 @@ def _sync_single_interface(
     any_changes = iface_changed or ip_changed or mac_changed
     return SingleInterfaceResult(
         iface_obj, ip_obj, mac_obj, any_changes
-    ), existing_ifaces
+    ), ifaces_cache
 
 
 def _prune_orphan_interfaces(
-    existing_ifaces: NameCache,
+    ifaces_cache: NameCache,
     csv_iface_names: set[str],
     obj_id: int,
     dry_run: bool,
@@ -3342,7 +3342,7 @@ def _prune_orphan_interfaces(
     errors = 0
     deleted_count = 0
 
-    for name, iface_obj in existing_ifaces.items():
+    for name, iface_obj in ifaces_cache.items():
         if name in csv_iface_names:
             continue
 
@@ -3375,7 +3375,7 @@ def _get_interface_endpoint_and_filter(
     return endpoints.vm_interfaces, {"virtual_machine_id": obj_id}
 
 
-def _fetch_existing_interfaces(
+def _fetch_interfaces_cache(
     iface_endpoint: Endpoint,
     iface_filter: dict[str, Any],
     obj_id: int,
@@ -3391,7 +3391,7 @@ def _process_interfaces_sync(
     interfaces: list[NetworkInterfaceData],
     obj_id: int,
     iface_endpoint: Endpoint,
-    existing_ifaces: NameCache,
+    ifaces_cache: NameCache,
     endpoints: NetBoxEndpoints,
     dry_run: bool,
 ) -> tuple[InterfaceSyncResult, NameCache]:
@@ -3403,11 +3403,11 @@ def _process_interfaces_sync(
 
     for iface_data in interfaces:
         try:
-            single_result, existing_ifaces = _sync_single_interface(
+            single_result, ifaces_cache = _sync_single_interface(
                 iface_data,
                 obj_id,
                 iface_endpoint,
-                existing_ifaces,
+                ifaces_cache,
                 endpoints,
                 dry_run,
             )
@@ -3424,7 +3424,7 @@ def _process_interfaces_sync(
             log.exception("ERROR de API sincronizando interfaz")
             errors += 1
 
-    return InterfaceSyncResult(errors, ipv4_candidates, any_changes), existing_ifaces
+    return InterfaceSyncResult(errors, ipv4_candidates, any_changes), ifaces_cache
 
 
 def _sync_interfaces_for_object(
@@ -3440,17 +3440,17 @@ def _sync_interfaces_for_object(
     iface_endpoint, iface_filter = _get_interface_endpoint_and_filter(
         endpoints, obj_id, node_type
     )
-    existing_ifaces = _fetch_existing_interfaces(iface_endpoint, iface_filter, obj_id)
+    ifaces_cache = _fetch_interfaces_cache(iface_endpoint, iface_filter, obj_id)
 
-    sync_res, existing_ifaces = _process_interfaces_sync(
-        interfaces, obj_id, iface_endpoint, existing_ifaces, endpoints, dry_run
+    sync_res, ifaces_cache = _process_interfaces_sync(
+        interfaces, obj_id, iface_endpoint, ifaces_cache, endpoints, dry_run
     )
     errors, ipv4_candidates, any_changes = sync_res
 
     if prune_interfaces and obj_id != 0:
         csv_names = {iface["name"] for iface in interfaces}
         pruned_count, prune_errors = _prune_orphan_interfaces(
-            existing_ifaces, csv_names, obj_id, dry_run
+            ifaces_cache, csv_names, obj_id, dry_run
         )
         errors += prune_errors
         any_changes |= pruned_count > 0

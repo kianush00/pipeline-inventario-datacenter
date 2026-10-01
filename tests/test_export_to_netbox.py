@@ -1660,13 +1660,13 @@ class TestPruneInterfaces:
         mock_iface2 = MagicMock()
         mock_iface2.name = "eth1"
 
-        existing_ifaces: dict[str, Any] = {"eth0": mock_iface1, "eth1": mock_iface2}
+        ifaces_cache: dict[str, Any] = {"eth0": mock_iface1, "eth1": mock_iface2}
 
         # El CSV solo reporta "eth0"
         csv_iface_names = {"eth0"}
 
         deleted, errors = _prune_orphan_interfaces(
-            existing_ifaces=existing_ifaces,
+            ifaces_cache=ifaces_cache,
             csv_iface_names=csv_iface_names,
             obj_id=10,
             dry_run=False,
@@ -1680,11 +1680,11 @@ class TestPruneInterfaces:
     def test_pruning_dry_run_skips_delete(self) -> None:
         mock_iface = MagicMock()
         mock_iface.name = "eth1"
-        existing_ifaces: dict[str, Any] = {"eth1": mock_iface}
+        ifaces_cache: dict[str, Any] = {"eth1": mock_iface}
         csv_iface_names = set()
 
         deleted, errors = _prune_orphan_interfaces(
-            existing_ifaces=existing_ifaces,
+            ifaces_cache=ifaces_cache,
             csv_iface_names=csv_iface_names,
             obj_id=10,
             dry_run=True,
@@ -2148,7 +2148,7 @@ class TestSyncSingleInterface:
         mock_endpoints.ip_addresses = MagicMock()
         mock_endpoints.mac_addresses = MagicMock()
 
-        existing_ifaces: dict[str, NetBoxObject] = {
+        ifaces_cache: dict[str, NetBoxObject] = {
             "eth0": MagicMock(spec=NetBoxObject)
         }
         iface_data = cast(
@@ -2170,14 +2170,14 @@ class TestSyncSingleInterface:
             iface_data=iface_data,
             obj_id=1,
             iface_endpoint=mock_endpoint,
-            existing_ifaces=existing_ifaces,
+            ifaces_cache=ifaces_cache,
             endpoints=mock_endpoints,
             dry_run=False,
         )
         _, _, _, any_changes = single_result
 
         # Assert: the cache returned is the same object
-        assert returned_cache is existing_ifaces
+        assert returned_cache is ifaces_cache
         # Assert: eth1 was added to the cache
         assert "eth1" in returned_cache
         assert returned_cache["eth1"] == mock_iface
