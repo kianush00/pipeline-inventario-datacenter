@@ -69,7 +69,7 @@ from export_to_netbox import (
     ensure_manufacturer,
     ensure_rack,
     ensure_site,
-    extract_raw_csv_value,
+    extract_csv_value,
     generate_fallback_slug,
     get_netbox_object_id,
     get_node_type_from_row,
@@ -391,17 +391,17 @@ class TestExtractCsvValue:
     def test_normal_value(self, config: NetBoxMappingConfig) -> None:
         col_name = config.csv_columns["machine_name"].source
         row = {col_name: "SRV-01"}
-        assert extract_raw_csv_value(row, "machine_name", config) == "SRV-01"
+        assert extract_csv_value(row, "machine_name", config) == "SRV-01"
 
     def test_empty_value(self, config: NetBoxMappingConfig) -> None:
         col_name = config.csv_columns["machine_name"].source
         row = {col_name: ""}
-        assert extract_raw_csv_value(row, "machine_name", config) == ""
+        assert extract_csv_value(row, "machine_name", config) == ""
 
     def test_na_value_converts_to_empty(self, config: NetBoxMappingConfig) -> None:
         col_name = config.csv_columns["machine_name"].source
         row = {col_name: "N/A"}
-        assert extract_raw_csv_value(row, "machine_name", config) == ""
+        assert extract_csv_value(row, "machine_name", config) == ""
 
     def test_required_empty_field_raises_error(
         self, config: NetBoxMappingConfig
@@ -411,7 +411,7 @@ class TestExtractCsvValue:
         with pytest.raises(
             RowValidationError, match="obligatorio 'machine_name' está vacío"
         ):
-            extract_raw_csv_value(row, "machine_name", config, strict=True)
+            extract_csv_value(row, "machine_name", config, strict_extract=True)
 
     def test_nonexistent_alias_raises_critical_error(
         self, config: NetBoxMappingConfig
@@ -421,7 +421,7 @@ class TestExtractCsvValue:
         with pytest.raises(
             ConfigValidationError, match="El alias 'alias_falso' solicitado"
         ):
-            extract_raw_csv_value(row, "alias_falso", config)
+            extract_csv_value(row, "alias_falso", config)
 
     def test_column_with_null_source_returns_empty(
         self, config: NetBoxMappingConfig
@@ -432,7 +432,7 @@ class TestExtractCsvValue:
         )
         config_copy.csv_columns["machine_name"] = col
         row = {"Cualquier_Columna": "SRV-01"}
-        assert extract_raw_csv_value(row, "machine_name", config_copy) == ""
+        assert extract_csv_value(row, "machine_name", config_copy) == ""
 
     def test_null_source_and_required_raises_error(
         self, config: NetBoxMappingConfig
@@ -446,7 +446,7 @@ class TestExtractCsvValue:
         with pytest.raises(
             RowValidationError, match="no está mapeado en la configuración"
         ):
-            extract_raw_csv_value(row, "machine_name", config_copy, strict=True)
+            extract_csv_value(row, "machine_name", config_copy, strict_extract=True)
 
 
 class TestConcatDot:
@@ -1551,7 +1551,7 @@ class TestResolveDeviceTypeUHeight:
                 return row.get(key)
             return "mocked"
 
-        monkeypatch.setattr(export_to_netbox, "extract_raw_csv_value", mock_extract)
+        monkeypatch.setattr(export_to_netbox, "extract_csv_value", mock_extract)
         monkeypatch.setattr(export_to_netbox, "get_netbox_object_id", lambda x: 1)
 
         row = {"manufacturer": "Dell", "model": "R740", "hei_u": "1.5"}
@@ -1590,7 +1590,7 @@ class TestResolveDeviceTypeUHeight:
                 return ""  # Simulamos celda vacía
             return "mocked"
 
-        monkeypatch.setattr(export_to_netbox, "extract_raw_csv_value", mock_extract)
+        monkeypatch.setattr(export_to_netbox, "extract_csv_value", mock_extract)
         monkeypatch.setattr(export_to_netbox, "get_netbox_object_id", lambda x: 1)
 
         row = {"hei_u": ""}
@@ -1715,9 +1715,9 @@ class TestSyncSkips:
         mock_config = MagicMock()
         mock_config.is_empty.return_value = False
         mock_config.csv_columns = {
-            "cluster_name": MagicMock(source="cluster_name"),
-            "machine_name": MagicMock(source="machine_name"),
-            "inventory_uuid": MagicMock(source="inventory_uuid"),
+            "cluster_name": MagicMock(source="cluster_name", map=None),
+            "machine_name": MagicMock(source="machine_name", map=None),
+            "inventory_uuid": MagicMock(source="inventory_uuid", map=None),
         }
 
         mock_base_node.return_value = (
@@ -1884,7 +1884,7 @@ class TestEnsureTaxonomyQACases:
         ) -> str:
             return row.get(col, "")
 
-        config.extract_raw_csv_value = mock_extract
+        config.extract_csv_value = mock_extract
 
         rows = [
             {
@@ -1900,7 +1900,7 @@ class TestEnsureTaxonomyQACases:
         ]
 
         with (
-            patch("export_to_netbox.extract_raw_csv_value", side_effect=mock_extract),
+            patch("export_to_netbox.extract_csv_value", side_effect=mock_extract),
             pytest.raises(
                 ConfigValidationError, match="Conflicto de SO en el clúster 'Cluster-X'"
             ),
@@ -2190,7 +2190,7 @@ class TestClassifyRows:
         )
         monkeypatch.setattr(
             export_to_netbox,
-            "extract_raw_csv_value",
+            "extract_csv_value",
             lambda r, k, c, **kwargs: "broken_host",
         )
 

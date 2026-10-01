@@ -913,7 +913,7 @@ def concat_dot(parts: list[str], config: NetBoxMappingConfig) -> str:
     return ". ".join(clean)
 
 
-def extract_raw_csv_value(
+def _extract_raw_csv_value(
     row: CsvRow,
     col_alias: str,
     config: NetBoxMappingConfig,
@@ -957,19 +957,22 @@ def extract_csv_value(
     config: NetBoxMappingConfig,
     strict_extract: bool = False,
     strict_map: bool = False,
+    fallback: Any = None,
 ) -> Any:
     """
     Extrae el valor del CSV y aplica la función de mapeo (map_value)
     si existe en la configuración.
     """
-    raw_val = extract_raw_csv_value(row, col_alias, config, strict_extract)
+    raw_val = _extract_raw_csv_value(row, col_alias, config, strict_extract)
     if not raw_val:
-        return raw_val
+        return fallback if fallback is not None else raw_val
 
     col_def = config.csv_columns.get(col_alias)
     if col_def and col_def.map:
         mapped_val = config.map_value(col_alias, raw_val, strict=strict_map)
-        return mapped_val if mapped_val is not None else raw_val
+        if mapped_val is not None:
+            return mapped_val
+        return fallback if fallback is not None else raw_val
     return raw_val
 
 
@@ -1002,7 +1005,7 @@ def get_node_type_from_object(obj: Endpoint | NetBoxObject) -> NodeType:
 
 def get_node_type_from_row(row: CsvRow, config: NetBoxMappingConfig) -> NodeType:
     """Extrae el tipo de máquina y lo mapea al tipo de nodo NetBox."""
-    machine_type_val = extract_raw_csv_value(row, "machine_type", config)
+    machine_type_val = extract_csv_value(row, "machine_type", config)
     return config.resolve_node_type(machine_type_val)
 
 
@@ -1019,7 +1022,7 @@ def count_machine_names(
     """Genera un conteo de las ocurrencias de nombres de máquinas en el CSV (ignorando vacíos)."""
     counts = Counter[str]()
     for row in rows:
-        val = extract_raw_csv_value(row, "machine_name", config)
+        val = extract_csv_value(row, "machine_name", config)
         if isinstance(val, str):
             name = val.strip()
             if name:
@@ -1645,12 +1648,12 @@ def precompute_cluster_type_map(
     cluster_type_map: dict[str, str] = {}
 
     for row in rows:
-        machine_type = extract_raw_csv_value(row, "machine_type", config)
+        machine_type = extract_csv_value(row, "machine_type", config)
         if machine_type != "Hipervisor":
             continue
 
-        cluster_name = extract_raw_csv_value(row, "cluster_name", config)
-        hypervisor_os = extract_raw_csv_value(row, "hypervisor_os", config)
+        cluster_name = extract_csv_value(row, "cluster_name", config)
+        hypervisor_os = extract_csv_value(row, "hypervisor_os", config)
 
         if not cluster_name or not hypervisor_os:
             continue
@@ -2245,7 +2248,7 @@ def _resolve_platform(
 ) -> tuple[int | None, dict[str, NetBoxObject]]:
     """Resuelve el Platform desde la columna OS.
     Retorna una tupla con el ID del Platform y el Platform cache actualizado."""
-    plt_name = extract_raw_csv_value(row, "os", config)
+    plt_name = extract_csv_value(row, "os", config)
     if not plt_name:
         return None, plt_cache
 
@@ -2268,7 +2271,7 @@ def _resolve_device_role(
     Si el nombre está vacío o no existe, utiliza "Others" como fallback.
     Lanza RowValidationError si el fallback "Others" tampoco existe.
     """
-    role_csv = extract_raw_csv_value(row, "role", config)
+    role_csv = extract_csv_value(row, "role", config)
     role_obj = None
 
     if role_csv:
@@ -2278,7 +2281,7 @@ def _resolve_device_role(
         role_obj = roles_cache.get("others")
 
     if not role_obj:
-        machine_name = extract_raw_csv_value(row, "machine_name", config) or "?"
+        machine_name = extract_csv_value(row, "machine_name", config) or "?"
         raise RowValidationError(
             f"No existe el DeviceRole 'Others' en NetBox para asignar como "
             f"fallback a la máquina '{machine_name}'."
@@ -2298,14 +2301,10 @@ def _resolve_netbox_status(
 
     Retorna el status NetBox.
     """
-    status_csv = extract_raw_csv_value(row, "status", config)
-
-    status_mapped = config.map_value("status", status_csv, strict=False)
-    if status_mapped is not None:
-        return status_mapped
-
     node_cfg = config.node_types.get_config(node_type)
-    return node_cfg.status.default
+    return extract_csv_value(
+        row, "status", config, strict_map=False, fallback=node_cfg.status.default
+    )
 
 
 def _resolve_cluster(
@@ -2328,7 +2327,7 @@ def _resolve_cluster(
 
     Retorna una tupla con el ID del Cluster y el Cluster cache actualizado.
     """
-    cluster_name = extract_raw_csv_value(row, "cluster_name", config)
+    cluster_name = extract_csv_value(row, "cluster_name", config)
     if not cluster_name:
         return None, cluster_cache
 
@@ -2359,8 +2358,8 @@ def _resolve_device_type(
     Si la altura ('hei_u') no se proporciona o es inválida, asume 1 por defecto.
     Retorna una tupla con el ID del DeviceType y la caché (CacheStore) actualizada.
     """
-    manufacturer = extract_raw_csv_value(row, "manufacturer", config)
-    model = extract_raw_csv_value(row, "model", config)
+    manufacturer = extract_csv_value(row, "manufacturer", config)
+    model = extract_csv_value(row, "model", config)
 
     # Manufacturer.
     manufacturer_obj, caches.manufacturers = ensure_manufacturer(
@@ -2370,7 +2369,7 @@ def _resolve_device_type(
         dry_run,
     )
 
-    raw_u_height = extract_raw_csv_value(row, "hei_u", config)
+    raw_u_height = extract_csv_value(row, "hei_u", config)
     if not raw_u_height:
         u_height = 1.0
     else:
@@ -2405,7 +2404,7 @@ def _resolve_host_device(
     acotado estrictamente al site configurado.
     Retorna una tupla con el ID del host (o None) y la caché actualizada.
     """
-    host_name_csv = extract_raw_csv_value(row, "host_device", config)
+    host_name_csv = extract_csv_value(row, "host_device", config)
     if not host_name_csv:
         return None, cache
 
@@ -2464,8 +2463,8 @@ def _resolve_base_node(
     Resuelve los campos comunes entre device y virtual_machine.
     Retorna una tupla con los datos del nodo base y la caché actualizada.
     """
-    machine_name = extract_raw_csv_value(row, "machine_name", config, strict=True)
-    uuid = extract_raw_csv_value(row, "inventory_uuid", config).lower()
+    machine_name = extract_csv_value(row, "machine_name", config, strict_extract=True)
+    uuid = extract_csv_value(row, "inventory_uuid", config).lower()
     machine_type = extract_csv_value(
         row, "machine_type", config, strict_extract=True, strict_map=False
     )
@@ -2714,8 +2713,8 @@ def sync_device(
         tuple[SyncResult, CacheStore]: El resultado final y el estado de la caché puramente inyectado.
     """
     # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
-    manufacturer = extract_raw_csv_value(row, "manufacturer", config)
-    model = extract_raw_csv_value(row, "model", config)
+    manufacturer = extract_csv_value(row, "manufacturer", config)
+    model = extract_csv_value(row, "model", config)
     if not manufacturer or not model:
         raise RowSkipCondition("Falta 'manufacturer' o 'model'. Requerido para Device.")
 
@@ -2770,7 +2769,7 @@ def sync_device(
             log.info("INFO (%s): Hipervisor sin cluster asignado.", machine_name)
 
     # Rack.
-    rack_name = extract_raw_csv_value(row, "rack", config)
+    rack_name = extract_csv_value(row, "rack", config)
     if rack_name:
         rack, caches.racks = ensure_rack(
             endpoints.racks,
@@ -2828,7 +2827,7 @@ def sync_vm(
         tuple[SyncResult, CacheStore]: El resultado final y el estado de la caché puramente inyectado.
     """
     # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
-    cluster_name = extract_raw_csv_value(row, "cluster_name", config)
+    cluster_name = extract_csv_value(row, "cluster_name", config)
     if not cluster_name:
         raise RowSkipCondition("Falta 'cluster_name'. Requerido para Virtual Machine.")
 
@@ -3639,7 +3638,7 @@ def _classify_rows(
                 vm_rows.append((row_num, row))
         except RowValidationError:
             machine_name = (
-                extract_raw_csv_value(row, "machine_name", config) or f"fila {row_num}"
+                extract_csv_value(row, "machine_name", config) or f"fila {row_num}"
             )
             log.exception("ERROR fila %d ('%s')", row_num, machine_name)
             counts[SyncStatus.ERROR] += 1
@@ -3741,9 +3740,7 @@ def _sync_row(
     Retorna:
         tuple[SyncCounts, CacheStore]: El acumulador de métricas mutado y la caché propagada.
     """
-    machine_name = (
-        extract_raw_csv_value(row, "machine_name", config) or f"fila {row_num}"
-    )
+    machine_name = extract_csv_value(row, "machine_name", config) or f"fila {row_num}"
 
     try:
         sync_res, caches = _process_node_sync(
