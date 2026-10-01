@@ -681,6 +681,24 @@ class NetBoxMappingConfig(BaseModel):
             return True
         return str(value).strip().lower() in self._empty_values_set
 
+    def is_cluster_host(self, machine_type: str) -> bool:
+        """Determina si un machine_type (ya mapeado) es un host de clúster (hipervisor)."""
+        col_def = self.csv_columns.get("machine_type")
+        return bool(
+            col_def
+            and col_def.cluster_host_types
+            and machine_type in col_def.cluster_host_types
+        )
+
+    def is_virtual_machine(self, machine_type: str) -> bool:
+        """Determina si un machine_type (ya mapeado) corresponde a una máquina virtual."""
+        col_def = self.csv_columns.get("machine_type")
+        return bool(
+            col_def
+            and col_def.virtual_machine_types
+            and machine_type in col_def.virtual_machine_types
+        )
+
     def resolve_node_type(self, machine_type: str) -> NodeType:
         """
         Resuelve el NodeType basándose en las listas semánticas.
@@ -692,10 +710,7 @@ class NetBoxMappingConfig(BaseModel):
 
         mapped_type = self.map_value("machine_type", machine_type, strict=True)
 
-        col_def = self.csv_columns.get("machine_type")
-        vm_types = col_def.virtual_machine_types if col_def else []
-
-        if mapped_type in vm_types:
+        if self.is_virtual_machine(mapped_type):
             return NodeType.VIRTUAL_MACHINE
         return NodeType.DEVICE
 
@@ -1657,7 +1672,7 @@ def precompute_cluster_type_map(
 
     for row in rows:
         machine_type = extract_csv_value(row, "machine_type", config)
-        if machine_type != "Hipervisor":
+        if not config.is_cluster_host(machine_type):
             continue
 
         cluster_name = extract_csv_value(row, "cluster_name", config)
@@ -2741,16 +2756,8 @@ def sync_device(
     if payload.get("position") is not None and "face" not in payload:
         payload["face"] = "front"
 
-    # Determinar si el dispositivo es un hipervisor (host de cluster) según YAML
-    machine_type_col = config.csv_columns.get("machine_type")
-    is_hypervisor = (
-        machine_type_col is not None
-        and machine_type_col.cluster_host_types is not None
-        and machine_type in machine_type_col.cluster_host_types
-    )
-
     # Cluster para hipervisores.
-    if is_hypervisor:
+    if config.is_cluster_host(machine_type):
         cluster_id, caches.clusters = _resolve_cluster(
             endpoints.clusters,
             row,

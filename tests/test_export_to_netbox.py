@@ -1806,6 +1806,7 @@ class TestSyncDevice:
 
         mock_config = MagicMock()
         mock_config.is_empty.return_value = False
+        mock_config.is_cluster_host.return_value = False
         mock_config.csv_columns = {
             "manufacturer": MagicMock(source="manufacturer"),
             "model": MagicMock(source="model"),
@@ -1928,14 +1929,18 @@ class TestEnsureTaxonomyQACases:
 
         config.extract_csv_value = mock_extract
 
+        mock_machine_type_col = MagicMock()
+        mock_machine_type_col.cluster_host_types = ["hypervisor"]
+        config.csv_columns = {"machine_type": mock_machine_type_col}
+
         rows = [
             {
-                "machine_type": "Hipervisor",
+                "machine_type": "hypervisor",
                 "cluster_name": "Cluster-X",
                 "hypervisor_os": "ESXi 7",
             },
             {
-                "machine_type": "Hipervisor",
+                "machine_type": "hypervisor",
                 "cluster_name": "Cluster-X",
                 "hypervisor_os": "ESXi 8",
             },
