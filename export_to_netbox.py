@@ -1383,7 +1383,10 @@ def get_or_create_cached(
         tuple[NetBoxObject, dict[Any, NetBoxObject]]: El objeto final y la caché propagada.
     """
     if cache_key in cache:
+        log.debug("[Cache HIT] Objeto '%s' encontrado en memoria", name)
         return cache[cache_key], cache
+
+    log.debug("[Cache MISS] Buscando '%s' en API...", name)
 
     if not skip_filter:
         results: list[Record] = list(endpoint.filter(**filter_kwargs))
@@ -2185,6 +2188,9 @@ def _resolve_field_value(
     value = _validate_select_choice(value, custom_field_def, target, is_optional)
     if field_def.cast:
         value = apply_cast(value, field_def.cast, target)
+
+    if value != raw_value:
+        log.debug("Mapeo %s: '%s' casteado a -> '%s'", target, raw_value, value)
 
     return value
 
@@ -3453,6 +3459,28 @@ def _process_interfaces_sync(
     return InterfaceSyncResult(errors, ipv4_candidates, any_changes), ifaces_cache
 
 
+def _log_interface_deltas(
+    obj_id: int,
+    interfaces: list[NetworkInterfaceData],
+    ifaces_cache: dict[str, NetBoxObject],
+    prune_interfaces: bool,
+) -> None:
+    """Calcula y registra los deltas de las interfaces antes de sincronizar."""
+    csv_names = {iface["name"] for iface in interfaces}
+    cache_names = set(ifaces_cache.keys())
+    to_create = csv_names - cache_names
+    to_update = csv_names & cache_names
+    to_prune = cache_names - csv_names if prune_interfaces else set()
+
+    log.debug(
+        "Deltas de interfaces (obj_id=%s) -> Crear: %d | Actualizar: %d | Eliminar: %d",
+        obj_id,
+        len(to_create),
+        len(to_update),
+        len(to_prune),
+    )
+
+
 def _sync_interfaces_for_object(
     endpoints: NetBoxEndpoints,
     obj_id: int,
@@ -3467,6 +3495,8 @@ def _sync_interfaces_for_object(
         endpoints, obj_id, node_type
     )
     ifaces_cache = _fetch_interfaces_cache(iface_endpoint, iface_filter, obj_id)
+
+    _log_interface_deltas(obj_id, interfaces, ifaces_cache, prune_interfaces)
 
     sync_res, ifaces_cache = _process_interfaces_sync(
         interfaces, obj_id, iface_endpoint, ifaces_cache, endpoints, dry_run
