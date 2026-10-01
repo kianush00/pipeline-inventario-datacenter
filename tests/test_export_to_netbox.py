@@ -1514,15 +1514,14 @@ class TestEnsureCluster:
         )
 
         cluster_type_mock = MockNetBoxRecord(id=2, name="Type1")
-        site_mock = MockNetBoxRecord(id=1, name="Site1")
-        cache: dict[tuple[int, str], NetBoxObject] = {}
+        cache: dict[str, NetBoxObject] = {}
 
         with pytest.raises(
             NetBoxApiError,
             match="No se pudo crear el objeto en 'clusters' con nombre 'Cluster1'",
         ):
             ensure_cluster(
-                endpoint, "Cluster1", cluster_type_mock, site_mock, cache, dry_run=False
+                endpoint, "Cluster1", cluster_type_mock, cache, dry_run=False
             )
 
 
@@ -1748,7 +1747,7 @@ class TestSyncSkips:
                 dry_run=False,
             )
 
-    @patch("export_to_netbox._resolve_cluster", return_value=None)
+    @patch("export_to_netbox._resolve_cluster", return_value=(None, MagicMock()))
     @patch("export_to_netbox._resolve_base_node")
     def test_sync_vm_skips_unresolvable_cluster(
         self, mock_base_node: MagicMock, mock_resolve_cluster: MagicMock

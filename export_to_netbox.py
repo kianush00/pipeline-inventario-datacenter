@@ -739,7 +739,7 @@ class CacheStore(BaseModel):
     device_types: dict[tuple[str, str], NetBoxObject] = Field(default_factory=dict)
     platforms: dict[str, NetBoxObject] = Field(default_factory=dict)
     racks: dict[tuple[int, str], NetBoxObject] = Field(default_factory=dict)
-    clusters: dict[tuple[int, str], NetBoxObject] = Field(default_factory=dict)
+    clusters: dict[str, NetBoxObject] = Field(default_factory=dict)
     cluster_types: dict[str, NetBoxObject] = Field(default_factory=dict)
     device_roles: dict[str, NetBoxObject] = Field(default_factory=dict)
     host_devices: dict[tuple[int, str], int | None] = Field(default_factory=dict)
@@ -1831,25 +1831,22 @@ def ensure_cluster(
     clusters_endpoint: Endpoint,
     name: str,
     cluster_type: NetBoxObject,
-    site: NetBoxObject,
-    cache: dict[tuple[int, str], NetBoxObject],
+    cache: dict[str, NetBoxObject],
     dry_run: bool,
-) -> tuple[NetBoxObject, dict[tuple[int, str], NetBoxObject]]:
+) -> tuple[NetBoxObject, dict[str, NetBoxObject]]:
     """Garantiza que el Cluster exista en NetBox.
     Retorna el objeto Cluster creado y la caché actualizada."""
-    site_id = get_netbox_object_id(site)
-    cache_key = (site_id, name)
+    cache_key = name
     cluster_type_id = get_netbox_object_id(cluster_type)
 
     return get_or_create_cached(
         endpoint=clusters_endpoint,
         cache=cache,
         cache_key=cache_key,
-        filter_kwargs={"name": name, "site_id": site_id},
-        create_kwargs={"name": name, "type": cluster_type_id, "site": site_id},
+        filter_kwargs={"name": name},
+        create_kwargs={"name": name, "type": cluster_type_id},
         name=name,
         dry_run=dry_run,
-        skip_filter=(site_id == 0),
     )
 
 
@@ -2316,11 +2313,10 @@ def _resolve_cluster(
     cluster_type_map: dict[str, str],
     cluster_type_cache: dict[str, NetBoxObject],
     fallback_cluster_type: NetBoxObject,
-    site: NetBoxObject,
-    cluster_cache: dict[tuple[int, str], NetBoxObject],
+    cluster_cache: dict[str, NetBoxObject],
     dry_run: bool,
     config: NetBoxMappingConfig,
-) -> tuple[int | None, dict[tuple[int, str], NetBoxObject]]:
+) -> tuple[int | None, dict[str, NetBoxObject]]:
     """
     Resuelve el Cluster desde la columna correspondiente.
 
@@ -2342,7 +2338,6 @@ def _resolve_cluster(
         cluster_endpoint,
         cluster_name,
         cluster_type,
-        site,
         cluster_cache,
         dry_run,
     )
@@ -2759,7 +2754,6 @@ def sync_device(
             cluster_type_map,
             caches.cluster_types,
             fallback_cluster_type,
-            site,
             caches.clusters,
             dry_run,
             config,
@@ -2852,13 +2846,12 @@ def sync_vm(
     payload = base["payload"]
 
     # Cluster.
-    cluster_id = _resolve_cluster(
+    cluster_id, caches.clusters = _resolve_cluster(
         endpoints.clusters,
         row,
         cluster_type_map,
         caches.cluster_types,
         fallback_cluster_type,
-        site,
         caches.clusters,
         dry_run,
         config,
