@@ -1363,39 +1363,6 @@ def _is_name_collision(e: RequestError) -> bool:
     return _is_collision_error(e, ("name", "non_field_errors"))
 
 
-def _create_with_fallback_slug(
-    endpoint: Endpoint,
-    original_name: str,
-    **kwargs: Any,
-) -> Record:
-    """
-    Intenta crear un objeto en NetBox. Si ocurre colisión de slug (RequestError),
-    genera un slug determinista de respaldo y reintenta la creación.
-    Retorna el objeto creado.
-    """
-    slug: str = kwargs.get("slug", "")
-    try:
-        return cast(Record, endpoint.create(**kwargs))
-    except RequestError as e:
-        if not _is_slug_collision(e):
-            raise
-
-        slug_fallback = generate_fallback_slug(slug, original_name)
-        log.warning(
-            "Slug '%s' colisionó al crear objeto en '%s' con nombre '%s'; reintentando con '%s'.",
-            slug,
-            endpoint.name,
-            original_name,
-            slug_fallback,
-        )
-        kwargs["slug"] = slug_fallback
-        with netbox_error_wrap(
-            f"Imposible crear objeto en '{endpoint.name}' con nombre '{original_name}' "
-            "debido a colisión persistente de slug o rechazo de NetBox"
-        ):
-            return cast(Record, endpoint.create(**kwargs))
-
-
 def _search_in_netbox(
     endpoint: Endpoint,
     filter_kwargs: dict[str, Any],
@@ -1432,6 +1399,39 @@ def _create_dry_run_mock(
     log.info("[DRY-RUN] Crearía objeto en '%s': %s", endpoint.name, name)
     mock_kwargs = create_kwargs.copy()
     return MockNetBoxRecord(id=0, **mock_kwargs)
+
+
+def _create_with_fallback_slug(
+    endpoint: Endpoint,
+    original_name: str,
+    **kwargs: Any,
+) -> Record:
+    """
+    Intenta crear un objeto en NetBox. Si ocurre colisión de slug (RequestError),
+    genera un slug determinista de respaldo y reintenta la creación.
+    Retorna el objeto creado.
+    """
+    slug: str = kwargs.get("slug", "")
+    try:
+        return cast(Record, endpoint.create(**kwargs))
+    except RequestError as e:
+        if not _is_slug_collision(e):
+            raise
+
+        slug_fallback = generate_fallback_slug(slug, original_name)
+        log.warning(
+            "Slug '%s' colisionó al crear objeto en '%s' con nombre '%s'; reintentando con '%s'.",
+            slug,
+            endpoint.name,
+            original_name,
+            slug_fallback,
+        )
+        kwargs["slug"] = slug_fallback
+        with netbox_error_wrap(
+            f"Imposible crear objeto en '{endpoint.name}' con nombre '{original_name}' "
+            "debido a colisión persistente de slug o rechazo de NetBox"
+        ):
+            return cast(Record, endpoint.create(**kwargs))
 
 
 def _execute_creation(
