@@ -1470,6 +1470,46 @@ def _handle_concurrency_backoff(
     time.sleep(sleep_time)
 
 
+def _attempt_get_or_create(
+    attempt: int,
+    endpoint: Endpoint,
+    filter_kwargs: dict[str, Any],
+    create_kwargs: dict[str, Any],
+    name: str,
+    dry_run: bool,
+    use_fallback_slug: bool,
+    skip_filter: bool,
+    preventive_slug_search: bool,
+    max_retries: int,
+) -> NetBoxObject | None:
+    """
+    Ejecuta un único intento de búsqueda o creación.
+    Retorna el objeto si tiene éxito, o None si hubo colisión concurrente y debe reintentarse.
+    """
+    if not skip_filter or attempt > 0:
+        existing_obj = _search_in_netbox(
+            endpoint, filter_kwargs, create_kwargs, name, preventive_slug_search
+        )
+        if existing_obj:
+            return existing_obj
+
+    if dry_run:
+        return _create_dry_run_mock(endpoint, name, create_kwargs)
+
+    try:
+        return _execute_creation(endpoint, create_kwargs, name, use_fallback_slug)
+
+    except RequestError as e:
+        if not _is_name_collision(e) or attempt >= max_retries - 1:
+            with netbox_error_wrap(
+                f"No se pudo crear el objeto en '{endpoint.name}' con nombre '{name}'"
+            ):
+                raise
+
+        _handle_concurrency_backoff(name, endpoint.name, attempt, max_retries)
+        return None
+
+
 def get_or_create_cached(
     endpoint: Endpoint,
     cache: dict[Any, NetBoxObject],
@@ -1505,35 +1545,21 @@ def get_or_create_cached(
 
     MAX_RETRIES = 3
     for attempt in range(MAX_RETRIES):
-        if not skip_filter or attempt > 0:
-            existing_obj = _search_in_netbox(
-                endpoint, filter_kwargs, create_kwargs, name, preventive_slug_search
-            )
-            if existing_obj:
-                cache[cache_key] = existing_obj
-                return existing_obj, cache
-
-        if dry_run:
-            obj = _create_dry_run_mock(endpoint, name, create_kwargs)
+        obj = _attempt_get_or_create(
+            attempt,
+            endpoint,
+            filter_kwargs,
+            create_kwargs,
+            name,
+            dry_run,
+            use_fallback_slug,
+            skip_filter,
+            preventive_slug_search,
+            MAX_RETRIES,
+        )
+        if obj is not None:
             cache[cache_key] = obj
             return obj, cache
-
-        try:
-            created_obj = _execute_creation(
-                endpoint, create_kwargs, name, use_fallback_slug
-            )
-            cache[cache_key] = created_obj
-            return created_obj, cache
-
-        except RequestError as e:
-            if _is_name_collision(e) and attempt < MAX_RETRIES - 1:
-                _handle_concurrency_backoff(name, endpoint.name, attempt, MAX_RETRIES)
-                continue
-
-            with netbox_error_wrap(
-                f"No se pudo crear el objeto en '{endpoint.name}' con nombre '{name}'"
-            ):
-                raise
 
     raise NetBoxApiError(
         f"No se pudo resolver '{name}' después de {MAX_RETRIES} intentos."
@@ -1583,7 +1609,7 @@ def _sync_choice_set_choices(
         log.info("[DRY-RUN] Actualizaría Choice Set: %s", choice_set_name)
         return _get_choice_set_id(choice_set)
 
-    try:
+    with netbox_error_wrap(f"Error al actualizar Choice Set '{choice_set_name}'"):
         choice_set.update(
             {
                 "extra_choices": choices,
@@ -1591,10 +1617,6 @@ def _sync_choice_set_choices(
             }
         )
         log.info("Choice Set actualizado: %s", choice_set_name)
-    except RequestError as e:
-        raise ConfigValidationError(
-            f"Error al actualizar Choice Set '{choice_set_name}': {e}"
-        ) from e
 
     return _get_choice_set_id(choice_set)
 
