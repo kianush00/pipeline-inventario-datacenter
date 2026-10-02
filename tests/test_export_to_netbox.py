@@ -22,6 +22,7 @@ from export_to_netbox import (
     FieldMappingConfig,
     FieldParseError,
     MockNetBoxRecord,
+    NameCache,
     NetBoxApiError,
     NetBoxEndpoints,
     NetBoxMappingConfig,
@@ -31,6 +32,7 @@ from export_to_netbox import (
     RowSkipCondition,
     RowValidationError,
     SiteConfig,
+    SiteNameCache,
     SyncResult,
     SyncStatus,
     _assign_primary_ipv4,
@@ -948,7 +950,7 @@ class TestResolveDeviceRole:
     def test_role_exists(self, config: NetBoxMappingConfig) -> None:
         col_name = config.csv_columns["role"].source
         row = {col_name: "DB", config.csv_columns["machine_name"].source: "SRV-01"}
-        cache: dict[str, NetBoxObject] = {"db": MockNetBoxRecord(id=10, name="DB")}
+        cache: NameCache = {"db": MockNetBoxRecord(id=10, name="DB")}
         assert _resolve_device_role(row, cache, config) == 10
 
     def test_role_not_exists_uses_others(self, config: NetBoxMappingConfig) -> None:
@@ -957,14 +959,12 @@ class TestResolveDeviceRole:
             col_name: "Inexistente",
             config.csv_columns["machine_name"].source: "SRV-01",
         }
-        cache: dict[str, NetBoxObject] = {
-            "others": MockNetBoxRecord(id=99, name="Others")
-        }
+        cache: NameCache = {"others": MockNetBoxRecord(id=99, name="Others")}
         assert _resolve_device_role(row, cache, config) == 99
 
     def test_others_not_exists_raises_error(self, config: NetBoxMappingConfig) -> None:
         row = {config.csv_columns["machine_name"].source: "SRV-01"}
-        cache: dict[str, NetBoxObject] = {}
+        cache: NameCache = {}
         with pytest.raises(
             RowValidationError, match="No existe el DeviceRole 'Others'"
         ):
@@ -1489,7 +1489,7 @@ class TestEnsureManufacturer:
 
     def test_found_in_cache(self) -> None:
         endpoint = MagicMock()
-        cache: dict[str, NetBoxObject] = {"Dell": MockNetBoxRecord(id=5, name="Dell")}
+        cache: NameCache = {"Dell": MockNetBoxRecord(id=5, name="Dell")}
 
         result, returned_cache = ensure_manufacturer(
             endpoint, "Dell", cache, dry_run=False
@@ -1503,7 +1503,7 @@ class TestEnsureManufacturer:
         endpoint = MagicMock()
         mock_mfg = MockNetBoxRecord(id=6, name="HP")
         endpoint.filter.return_value = [mock_mfg]
-        cache: dict[str, NetBoxObject] = {}
+        cache: NameCache = {}
 
         result, returned_cache = ensure_manufacturer(
             endpoint, "HP", cache, dry_run=False
@@ -1518,7 +1518,7 @@ class TestEnsureManufacturer:
         # filter(name="H.P.") retorna vacío, pero filter(slug="hp") retorna un registro
         mock_mfg = MockNetBoxRecord(id=7, name="HP")
         endpoint.filter.side_effect = [[], [mock_mfg]]
-        cache: dict[str, NetBoxObject] = {}
+        cache: NameCache = {}
 
         result, returned_cache = ensure_manufacturer(
             endpoint, "H.P.", cache, dry_run=False
@@ -1534,7 +1534,7 @@ class TestEnsureManufacturer:
         endpoint.name = "racks"
         mock_created = MockNetBoxRecord(id=8, name="Lenovo")
         endpoint.create.return_value = mock_created
-        cache: dict[str, NetBoxObject] = {}
+        cache: NameCache = {}
 
         result, returned_cache = ensure_manufacturer(
             endpoint, "Lenovo", cache, dry_run=False
@@ -1558,7 +1558,7 @@ class TestEnsureRack:
         )
 
         site_mock = MockNetBoxRecord(id=1, name="Site1")
-        cache: dict[tuple[int, str], NetBoxObject] = {}
+        cache: SiteNameCache = {}
 
         with pytest.raises(
             NetBoxApiError,
@@ -1579,7 +1579,7 @@ class TestEnsureCluster:
         )
 
         cluster_type_mock = MockNetBoxRecord(id=2, name="Type1")
-        cache: dict[str, NetBoxObject] = {}
+        cache: NameCache = {}
 
         with pytest.raises(
             NetBoxApiError,
@@ -1707,8 +1707,8 @@ class TestResolveCluster:
 
         cluster_type_map: dict[str, str] = {}
         fallback_cluster_type = MockNetBoxRecord(id=99, name="FallbackType")
-        cluster_type_cache: dict[str, NetBoxObject] = {}
-        cluster_cache: dict[str, NetBoxObject] = {}
+        cluster_type_cache: NameCache = {}
+        cluster_cache: NameCache = {}
 
         mock_cluster = MockNetBoxRecord(id=42, name="Cluster 1")
         mock_ensure_cluster.return_value = (mock_cluster, {"Cluster 1": mock_cluster})
@@ -1746,10 +1746,10 @@ class TestResolveCluster:
 
         cluster_type_map = {"": "VMware"}
         fallback_cluster_type = MockNetBoxRecord(id=99, name="FallbackType")
-        cluster_type_cache: dict[str, NetBoxObject] = {
+        cluster_type_cache: NameCache = {
             "VMware": MockNetBoxRecord(id=1, name="VMware")
         }
-        cluster_cache: dict[str, NetBoxObject] = {}
+        cluster_cache: NameCache = {}
 
         cluster_id, cache = _resolve_cluster(
             mock_endpoints.clusters,
@@ -1775,8 +1775,8 @@ class TestResolveCluster:
 
         cluster_type_map: dict[str, str] = {}
         fallback_cluster_type = MockNetBoxRecord(id=99, name="FallbackType")
-        cluster_type_cache: dict[str, NetBoxObject] = {}
-        cluster_cache: dict[str, NetBoxObject] = {}
+        cluster_type_cache: NameCache = {}
+        cluster_cache: NameCache = {}
 
         cluster_id, cache = _resolve_cluster(
             mock_endpoints.clusters,
@@ -2372,6 +2372,30 @@ class TestEnsureTaxonomyQACases:
         ):
             _sync_single_device_role(endpoints, role_def, {}, dry_run=False)
 
+    @patch("export_to_netbox.get_or_create_cached")
+    def test_sync_single_device_role_cache_and_update(
+        self, mock_get_or_create: MagicMock
+    ) -> None:
+        """
+        Escenario: Un DeviceRole ya existe en caché, pero tiene vm_role=False.
+        _sync_single_device_role debe mutarlo in-place invocando .update(),
+        y la caché debe retornar con el objeto correcto sin reasignaciones redundantes.
+        """
+        endpoints = MagicMock()
+        role_def = DeviceRoleConfig(name="AccessSwitch", slug="access", color="000000")
+
+        mock_obj = MagicMock(id=10, vm_role=False)
+        cache_initial = cast(NameCache, {"accessswitch": mock_obj})
+        mock_get_or_create.return_value = (mock_obj, cache_initial)
+
+        returned_obj, returned_cache = _sync_single_device_role(
+            endpoints, role_def, cache_initial, dry_run=False
+        )
+
+        mock_obj.update.assert_called_once_with({"vm_role": True})
+        assert returned_obj is mock_obj
+        assert returned_cache["accessswitch"] is mock_obj
+
     def test_get_or_create_preventive_slug_without_slug_kwarg(self) -> None:
         """
         Escenario: Búsqueda preventiva por slug activa, pero omitiendo 'slug' en create_kwargs.
@@ -2383,7 +2407,7 @@ class TestEnsureTaxonomyQACases:
         mock_created = MockNetBoxRecord(id=99, name="NoSlug")
         endpoint.create.return_value = mock_created
 
-        cache: dict[str, NetBoxObject] = {}
+        cache: NameCache = {}
         result, _ = get_or_create_cached(
             endpoint,
             cache=cache,
@@ -2550,7 +2574,7 @@ class TestSyncSingleInterface:
         mock_endpoints.ip_addresses = MagicMock()
         mock_endpoints.mac_addresses = MagicMock()
 
-        ifaces_cache: dict[str, NetBoxObject] = {"eth0": MagicMock(spec=NetBoxObject)}
+        ifaces_cache: NameCache = {"eth0": MagicMock(spec=NetBoxObject)}
         iface_data = cast(
             NetworkInterfaceData,
             {

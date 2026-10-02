@@ -1962,8 +1962,6 @@ def _sync_single_device_role(
                 cast(Record, obj).update({"vm_role": True})
                 log.info("DeviceRole actualizado para permitir VM: %s", name)
 
-        device_roles_cache[key] = obj
-
     return obj, device_roles_cache
 
 
