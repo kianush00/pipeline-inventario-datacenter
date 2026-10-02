@@ -45,8 +45,10 @@ import hashlib
 import ipaddress
 import logging
 import os
+import random
 import re
 import sys
+import time
 from collections import Counter
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -1322,6 +1324,46 @@ def read_and_validate_csv(
 # ============================================================
 
 
+def _is_slug_collision(e: RequestError) -> bool:
+    """Verifica si el RequestError es causado específicamente por un slug duplicado."""
+    if e.req.status_code != 400:
+        return False
+    try:
+        data = e.req.json()
+        if isinstance(data, dict) and "slug" in data:
+            for msg in data["slug"]:
+                if (
+                    "already exists" in str(msg).lower()
+                    or "must make a unique set" in str(msg).lower()
+                ):
+                    return True
+    except (ValueError, TypeError, AttributeError):
+        if "slug" in str(e.error).lower() and "already exists" in str(e.error).lower():
+            return True
+    return False
+
+
+def _is_name_collision(e: RequestError) -> bool:
+    """Verifica si el RequestError es causado específicamente por un nombre duplicado."""
+    if e.req.status_code != 400:
+        return False
+    try:
+        data = e.req.json()
+        if isinstance(data, dict):
+            for field in ("name", "non_field_errors"):
+                if field in data:
+                    for msg in data[field]:
+                        if (
+                            "already exists" in str(msg).lower()
+                            or "must make a unique set" in str(msg).lower()
+                        ):
+                            return True
+    except (ValueError, TypeError, AttributeError):
+        if "name" in str(e.error).lower() and "already exists" in str(e.error).lower():
+            return True
+    return False
+
+
 def _create_with_fallback_slug(
     endpoint: Endpoint,
     original_name: str,
@@ -1335,7 +1377,10 @@ def _create_with_fallback_slug(
     slug: str = kwargs.get("slug", "")
     try:
         return cast(Record, endpoint.create(**kwargs))
-    except RequestError:
+    except RequestError as e:
+        if not _is_slug_collision(e):
+            raise
+
         slug_fallback = generate_fallback_slug(slug, original_name)
         log.warning(
             "Slug '%s' colisionó al crear objeto en '%s' con nombre '%s'; reintentando con '%s'.",
@@ -1385,49 +1430,75 @@ def get_or_create_cached(
 
     log.debug("[Cache MISS] Buscando '%s' en API...", name)
 
-    if not skip_filter:
-        results: list[Record] = list(endpoint.filter(**filter_kwargs))
-        if results:
-            cache[cache_key] = results[0]
-            return results[0], cache
+    MAX_RETRIES = 3
+    for attempt in range(MAX_RETRIES):
+        if not skip_filter or attempt > 0:
+            results: list[Record] = list(endpoint.filter(**filter_kwargs))
+            if results:
+                cache[cache_key] = results[0]
+                return results[0], cache
 
-    if preventive_slug_search and "slug" in create_kwargs:
-        slug_val = create_kwargs["slug"]
-        slug_results: list[Record] = list(endpoint.filter(slug=slug_val))
-        if slug_results:
-            log.warning(
-                "Objeto '%s' no existe por sus campos de filtro, pero su slug '%s' coincide "
-                "con un objeto existente en '%s' ('%s'). Se reutiliza.",
-                name,
-                slug_val,
-                endpoint.name,
-                getattr(slug_results[0], "name", "?"),
-            )
-            cache[cache_key] = slug_results[0]
-            return slug_results[0], cache
+        if preventive_slug_search and "slug" in create_kwargs:
+            slug_val = create_kwargs["slug"]
+            slug_results: list[Record] = list(endpoint.filter(slug=slug_val))
+            if slug_results:
+                log.warning(
+                    "Objeto '%s' no existe por sus campos de filtro, pero su slug '%s' "
+                    "coincide con un objeto existente en '%s' ('%s'). Se reutiliza.",
+                    name,
+                    slug_val,
+                    endpoint.name,
+                    getattr(slug_results[0], "name", "?"),
+                )
+                cache[cache_key] = slug_results[0]
+                return slug_results[0], cache
 
-    if dry_run:
-        log.info("[DRY-RUN] Crearía objeto en '%s': %s", endpoint.name, name)
-        mock_kwargs = create_kwargs.copy()
-        obj: NetBoxObject = MockNetBoxRecord(id=0, **mock_kwargs)
-        cache[cache_key] = obj
-        return obj, cache
+        if dry_run:
+            log.info("[DRY-RUN] Crearía objeto en '%s': %s", endpoint.name, name)
+            mock_kwargs = create_kwargs.copy()
+            obj: NetBoxObject = MockNetBoxRecord(id=0, **mock_kwargs)
+            cache[cache_key] = obj
+            return obj, cache
 
-    if use_fallback_slug:
-        obj = _create_with_fallback_slug(
-            endpoint,
-            name,
-            **create_kwargs,
-        )
-    else:
-        with netbox_error_wrap(
-            f"No se pudo crear el objeto en '{endpoint.name}' con nombre '{name}'"
-        ):
-            obj = cast(Record, endpoint.create(**create_kwargs))
+        try:
+            if use_fallback_slug:
+                obj = _create_with_fallback_slug(
+                    endpoint,
+                    name,
+                    **create_kwargs,
+                )
+            else:
+                obj = cast(Record, endpoint.create(**create_kwargs))
 
-    log.info("Objeto creado en '%s': %s", endpoint.name, name)
-    cache[cache_key] = obj
-    return obj, cache
+            log.info("Objeto creado en '%s': %s", endpoint.name, name)
+            cache[cache_key] = obj
+            return obj, cache
+
+        except RequestError as e:
+            if _is_name_collision(e) and attempt < MAX_RETRIES - 1:
+                sleep_time = 0.5 * (2**attempt) + random.uniform(0, 0.5)
+                log.warning(
+                    "Colisión de concurrencia al crear '%s' en '%s'. "
+                    "Reintentando en %.2fs (intento %d/%d)...",
+                    name,
+                    endpoint.name,
+                    sleep_time,
+                    attempt + 1,
+                    MAX_RETRIES,
+                )
+                time.sleep(sleep_time)
+                continue
+
+            # Si falla y no es colisión (o superamos los retries), propagamos el error empaquetado
+            with netbox_error_wrap(
+                f"No se pudo crear el objeto en '{endpoint.name}' con nombre '{name}'"
+            ):
+                raise
+
+    # Fallback de seguridad (nunca debería alcanzarse por el raise del except)
+    raise NetBoxApiError(
+        f"No se pudo resolver '{name}' después de {MAX_RETRIES} intentos."
+    )
 
 
 # ============================================================

@@ -158,9 +158,13 @@ class TestGenerateFallbackSlug:
         endpoint = MagicMock()
         mock_obj = MockNetBoxRecord(id=10, name="SRV", slug="srv-1234")
 
+        # Simula error 400 por slug
+        mock_req = MagicMock(status_code=400, reason="Collision")
+        mock_req.json.return_value = {"slug": ["already exists"]}
+
         # Falla la primera, funciona la segunda
         endpoint.create.side_effect = [
-            RequestError(MagicMock(status_code=400, reason="Collision")),
+            RequestError(mock_req),
             mock_obj,
         ]
 
@@ -176,11 +180,11 @@ class TestGenerateFallbackSlug:
     def test_failure_on_retry(self) -> None:
 
         endpoint = MagicMock()
-        # Falla siempre
+        # Falla siempre por slug
+        mock_req = MagicMock(status_code=400, reason="Persistent Collision")
+        mock_req.json.return_value = {"slug": ["already exists"]}
         endpoint.name = "clusters"
-        endpoint.create.side_effect = RequestError(
-            MagicMock(status_code=400, reason="Persistent Collision")
-        )
+        endpoint.create.side_effect = RequestError(mock_req)
 
         with pytest.raises(
             NetBoxApiError, match="Imposible crear objeto en 'devices' con nombre 'SRV'"
@@ -2039,6 +2043,37 @@ class TestGetOrCreateCached:
             get_or_create_cached(
                 endpoint, cache, "key1", {}, {"name": "Test"}, "Test", False
             )
+
+    @patch("time.sleep", return_value=None)
+    def test_multithread_duplication_race_condition(self, mock_sleep: MagicMock) -> None:
+        """
+        Simula una colisión de unicidad donde otro hilo crea el objeto entre
+        nuestro primer filter y el create.
+        """
+        endpoint = MagicMock()
+        endpoint.name = "test_endpoints"
+        
+        # El primer filter no encuentra nada. El segundo filter lo encuentra.
+        mock_obj = MockNetBoxRecord(id=99, name="Test")
+        endpoint.filter.side_effect = [[], [mock_obj]]
+        
+        # Simular que el endpoint.create levanta un RequestError 400 por nombre duplicado.
+        mock_req = MagicMock(status_code=400)
+        mock_req.json.return_value = {"name": ["Manufacturer with this name already exists."]}
+        endpoint.create.side_effect = RequestError(mock_req)
+        
+        cache: dict[Any, Any] = {}
+        
+        result, returned_cache = get_or_create_cached(
+            endpoint, cache, "key1", {"name": "Test"}, {"name": "Test"}, "Test", False
+        )
+        
+        # Verificamos que se manejó la carrera
+        assert result == mock_obj
+        assert returned_cache["key1"] == mock_obj
+        assert endpoint.filter.call_count == 2
+        endpoint.create.assert_called_once_with(name="Test")
+        mock_sleep.assert_called_once()
 
 
 class TestEnsureTaxonomyQACases:
