@@ -3533,7 +3533,7 @@ def _prune_orphan_interfaces(
             log.info("DELETED interfaz huérfana: %s", name)
             deleted_count += 1
         except RequestError as e:
-            log.warning("Error eliminando interfaz huérfana '%s': %s", name, e)
+            log.error("Error eliminando interfaz huérfana '%s': %s", name, e)
             errors += 1
 
     return deleted_count, errors
@@ -3593,8 +3593,8 @@ def _process_interfaces_sync(
                     ipv4_candidates.append(
                         Ipv4Candidate(int(getattr(ip_obj, "id", 0)), iface_obj, mac_obj)
                     )
-        except NetBoxApiError:
-            log.exception("ERROR de API sincronizando interfaz")
+        except NetBoxApiError as e:
+            log.error("ERROR de API sincronizando interfaz: %s", e)
             errors += 1
 
     return InterfaceSyncResult(errors, ipv4_candidates, any_changes), ifaces_cache
@@ -3695,7 +3695,7 @@ def _assign_primary_resource(
         )
         return True
     except RequestError as e:
-        log.warning(
+        log.error(
             "Fallo al actualizar %s en %s: %s", resource_type_label, log_context, e
         )
         return False
@@ -3830,11 +3830,11 @@ def _classify_rows(
                 device_rows.append((row_num, row))
             else:
                 vm_rows.append((row_num, row))
-        except RowValidationError:
+        except RowValidationError as e:
             machine_name = (
                 extract_csv_value(row, "machine_name", config) or f"fila {row_num}"
             )
-            log.exception("ERROR fila %d ('%s')", row_num, machine_name)
+            log.error("ERROR fila %d ('%s'): %s", row_num, machine_name, e)
             counts[SyncStatus.ERROR] += 1
 
     log.info(
@@ -3959,8 +3959,8 @@ def _sync_row(
         log.warning("SKIP fila %d: %s", row_num, e)
         counts[SyncStatus.SKIPPED] += 1
         return counts, caches
-    except (NetBoxApiError, RowValidationError, RequestError):
-        log.exception("ERROR de API o validación en fila %d", row_num)
+    except (NetBoxApiError, RowValidationError, RequestError) as e:
+        log.error("ERROR de API o validación en fila %d: %s", row_num, e)
         counts[SyncStatus.ERROR] += 1
         return counts, caches
     except Exception:
@@ -3984,7 +3984,11 @@ def _sync_row(
     try:
         interfaces = parse_row_interfaces(row, machine_name, config)
     except RowValidationError as e:
-        log.warning("Omitiendo interfaces de '%s': %s", machine_name, e)
+        log.error(
+            "Error de validación en interfaces de '%s': %s. Se omitirán.",
+            machine_name,
+            e,
+        )
         counts[SyncStatus.ERROR] += 1
         return counts, caches
     except Exception:
