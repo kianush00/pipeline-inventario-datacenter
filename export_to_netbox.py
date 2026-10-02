@@ -1864,20 +1864,20 @@ def _ensure_cluster_type(
     cluster_type_endpoint: Endpoint,
     name: str,
     slug: str,
+    cache: dict[Any, NetBoxObject],
     dry_run: bool,
-) -> NetBoxObject:
+) -> tuple[NetBoxObject, dict[Any, NetBoxObject]]:
     """Garantiza que el ClusterType exista en NetBox.
-    Retorna el objeto ClusterType creado"""
-    obj, _ = get_or_create_cached(
+    Retorna la tupla (ClusterType, caché actualizada)"""
+    return get_or_create_cached(
         endpoint=cluster_type_endpoint,
-        cache={},  # Similar al Site, el caché real de cluster_types se maneja externamente
+        cache=cache,
         cache_key=name,
         filter_kwargs={"name": name},
         create_kwargs={"name": name, "slug": slug},
         name=name,
         dry_run=dry_run,
     )
-    return obj
 
 
 def ensure_dynamic_cluster_types(
@@ -1899,19 +1899,18 @@ def ensure_dynamic_cluster_types(
     # Garantizar el fallback estático del YAML.
     fallback_name = fallback_cfg.default.name
     fallback_slug = cast(str, fallback_cfg.default.slug)
-    fallback = _ensure_cluster_type(
-        endpoints.cluster_types, fallback_name, fallback_slug, dry_run
+    fallback, cache = _ensure_cluster_type(
+        endpoints.cluster_types, fallback_name, fallback_slug, cache, dry_run
     )
-    cache[fallback_name] = fallback
 
     # Crear ClusterTypes dinámicos (uno por cada SO único).
+    # La caché en get_or_create_cached evita N+1 requests
     unique_os_names: set[str] = set(cluster_type_map.values())
     for os_name in sorted(unique_os_names):
-        if os_name in cache:
-            continue
         os_slug = slugify(os_name)
-        ct = _ensure_cluster_type(endpoints.cluster_types, os_name, os_slug, dry_run)
-        cache[os_name] = ct
+        _, cache = _ensure_cluster_type(
+            endpoints.cluster_types, os_name, os_slug, cache, dry_run
+        )
 
     return fallback, cache
 

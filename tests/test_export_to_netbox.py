@@ -69,6 +69,7 @@ from export_to_netbox import (
     count_machine_names,
     ensure_cluster,
     ensure_device_type,
+    ensure_dynamic_cluster_types,
     ensure_manufacturer,
     ensure_rack,
     ensure_site,
@@ -1531,6 +1532,52 @@ class TestEnsureCluster:
             ensure_cluster(
                 endpoint, "Cluster1", cluster_type_mock, cache, dry_run=False
             )
+
+
+class TestEnsureDynamicClusterTypesEdgeCases:
+    """Verifica que la caché se propague correctamente y evite peticiones N+1."""
+
+    def test_cache_efficiency_no_extra_api_calls(self) -> None:
+        """
+        Escenario destructivo/Edge case: Verifica que cuando el caché ya contiene
+        objetos, no haya avalanchas O(N) hacia NetBox.
+        """
+        endpoints = MagicMock()
+        mock_ct_endpoint = MagicMock()
+        mock_ct_endpoint.name = "cluster_types"
+        endpoints.cluster_types = mock_ct_endpoint
+
+        # Simula que los objetos NO existen en NetBox (requieren create si no hay caché)
+        mock_ct_endpoint.filter.return_value = []
+
+        fallback_cfg = MagicMock()
+        fallback_cfg.default.name = "FallbackCluster"
+        fallback_cfg.default.slug = "fallback-cluster"
+
+        cluster_type_map = {"vm1": "Ubuntu", "vm2": "Debian"}
+
+        # Ya existe Ubuntu en el caché
+        mock_ubuntu = MagicMock()
+        cache: dict[str, Any] = {"Ubuntu": mock_ubuntu}
+
+        _, updated_cache = ensure_dynamic_cluster_types(
+            endpoints=endpoints,
+            cluster_type_map=cluster_type_map,
+            fallback_cfg=fallback_cfg,
+            cache=cache,
+            dry_run=False,
+        )
+
+        assert "FallbackCluster" in updated_cache
+        assert "Debian" in updated_cache
+        assert updated_cache["Ubuntu"] == mock_ubuntu
+
+        # Fallback y Debian se crearon, Ubuntu usó caché
+        assert mock_ct_endpoint.create.call_count == 2
+        call_names = [
+            call.kwargs.get("name") for call in mock_ct_endpoint.create.call_args_list
+        ]
+        assert "Ubuntu" not in call_names
 
 
 class TestAssignPrimaryIPv4:
