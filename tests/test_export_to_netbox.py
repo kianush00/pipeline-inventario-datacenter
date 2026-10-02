@@ -40,6 +40,7 @@ from export_to_netbox import (
     _execute_sync,
     _extract_raw_source_value,
     _find_existing_object,
+    _is_collision_error,
     _is_custom_field_changed,
     _is_name_safely_unique,
     _is_relation_changed,
@@ -53,6 +54,7 @@ from export_to_netbox import (
     _resolve_field_value,
     _resolve_netbox_status,
     _sanitize_mac_address,
+    _search_in_netbox,
     _sync_device_type_u_height,
     _sync_single_device_role,
     _sync_single_interface,
@@ -2045,35 +2047,154 @@ class TestGetOrCreateCached:
             )
 
     @patch("time.sleep", return_value=None)
-    def test_multithread_duplication_race_condition(self, mock_sleep: MagicMock) -> None:
+    def test_multithread_duplication_race_condition(
+        self, mock_sleep: MagicMock
+    ) -> None:
         """
         Simula una colisión de unicidad donde otro hilo crea el objeto entre
         nuestro primer filter y el create.
         """
         endpoint = MagicMock()
         endpoint.name = "test_endpoints"
-        
+
         # El primer filter no encuentra nada. El segundo filter lo encuentra.
         mock_obj = MockNetBoxRecord(id=99, name="Test")
         endpoint.filter.side_effect = [[], [mock_obj]]
-        
+
         # Simular que el endpoint.create levanta un RequestError 400 por nombre duplicado.
         mock_req = MagicMock(status_code=400)
-        mock_req.json.return_value = {"name": ["Manufacturer with this name already exists."]}
+        mock_req.json.return_value = {
+            "name": ["Manufacturer with this name already exists."]
+        }
         endpoint.create.side_effect = RequestError(mock_req)
-        
+
         cache: dict[Any, Any] = {}
-        
+
         result, returned_cache = get_or_create_cached(
             endpoint, cache, "key1", {"name": "Test"}, {"name": "Test"}, "Test", False
         )
-        
+
         # Verificamos que se manejó la carrera
         assert result == mock_obj
         assert returned_cache["key1"] == mock_obj
         assert endpoint.filter.call_count == 2
         endpoint.create.assert_called_once_with(name="Test")
         mock_sleep.assert_called_once()
+
+    def test_collision_error_malformed_json_fallback(self) -> None:
+        """
+        Escenario destructivo: La API devuelve un error 400 pero el body no es un JSON válido.
+        Se debe verificar que _is_collision_error captura el ValueError de json() y usa el fallback de texto.
+        """
+        mock_req = MagicMock(status_code=400)
+        mock_req.json.side_effect = ValueError("Invalid JSON")
+        # Simula el atributo error que usa pynetbox como fallback
+        mock_error = RequestError(mock_req)
+        mock_error.error = "The slug already exists."
+
+        assert _is_collision_error(mock_error, ("slug",)) is True
+
+    def test_collision_error_non_dict_json(self) -> None:
+        """
+        Escenario destructivo: La API devuelve un JSON que no es un diccionario (e.g. una lista).
+        _is_collision_error debería manejarlo sin crashear y hacer fallback al texto de error.
+        """
+        mock_req = MagicMock(status_code=400)
+        mock_req.json.return_value = ["An unexpected error array"]
+        mock_error = RequestError(mock_req)
+        mock_error.error = "Name already exists"
+
+        assert _is_collision_error(mock_error, ("name",)) is True
+
+    def test_create_with_fallback_slug_double_collision(self) -> None:
+        """
+        Escenario destructivo: Ocurre una colisión de slug, se genera un fallback slug,
+        pero el fallback slug TAMBIÉN colisiona. Debe levantar RequestError.
+        """
+        endpoint = MagicMock()
+        endpoint.name = "test_endpoint"
+
+        # Simula RequestError 400 por slug colisionando SIEMPRE
+        mock_req = MagicMock(status_code=400)
+        mock_req.json.return_value = {"slug": ["Slug already exists."]}
+        endpoint.create.side_effect = RequestError(mock_req)
+
+        with pytest.raises(
+            NetBoxApiError, match="colisión persistente de slug o rechazo"
+        ):
+            _create_with_fallback_slug(
+                endpoint, "Test Node", name="Test Node", slug="test-node"
+            )
+
+        # Debería haber intentado crear 2 veces (original y fallback)
+        assert endpoint.create.call_count == 2
+
+    @patch("time.sleep", return_value=None)
+    def test_get_or_create_cached_max_retries_exceeded(
+        self, mock_sleep: MagicMock
+    ) -> None:
+        """
+        Escenario destructivo: La creación colisiona por concurrencia y los retries fallan
+        continuamente hasta exceder MAX_RETRIES. Debe lanzar NetBoxApiError.
+        """
+        endpoint = MagicMock()
+        endpoint.name = "test_endpoint"
+        endpoint.filter.return_value = []
+
+        mock_req = MagicMock(status_code=400)
+        mock_req.json.return_value = {"name": ["already exists"]}
+        endpoint.create.side_effect = RequestError(mock_req)
+
+        cache: dict[Any, Any] = {}
+
+        with pytest.raises(
+            NetBoxApiError,
+            match="No se pudo crear el objeto en 'test_endpoint' con nombre 'Test Node'",
+        ):
+            get_or_create_cached(
+                endpoint,
+                cache,
+                "key",
+                {"name": "Test Node"},
+                {"name": "Test Node"},
+                "Test Node",
+                False,
+            )
+
+        # El filter se llama 3 veces (1 por cada intento de retry)
+        assert endpoint.filter.call_count == 3
+        # El create se intenta 3 veces
+        assert endpoint.create.call_count == 3
+        # Hace sleep 2 veces (antes del intento 2 y 3)
+        assert mock_sleep.call_count == 2
+
+    def test_preventive_slug_search_hit(self) -> None:
+        """
+        Escenario destructivo/Edge case: El objeto no se encuentra por su filtro primario (ej. nombre),
+        pero preventive_slug_search encuentra una colisión inminente de slug y reutiliza el objeto.
+        """
+        endpoint = MagicMock()
+        mock_obj = MockNetBoxRecord(id=5, name="Mock Name", slug="mock-slug")
+
+        # side_effect: Primera llamada (filter por name) -> vacío.
+        # Segunda llamada (filter por slug) -> devuelve el mock_obj.
+        def mock_filter(**kwargs: Any) -> list[MockNetBoxRecord]:
+            if "slug" in kwargs:
+                return [mock_obj]
+            return []
+
+        endpoint.filter.side_effect = mock_filter
+
+        result = _search_in_netbox(
+            endpoint=endpoint,
+            filter_kwargs={"name": "Different Name"},
+            create_kwargs={"name": "Different Name", "slug": "mock-slug"},
+            name="Different Name",
+            preventive_slug_search=True,
+        )
+
+        assert result == mock_obj
+        assert endpoint.filter.call_count == 2
 
 
 class TestEnsureTaxonomyQACases:
