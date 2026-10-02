@@ -2086,6 +2086,7 @@ def _sync_device_type_u_height(
         )
         return True
 
+
 def ensure_device_type(
     device_types_endpoint: Endpoint,
     manufacturer: NetBoxObject,
@@ -2797,7 +2798,7 @@ def _execute_sync(
         return SyncResult(SyncStatus.UPDATED, existing_id, existing_obj)
 
     with netbox_error_wrap(f"Error al actualizar {node_type} '{machine_name}'"):
-        updated = existing_obj.update(payload)
+        updated = existing_obj.update(diff)
 
     if updated:
         log.info("UPDATED %s: %s", node_type, machine_name)

@@ -1114,12 +1114,19 @@ class TestExecuteSync:
 
         mock_existing = MagicMock()
         mock_existing.id = 50
+        mock_existing.status = "active"  # Unchanged field
+        mock_existing.name = "SRV-01"  # Changed field
         del mock_existing._init_cache
         mock_existing.update.return_value = True  # Hubo cambios
 
+        payload = {
+            "name": "SRV-01-nuevo",
+            "status": "active",  # Debe ser ignorado por el diff
+        }
+
         status, obj_id, _ = _execute_sync(
             endpoint,
-            {"name": "SRV-01-nuevo"},
+            payload,
             [mock_existing],
             "SRV-01",
             "uuid-1",
@@ -1127,6 +1134,7 @@ class TestExecuteSync:
         )
         assert status == SyncStatus.UPDATED
         assert obj_id == 50
+        # Se asegura que solo se envía el diff parcial, excluyendo "status"
         mock_existing.update.assert_called_once_with({"name": "SRV-01-nuevo"})
 
     def test_unchanged(self) -> None:
@@ -1135,8 +1143,8 @@ class TestExecuteSync:
 
         mock_existing = MagicMock()
         mock_existing.id = 50
+        mock_existing.name = "SRV-01"
         del mock_existing._init_cache
-        mock_existing.update.return_value = False  # Sin cambios
 
         status, obj_id, _ = _execute_sync(
             endpoint,
@@ -1148,6 +1156,31 @@ class TestExecuteSync:
         )
         assert status == SyncStatus.UNCHANGED
         assert obj_id == 50
+        mock_existing.update.assert_not_called()
+
+    def test_update_returns_false(self) -> None:
+        endpoint = MagicMock()
+        endpoint.url = "http://test/api/dcim/devices/"
+
+        mock_existing = MagicMock()
+        mock_existing.id = 50
+        mock_existing.name = "SRV-01"
+        del mock_existing._init_cache
+        mock_existing.update.return_value = (
+            False  # Hubo diff, pero update devolvió False
+        )
+
+        status, obj_id, _ = _execute_sync(
+            endpoint,
+            {"name": "SRV-01-nuevo"},
+            [mock_existing],
+            "SRV-01",
+            "uuid-1",
+            dry_run=False,
+        )
+        assert status == SyncStatus.UNCHANGED
+        assert obj_id == 50
+        mock_existing.update.assert_called_once_with({"name": "SRV-01-nuevo"})
 
     def test_dry_run_create(self) -> None:
         endpoint = MagicMock()
@@ -1166,12 +1199,16 @@ class TestExecuteSync:
 
         mock_existing = MagicMock()
         mock_existing.id = 50
+        mock_existing.status = "active"
+        mock_existing.name = "SRV-01"
         # Eliminar _init_cache para forzar el fallback de _check_record_changes
         del mock_existing._init_cache
 
+        payload = {"name": "SRV-01-nuevo", "status": "active"}
+
         status, obj_id, _ = _execute_sync(
             endpoint,
-            {"name": "SRV-01-nuevo"},
+            payload,
             [mock_existing],
             "SRV-01",
             "uuid-1",
