@@ -1338,7 +1338,7 @@ def _is_collision_error(e: RequestError, fields: tuple[str, ...]) -> bool:
                 messages = data.get(field, [])
                 if isinstance(messages, str):
                     messages = [messages]
-                
+
                 if any(
                     kw in str(msg).lower()
                     for msg in messages
@@ -1396,6 +1396,80 @@ def _create_with_fallback_slug(
             return cast(Record, endpoint.create(**kwargs))
 
 
+def _search_in_netbox(
+    endpoint: Endpoint,
+    filter_kwargs: dict[str, Any],
+    create_kwargs: dict[str, Any],
+    name: str,
+    preventive_slug_search: bool,
+) -> Record | None:
+    """Busca un objeto en NetBox, aplicando búsqueda preventiva por slug si es requerida."""
+    results: list[Record] = list(endpoint.filter(**filter_kwargs))
+    if results:
+        return results[0]
+
+    if preventive_slug_search and "slug" in create_kwargs:
+        slug_val = create_kwargs["slug"]
+        slug_results: list[Record] = list(endpoint.filter(slug=slug_val))
+        if slug_results:
+            log.warning(
+                "Objeto '%s' no existe por sus campos de filtro, pero su slug '%s' "
+                "coincide con un objeto existente en '%s' ('%s'). Se reutiliza.",
+                name,
+                slug_val,
+                endpoint.name,
+                getattr(slug_results[0], "name", "?"),
+            )
+            return slug_results[0]
+
+    return None
+
+
+def _create_dry_run_mock(
+    endpoint: Endpoint, name: str, create_kwargs: dict[str, Any]
+) -> NetBoxObject:
+    """Genera un mock del objeto para el modo Dry-Run."""
+    log.info("[DRY-RUN] Crearía objeto en '%s': %s", endpoint.name, name)
+    mock_kwargs = create_kwargs.copy()
+    return MockNetBoxRecord(id=0, **mock_kwargs)
+
+
+def _execute_creation(
+    endpoint: Endpoint,
+    create_kwargs: dict[str, Any],
+    name: str,
+    use_fallback_slug: bool,
+) -> Record:
+    """Ejecuta la creación del objeto en NetBox, manejando fallbacks de slug."""
+    if use_fallback_slug:
+        obj = _create_with_fallback_slug(
+            endpoint,
+            name,
+            **create_kwargs,
+        )
+    else:
+        obj = cast(Record, endpoint.create(**create_kwargs))
+    log.info("Objeto creado en '%s': %s", endpoint.name, name)
+    return obj
+
+
+def _handle_concurrency_backoff(
+    name: str, endpoint_name: str, attempt: int, max_retries: int
+) -> None:
+    """Aplica backoff exponencial tras una colisión concurrente."""
+    sleep_time = 0.5 * (2**attempt) + random.uniform(0, 0.5)
+    log.warning(
+        "Colisión de concurrencia al crear '%s' en '%s'. "
+        "Reintentando en %.2fs (intento %d/%d)...",
+        name,
+        endpoint_name,
+        sleep_time,
+        attempt + 1,
+        max_retries,
+    )
+    time.sleep(sleep_time)
+
+
 def get_or_create_cached(
     endpoint: Endpoint,
     cache: dict[Any, NetBoxObject],
@@ -1432,69 +1506,35 @@ def get_or_create_cached(
     MAX_RETRIES = 3
     for attempt in range(MAX_RETRIES):
         if not skip_filter or attempt > 0:
-            results: list[Record] = list(endpoint.filter(**filter_kwargs))
-            if results:
-                cache[cache_key] = results[0]
-                return results[0], cache
-
-        if preventive_slug_search and "slug" in create_kwargs:
-            slug_val = create_kwargs["slug"]
-            slug_results: list[Record] = list(endpoint.filter(slug=slug_val))
-            if slug_results:
-                log.warning(
-                    "Objeto '%s' no existe por sus campos de filtro, pero su slug '%s' "
-                    "coincide con un objeto existente en '%s' ('%s'). Se reutiliza.",
-                    name,
-                    slug_val,
-                    endpoint.name,
-                    getattr(slug_results[0], "name", "?"),
-                )
-                cache[cache_key] = slug_results[0]
-                return slug_results[0], cache
+            existing_obj = _search_in_netbox(
+                endpoint, filter_kwargs, create_kwargs, name, preventive_slug_search
+            )
+            if existing_obj:
+                cache[cache_key] = existing_obj
+                return existing_obj, cache
 
         if dry_run:
-            log.info("[DRY-RUN] Crearía objeto en '%s': %s", endpoint.name, name)
-            mock_kwargs = create_kwargs.copy()
-            obj: NetBoxObject = MockNetBoxRecord(id=0, **mock_kwargs)
+            obj = _create_dry_run_mock(endpoint, name, create_kwargs)
             cache[cache_key] = obj
             return obj, cache
 
         try:
-            if use_fallback_slug:
-                obj = _create_with_fallback_slug(
-                    endpoint,
-                    name,
-                    **create_kwargs,
-                )
-            else:
-                obj = cast(Record, endpoint.create(**create_kwargs))
-
-            log.info("Objeto creado en '%s': %s", endpoint.name, name)
-            cache[cache_key] = obj
-            return obj, cache
+            created_obj = _execute_creation(
+                endpoint, create_kwargs, name, use_fallback_slug
+            )
+            cache[cache_key] = created_obj
+            return created_obj, cache
 
         except RequestError as e:
             if _is_name_collision(e) and attempt < MAX_RETRIES - 1:
-                sleep_time = 0.5 * (2**attempt) + random.uniform(0, 0.5)
-                log.warning(
-                    "Colisión de concurrencia al crear '%s' en '%s'. "
-                    "Reintentando en %.2fs (intento %d/%d)...",
-                    name,
-                    endpoint.name,
-                    sleep_time,
-                    attempt + 1,
-                    MAX_RETRIES,
-                )
-                time.sleep(sleep_time)
+                _handle_concurrency_backoff(name, endpoint.name, attempt, MAX_RETRIES)
                 continue
 
-            # Si falla y no es colisión (o superamos los retries), propagamos el error empaquetado
             with netbox_error_wrap(
                 f"No se pudo crear el objeto en '{endpoint.name}' con nombre '{name}'"
             ):
                 raise
 
-    # Fallback de seguridad (nunca debería alcanzarse por el raise del except)
     raise NetBoxApiError(
         f"No se pudo resolver '{name}' después de {MAX_RETRIES} intentos."
     )
