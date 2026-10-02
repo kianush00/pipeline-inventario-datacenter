@@ -3999,7 +3999,7 @@ def _sync_row(
         if iface_errors > 0:
             counts[SyncStatus.ERROR] += iface_errors
 
-        if result == SyncStatus.UNCHANGED and any_changes:
+        if result == SyncStatus.UNCHANGED and any_changes and iface_errors == 0:
             counts[SyncStatus.UNCHANGED] -= 1
             counts[SyncStatus.UPDATED] += 1
 

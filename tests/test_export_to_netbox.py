@@ -56,6 +56,7 @@ from export_to_netbox import (
     _sanitize_mac_address,
     _search_in_netbox,
     _sync_device_type_u_height,
+    _sync_row,
     _sync_single_device_role,
     _sync_single_interface,
     _validate_csv_headers,
@@ -2652,3 +2653,113 @@ class TestIsRelationChanged:
 
         # 6. Tipo no manejable (ej. new_val es lista, falla el isinstance)
         assert _is_relation_changed(curr_val_fk, [5]) is None
+
+
+class TestSyncRowEdgeCases:
+    """
+    Casos destructivos para _sync_row, validando especialmente la lógica
+    de escalación de contadores y el manejo de excepciones.
+    """
+
+    @patch("export_to_netbox.extract_csv_value")
+    @patch("export_to_netbox._process_node_sync")
+    @patch("export_to_netbox.parse_row_interfaces")
+    @patch("export_to_netbox.process_interfaces_and_ips")
+    def test_sync_row_no_escalation_on_error(
+        self,
+        mock_process_interfaces: MagicMock,
+        mock_parse_interfaces: MagicMock,
+        mock_process_node: MagicMock,
+        mock_extract_csv_value: MagicMock,
+    ) -> None:
+        """
+        Escenario destructivo: El nodo base no tuvo cambios (UNCHANGED).
+        Las interfaces sí tuvieron cambios (any_changes=True), PERO hubieron errores (iface_errors=2).
+        Verifica que el error prevenga que el nodo se escale engañosamente a UPDATED.
+        """
+        mock_process_node.return_value = (
+            (SyncStatus.UNCHANGED, 123, MagicMock()),
+            MagicMock(),
+        )
+        mock_parse_interfaces.return_value = [{"name": "eth0"}]
+        # Devuelve iface_errors=2, any_changes=True
+        mock_process_interfaces.return_value = (2, True)
+
+        counts = {
+            SyncStatus.CREATED: 0,
+            SyncStatus.UPDATED: 0,
+            SyncStatus.UNCHANGED: 0,
+            SyncStatus.SKIPPED: 0,
+            SyncStatus.ERROR: 0,
+        }
+
+        counts, _ = _sync_row(
+            row_num=2,
+            row={},
+            node_type=NodeType.DEVICE,
+            endpoints=MagicMock(),
+            config=MagicMock(),
+            site=MagicMock(),
+            cluster_type_map={},
+            fallback_cluster_type=MagicMock(),
+            caches=MagicMock(),
+            csv_name_counts=Counter(),
+            counts=counts,
+            dry_run=False,
+        )
+
+        # El status UNCHANGED debe incrementar (porque no se escaló a UPDATED)
+        assert counts[SyncStatus.UNCHANGED] == 1
+        assert counts[SyncStatus.UPDATED] == 0
+        # Los errores de interfaz deben sumarse
+        assert counts[SyncStatus.ERROR] == 2
+
+    @patch("export_to_netbox.extract_csv_value")
+    @patch("export_to_netbox._process_node_sync")
+    @patch("export_to_netbox.parse_row_interfaces")
+    @patch("export_to_netbox.process_interfaces_and_ips")
+    def test_sync_row_escalation_success(
+        self,
+        mock_process_interfaces: MagicMock,
+        mock_parse_interfaces: MagicMock,
+        mock_process_node: MagicMock,
+        mock_extract_csv_value: MagicMock,
+    ) -> None:
+        """
+        Happy path de escalación: El nodo base es UNCHANGED, hay cambios en interfaces,
+        y NO hay errores (iface_errors=0). Se debe descontar UNCHANGED y sumar UPDATED.
+        """
+        mock_process_node.return_value = (
+            (SyncStatus.UNCHANGED, 123, MagicMock()),
+            MagicMock(),
+        )
+        mock_parse_interfaces.return_value = [{"name": "eth0"}]
+        # Devuelve iface_errors=0, any_changes=True
+        mock_process_interfaces.return_value = (0, True)
+
+        counts = {
+            SyncStatus.CREATED: 0,
+            SyncStatus.UPDATED: 0,
+            SyncStatus.UNCHANGED: 0,
+            SyncStatus.SKIPPED: 0,
+            SyncStatus.ERROR: 0,
+        }
+
+        counts, _ = _sync_row(
+            row_num=2,
+            row={},
+            node_type=NodeType.DEVICE,
+            endpoints=MagicMock(),
+            config=MagicMock(),
+            site=MagicMock(),
+            cluster_type_map={},
+            fallback_cluster_type=MagicMock(),
+            caches=MagicMock(),
+            csv_name_counts=Counter(),
+            counts=counts,
+            dry_run=False,
+        )
+
+        assert counts[SyncStatus.UNCHANGED] == 0
+        assert counts[SyncStatus.UPDATED] == 1
+        assert counts[SyncStatus.ERROR] == 0
