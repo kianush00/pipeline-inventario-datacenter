@@ -188,6 +188,8 @@ Defines how to **extract** data from the CSV and **map** it to fields in the Net
 | `concat_dot` | Concatenates a list of values with the separator `.` (dot + space) |
 | `coalesce` | Returns the first non-empty value from a list of sources. Fails-fast if there is a collision. |
 
+**Note on `cast` and `transform`:** If a mapping defines both a `transform` and a `cast`, they are NOT mutually exclusive. The transformation (combining the source columns) is executed first, and the resulting value is then passed to the specified `cast` function.
+
 ### Fields NOT included in the DML Mapping
 
 Foreign keys like `site`, `role`, `platform`, `rack`, and `device_type` are resolved to NetBox objects/IDs by specialized functions in the Python script. They are not part of `native_mappings`.

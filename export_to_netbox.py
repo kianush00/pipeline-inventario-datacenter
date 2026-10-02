@@ -915,7 +915,6 @@ def parse_bool_si_no(value: Any) -> bool:
 
 def apply_cast(value: Any, cast_type: CastType, target: str) -> FieldValue:
     """Aplica un cast específico a un valor según la definición del campo."""
-    # TODO: evaluar si reemplazar todos los parseos por un apply_cast centralizado
     try:
         match cast_type:
             case CastType.INT:
@@ -2313,16 +2312,12 @@ def _resolve_field_value(
     if config.is_empty(raw_value):
         return _resolve_default_or_empty(default, is_optional, target)
 
-    # 3. Si es un campo transformado, ya se resolvió en el paso 1
-    if isinstance(source, list) and field_def.transform:
-        return raw_value
-
-    # 4. Procesamiento de campos simples
+    # 3. Procesamiento de campos simples (los transformados saltan el mapeo por diccionario)
     value: FieldValue = raw_value
     if isinstance(source, str):
         value = config.map_value_by_source(source, raw_value, strict=True)
 
-    # 5. Validaciones y Casts
+    # 4. Validaciones y Casts (se aplican siempre al final del pipeline)
     value = _validate_select_choice(value, custom_field_def, target, is_optional)
     if field_def.cast:
         value = apply_cast(value, field_def.cast, target)
