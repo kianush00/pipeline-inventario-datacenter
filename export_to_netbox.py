@@ -54,7 +54,17 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, NamedTuple, NoReturn, TypeAlias, TypedDict, Union, cast
+from typing import (
+    Any,
+    Literal,
+    NamedTuple,
+    NoReturn,
+    TypeAlias,
+    TypedDict,
+    Union,
+    assert_never,
+    cast,
+)
 
 import requests
 import urllib3
@@ -905,6 +915,7 @@ def parse_bool_si_no(value: Any) -> bool:
 
 def apply_cast(value: Any, cast_type: CastType, target: str) -> FieldValue:
     """Aplica un cast específico a un valor según la definición del campo."""
+    # TODO: evaluar si reemplazar todos los parseos por un apply_cast centralizado
     try:
         match cast_type:
             case CastType.INT:
@@ -919,14 +930,12 @@ def apply_cast(value: Any, cast_type: CastType, target: str) -> FieldValue:
                 return parse_bool_si_no(value)
             case CastType.LOWER:
                 return str(value).lower() if value is not None else value
+            case _ as unreachable:
+                assert_never(unreachable)
     except ValueError as e:
         raise RowValidationError(
             f"Valor inválido '{value}' para el campo '{target}'. {e}"
         ) from e
-
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    return str(value)
 
 
 def concat_dot(parts: list[str], config: NetBoxMappingConfig) -> str:
