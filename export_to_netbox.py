@@ -1540,7 +1540,9 @@ def get_or_create_cached(
       estrictamente únicos. Si buscamos un objeto por nombre y no lo encontramos, NetBox
       rechazará la creación si el slug generado colisiona con otro objeto (HTTP 400).
       La búsqueda preventiva por slug evita el crash permitiendo reutilizar objetos similares.
-    - Pureza Monádica: Retornar la caché mutada evita side-effects silenciosos (paso por referencia).
+    - Flujo de Estado Explícito: Aunque el caché se muta in-place por máximo rendimiento
+      (evitando copias masivas de memoria), se retorna explícitamente para mantener
+      trazabilidad arquitectónica e indicarle al desarrollador que el estado fue alterado.
 
     Retorna:
         tuple[NetBoxObject, dict[Any, NetBoxObject]]: El objeto final y la caché propagada.
@@ -2054,16 +2056,17 @@ def _sync_device_type_u_height(
     model: str,
     target_height: float,
     dry_run: bool,
-) -> Record:
+) -> bool:
     """
     Sincroniza la altura en U del modelo de servidor.
-    Retorna el objeto DeviceType modificado (o intacto).
+    Actualiza el objeto in-place si es necesario.
+    Retorna True si el objeto fue (o habría sido) actualizado, False en caso contrario.
     """
     current_val = getattr(existing_dt, "u_height", 1)
     current_height = float(current_val) if current_val is not None else 1.0
 
     if current_height == target_height:
-        return existing_dt
+        return False
 
     if dry_run:
         log.info(
@@ -2072,7 +2075,7 @@ def _sync_device_type_u_height(
             current_height,
             target_height,
         )
-        return existing_dt
+        return True
 
     with netbox_error_wrap(f"Error actualizando u_height de DeviceType '{model}'"):
         existing_dt.update({"u_height": target_height})
@@ -2081,8 +2084,7 @@ def _sync_device_type_u_height(
             model,
             target_height,
         )
-        return existing_dt
-
+        return True
 
 def ensure_device_type(
     device_types_endpoint: Endpoint,
@@ -2121,12 +2123,7 @@ def ensure_device_type(
     )
 
     if getattr(obj, "id", 0) != 0:
-        updated_obj = _sync_device_type_u_height(
-            cast(Record, obj), model, u_height, dry_run
-        )
-        if updated_obj is not obj:
-            cache[key] = updated_obj
-            return updated_obj, cache
+        _sync_device_type_u_height(cast(Record, obj), model, u_height, dry_run)
     return obj, cache
 
 
@@ -3101,7 +3098,7 @@ def _parse_single_network_interface(
     ip_raw: str,
     pfx_raw: str,
     mac_raw: str,
-    status_map: dict[str, bool],
+    status_map: dict[str, Any],
     config: NetBoxMappingConfig,
 ) -> NetworkInterfaceData:
     """Parsea una única interfaz aislando la lógica de validación de IPs."""
@@ -3117,7 +3114,7 @@ def _parse_single_network_interface(
         """
         return raw_value if not config.is_empty(raw_value) else None
 
-    enabled = status_map.get(status_raw.lower().strip(), True)
+    enabled = bool(status_map.get(status_raw.lower().strip(), True))
     ip_val = get_raw_value_or_none(ip_raw)
     pfx_val = get_raw_value_or_none(pfx_raw)
     mac_val = get_raw_value_or_none(mac_raw)

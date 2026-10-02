@@ -1763,14 +1763,16 @@ class TestSyncDeviceTypeUHeight:
         existing = MagicMock()
         existing.u_height = 1.5
         # fractional target height matches
-        _ = _sync_device_type_u_height(existing, "Model A", 1.5, False)
+        result = _sync_device_type_u_height(existing, "Model A", 1.5, False)
+        assert result is False
         existing.update.assert_not_called()
 
     def test_sync_update_needed(self) -> None:
         existing = MagicMock()
         existing.u_height = 1.0
         # update to fractional
-        _ = _sync_device_type_u_height(existing, "Model B", 1.5, False)
+        result = _sync_device_type_u_height(existing, "Model B", 1.5, False)
+        assert result is True
         existing.update.assert_called_once_with({"u_height": 1.5})
 
 
