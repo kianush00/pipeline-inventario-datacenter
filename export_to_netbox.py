@@ -2181,9 +2181,6 @@ def _extract_concat_dot_value(
 
     Retorna la concatenación de los valores de las columnas source.
     Si todas las columnas source están vacías, retorna un string vacío.
-
-    Raises:
-        RowValidationError: Si hay múltiples valores no nulos en las columnas source.
     """
     parts = [row.get(s, "") for s in source]
     return concat_dot(parts, config)

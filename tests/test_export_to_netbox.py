@@ -38,6 +38,7 @@ from export_to_netbox import (
     _classify_rows,
     _create_with_fallback_slug,
     _execute_sync,
+    _extract_concat_dot_value,
     _extract_raw_source_value,
     _find_existing_object,
     _is_collision_error,
@@ -507,8 +508,26 @@ class TestConcatDot:
     def test_empty_filtered(self, config: NetBoxMappingConfig) -> None:
         assert concat_dot(["A", "N/A", "", "C"], config) == "A. C"
 
-    def test_all_empty(self, config: NetBoxMappingConfig) -> None:
         assert concat_dot(["", "N/A"], config) == ""
+
+
+class TestExtractConcatDotValue:
+    """QA Tests para _extract_concat_dot_value."""
+
+    def test_extract_multiple_non_empty_values(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        """
+        Escenario: Múltiples columnas source tienen valores.
+        El código NO debe levantar RowValidationError (a diferencia de coalesce),
+        sino que debe unirlos correctamente.
+        """
+        row = {"col1": "Data1", "col2": "Data2", "col3": "N/A", "col4": "Data4"}
+        source = ["col1", "col2", "col3", "col4", "missing_col"]
+
+        result = _extract_concat_dot_value(row, source, config)
+        # col3 ('N/A') es purgado. missing_col devuelve '' y se purga.
+        assert result == "Data1. Data2. Data4"
 
 
 class TestGetNodeTypeFromRow:
