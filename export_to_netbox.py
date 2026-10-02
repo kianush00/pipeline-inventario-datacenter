@@ -2519,6 +2519,8 @@ def _resolve_cluster(
 def _resolve_device_type(
     endpoints: NetBoxEndpoints,
     row: CsvRow,
+    manufacturer: str,
+    model: str,
     caches: CacheStore,
     config: NetBoxMappingConfig,
     dry_run: bool,
@@ -2528,8 +2530,6 @@ def _resolve_device_type(
     Si la altura ('hei_u') no se proporciona o es inválida, asume 1 por defecto.
     Retorna una tupla con el ID del DeviceType y la caché (CacheStore) actualizada.
     """
-    manufacturer = extract_csv_value(row, "manufacturer", config)
-    model = extract_csv_value(row, "model", config)
 
     # Manufacturer.
     manufacturer_obj, caches.manufacturers = ensure_manufacturer(
@@ -2943,6 +2943,8 @@ def sync_device(
     device_type_id, caches = _resolve_device_type(
         endpoints,
         row,
+        manufacturer,
+        model,
         caches,
         config,
         dry_run,

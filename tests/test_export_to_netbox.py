@@ -1843,6 +1843,8 @@ class TestResolveDeviceTypeUHeight:
         _resolve_device_type(
             endpoints=MagicMock(),
             row=row,
+            manufacturer="Dell",
+            model="R740",
             caches=MagicMock(),
             config=MagicMock(),
             dry_run=False,
@@ -1882,6 +1884,8 @@ class TestResolveDeviceTypeUHeight:
         _resolve_device_type(
             endpoints=MagicMock(),
             row=row,
+            manufacturer="Dell",
+            model="R740",
             caches=MagicMock(),
             config=MagicMock(),
             dry_run=False,
