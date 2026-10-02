@@ -811,16 +811,21 @@ def _is_relation_changed(curr_val: Any, new_val: Any) -> bool | None:
     Retorna None si el valor no califica como una relación manejable.
     """
     if curr_val is None:
-        return None
+        return new_val is not None
 
     if hasattr(curr_val, "id"):
+        if new_val is None:
+            return True
         if isinstance(new_val, int):
             return curr_val.id != new_val
         if isinstance(new_val, dict) and "id" in new_val:
             return curr_val.id != new_val["id"]
 
-    if hasattr(curr_val, "value") and isinstance(new_val, str):
-        return curr_val.value != new_val
+    if hasattr(curr_val, "value"):
+        if new_val is None:
+            return True
+        if isinstance(new_val, str):
+            return curr_val.value != new_val
 
     return None
 

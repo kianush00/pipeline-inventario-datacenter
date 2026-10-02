@@ -2740,7 +2740,8 @@ class TestIsRelationChanged:
     def test_relation_changed(self) -> None:
         """Verifica la lógica de detección de cambios en FKs y Choices."""
         # 1. curr_val es None
-        assert _is_relation_changed(None, 5) is None
+        assert _is_relation_changed(None, 5) is True
+        assert _is_relation_changed(None, None) is False
 
         # 2. Atributos primitivos (sin id ni value)
         curr_val_str = "simple_string"
@@ -2750,6 +2751,7 @@ class TestIsRelationChanged:
         curr_val_fk = MagicMock(id=5)
         assert _is_relation_changed(curr_val_fk, 5) is False
         assert _is_relation_changed(curr_val_fk, 6) is True
+        assert _is_relation_changed(curr_val_fk, None) is True
 
         # 4. ID dentro de un dict
         assert _is_relation_changed(curr_val_fk, {"id": 5}) is False
@@ -2759,6 +2761,7 @@ class TestIsRelationChanged:
         curr_val_choice = MagicMock(value="active")
         assert _is_relation_changed(curr_val_choice, "active") is False
         assert _is_relation_changed(curr_val_choice, "offline") is True
+        assert _is_relation_changed(curr_val_choice, None) is True
 
         # 6. Tipo no manejable (ej. new_val es lista, falla el isinstance)
         assert _is_relation_changed(curr_val_fk, [5]) is None
