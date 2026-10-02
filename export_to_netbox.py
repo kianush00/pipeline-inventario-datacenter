@@ -1324,44 +1324,43 @@ def read_and_validate_csv(
 # ============================================================
 
 
-def _is_slug_collision(e: RequestError) -> bool:
-    """Verifica si el RequestError es causado específicamente por un slug duplicado."""
+def _is_collision_error(e: RequestError, fields: tuple[str, ...]) -> bool:
+    """Detecta si un RequestError (HTTP 400) se debe a colisión en campos específicos."""
     if e.req.status_code != 400:
         return False
+
+    collision_keywords = ("already exists", "must make a unique set")
+
     try:
         data = e.req.json()
-        if isinstance(data, dict) and "slug" in data:
-            for msg in data["slug"]:
-                if (
-                    "already exists" in str(msg).lower()
-                    or "must make a unique set" in str(msg).lower()
+        if isinstance(data, dict):
+            for field in fields:
+                messages = data.get(field, [])
+                if isinstance(messages, str):
+                    messages = [messages]
+                
+                if any(
+                    kw in str(msg).lower()
+                    for msg in messages
+                    for kw in collision_keywords
                 ):
                     return True
     except (ValueError, TypeError, AttributeError):
-        if "slug" in str(e.error).lower() and "already exists" in str(e.error).lower():
-            return True
-    return False
+        pass
+
+    error_str = str(e.error).lower()
+    has_field = any(field in error_str for field in fields)
+    return has_field and "already exists" in error_str
+
+
+def _is_slug_collision(e: RequestError) -> bool:
+    """Verifica si el RequestError es causado específicamente por un slug duplicado."""
+    return _is_collision_error(e, ("slug",))
 
 
 def _is_name_collision(e: RequestError) -> bool:
     """Verifica si el RequestError es causado específicamente por un nombre duplicado."""
-    if e.req.status_code != 400:
-        return False
-    try:
-        data = e.req.json()
-        if isinstance(data, dict):
-            for field in ("name", "non_field_errors"):
-                if field in data:
-                    for msg in data[field]:
-                        if (
-                            "already exists" in str(msg).lower()
-                            or "must make a unique set" in str(msg).lower()
-                        ):
-                            return True
-    except (ValueError, TypeError, AttributeError):
-        if "name" in str(e.error).lower() and "already exists" in str(e.error).lower():
-            return True
-    return False
+    return _is_collision_error(e, ("name", "non_field_errors"))
 
 
 def _create_with_fallback_slug(
