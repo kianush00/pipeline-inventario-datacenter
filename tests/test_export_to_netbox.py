@@ -35,6 +35,7 @@ from export_to_netbox import (
     SiteNameCache,
     SyncResult,
     SyncStatus,
+    ValidationError,
     _assign_primary_ipv4,
     _build_interface_cidr,
     _classify_rows,
@@ -615,6 +616,24 @@ class TestValidateCsvHeaders:
             _validate_csv_headers(headers, config)
 
 
+class TestFieldMappingConfig:
+    """Verifica las validaciones de configuración de mapeo."""
+
+    def test_list_source_requires_transform(self) -> None:
+        """Una lista en source requiere un transform explícito."""
+        with pytest.raises(
+            ValidationError, match="debes definir explícitamente un 'transform'"
+        ):
+            FieldMappingConfig(target="mi_campo", source=["col1", "col2"])
+
+    def test_list_source_with_transform_ok(self) -> None:
+        """Una lista en source es válida si tiene transform."""
+        config = FieldMappingConfig(
+            target="mi_campo", source=["col1", "col2"], transform="concat_dot"
+        )
+        assert config.source == ["col1", "col2"]
+
+
 class TestLoadConfig:
     """Verifica la carga y validación del archivo YAML de configuración."""
 
@@ -668,10 +687,13 @@ class TestExtractRawSourceValue:
         row = {"ColA": "ValorA"}
         assert _extract_raw_source_value(row, "ColA") == "ValorA"
 
-    def test_list_source(self) -> None:
-        # Extrae el primer elemento en caso de que sea lista (comportamiento fallback)
+    def test_list_source_raises_error(self) -> None:
+        # Extraer una lista sin transform explicit no está permitido
         row = {"ColA": "ValorA", "ColB": "ValorB"}
-        assert _extract_raw_source_value(row, ["ColA", "ColB"]) == "ValorA"
+        with pytest.raises(
+            TypeError, match="No se puede extraer un valor crudo a partir de una lista"
+        ):
+            _extract_raw_source_value(row, ["ColA", "ColB"])
 
     def test_missing_key_returns_empty(self) -> None:
         row = {"ColA": "ValorA"}

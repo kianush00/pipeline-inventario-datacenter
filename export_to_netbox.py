@@ -482,6 +482,12 @@ class FieldMappingConfig(BaseModel):
                 "requiere que 'source' sea explícitamente una lista."
             )
 
+        if isinstance(self.source, list) and not self.transform:
+            raise ValueError(
+                f"Si 'source' es una lista (target '{self.target}'), "
+                "debes definir explícitamente un 'transform' (ej. concat_dot, coalesce)."
+            )
+
         return self
 
 
@@ -2217,9 +2223,12 @@ def _extract_coalesce_value(
 
 def _extract_raw_source_value(row: CsvRow, source: str | list[str]) -> str:
     """Extrae el valor crudo de la(s) columna(s) origen, sin transformar."""
-    if isinstance(source, str):
-        return row.get(source, "")
-    return row.get(source[0], "") if source else ""
+    if isinstance(source, list):
+        raise TypeError(
+            "No se puede extraer un valor crudo a partir de una lista de fuentes "
+            "sin usar una función de transformación explícita."
+        )
+    return row.get(source, "")
 
 
 def _validate_select_choice(
