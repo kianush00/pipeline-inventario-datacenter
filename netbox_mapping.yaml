@@ -217,7 +217,7 @@ custom_field_definitions:
   - name: &cf_machine_type "machine_type"
     label: "Tipo de maquina"
     type: "select"
-    required: true
+    required: false
     object_types:
       - "dcim.device"
       - "virtualization.virtualmachine"
