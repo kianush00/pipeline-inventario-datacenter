@@ -940,16 +940,16 @@ class TestBuildPayload:
         native_map = [FieldMappingConfig(source="Nombre", target="name")]
         custom_map = [
             FieldMappingConfig(source="vCPUs", target="cpu_cores"),
-            FieldMappingConfig(source="Tipo de maquina", target="machine_type"),
+            FieldMappingConfig(source="Entorno", target="environment"),
         ]
-        row = {"Nombre": "SRV", "vCPUs": "4", "Tipo de maquina": "Dedicada"}
+        row = {"Nombre": "SRV", "vCPUs": "4", "Entorno": "production"}
 
         payload = build_payload(row, native_map, custom_map, config)
 
         assert payload["name"] == "SRV"
         assert "custom_fields" in payload
         assert payload["custom_fields"]["cpu_cores"] == "4"
-        assert payload["custom_fields"]["machine_type"] == "dedicated"
+        assert payload["custom_fields"]["environment"] == "production"
 
 
 class TestResolveNetboxStatus:

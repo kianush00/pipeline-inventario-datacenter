@@ -595,14 +595,7 @@ class NetBoxMappingConfig(BaseModel):
                 "para fallback de roles no reconocidos."
             )
 
-        # 2. Validar que el Custom Field 'machine_type' esté definido en
-        # custom_field_definitions y tenga un mapa
         cf_names = {cf.name for cf in self.custom_field_definitions}
-        if "machine_type" not in cf_names:
-            raise ValueError(
-                "El Custom Field 'machine_type' es obligatorio dentro de custom_field_definitions."
-            )
-
         col_def = self.csv_columns.get("machine_type")
         if not col_def or not col_def.map:
             raise ValueError(
