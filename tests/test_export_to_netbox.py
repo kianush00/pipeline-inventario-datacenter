@@ -1629,6 +1629,55 @@ class TestEnsureRack:
 
         mock_rack.update.assert_not_called()
 
+    @patch("export_to_netbox.get_or_create_cached")
+    def test_ensure_rack_without_location(self, mock_get: MagicMock) -> None:
+        endpoint = MagicMock()
+        site_mock = MockNetBoxRecord(id=1, name="Site1")
+        cache: SiteNameCache = {}
+
+        mock_rack = MagicMock(id=5, name="Rack1")
+        mock_get.return_value = (mock_rack, cache)
+
+        _, _ = ensure_rack(
+            endpoint, "Rack1", site_mock, cache, dry_run=False, location_id=None
+        )
+
+        mock_get.assert_called_once_with(
+            endpoint=endpoint,
+            cache=cache,
+            cache_key=(1, "Rack1"),
+            filter_kwargs={"name": "Rack1", "site_id": 1},
+            create_kwargs={"name": "Rack1", "site": 1},
+            name="Rack1",
+            dry_run=False,
+            skip_filter=False,
+        )
+        mock_rack.update.assert_not_called()
+
+    @patch("export_to_netbox.get_or_create_cached")
+    def test_ensure_rack_update_location_raises_error(
+        self, mock_get: MagicMock
+    ) -> None:
+        endpoint = MagicMock()
+        site_mock = MockNetBoxRecord(id=1, name="Site1")
+        cache: SiteNameCache = {}
+
+        mock_old_loc = MockNetBoxRecord(id=88, name="Fila B")
+        mock_rack = MagicMock(id=5, name="Rack1", location=mock_old_loc)
+        mock_get.return_value = (mock_rack, cache)
+
+        mock_rack.update.side_effect = RequestError(
+            MagicMock(status_code=400, reason="Bad Request")
+        )
+
+        with pytest.raises(
+            NetBoxApiError,
+            match="actualizar location de rack 'Rack1'",
+        ):
+            ensure_rack(
+                endpoint, "Rack1", site_mock, cache, dry_run=False, location_id=99
+            )
+
 
 class TestEnsureLocation:
     """Verifica que ensure_location cree o recupere localizaciones correctamente."""

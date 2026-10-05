@@ -2211,8 +2211,7 @@ def ensure_rack(
                     current_loc_id,
                 )
             else:
-                # TODO: tal vez envolver en netbox_error_wrap
-                try:
+                with netbox_error_wrap(f"actualizar location de rack '{name}'"):
                     cast(Record, obj).update({"location": location_id})
                     log.info(
                         "UPDATED rack '%s': location %s -> %s",
@@ -2220,8 +2219,6 @@ def ensure_rack(
                         current_loc_id,
                         location_id,
                     )
-                except RequestError as e:
-                    log.error("Fallo al actualizar location de rack '%s': %s", name, e)
 
     return obj, cache
 
