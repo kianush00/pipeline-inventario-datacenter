@@ -74,6 +74,7 @@ from export_to_netbox import (
     ensure_cluster,
     ensure_device_type,
     ensure_dynamic_cluster_types,
+    ensure_location,
     ensure_manufacturer,
     ensure_rack,
     ensure_site,
@@ -1588,6 +1589,71 @@ class TestEnsureRack:
         ):
             ensure_rack(endpoint, "Rack1", site_mock, cache, dry_run=False)
 
+    @patch("export_to_netbox.get_or_create_cached")
+    def test_ensure_rack_updates_location_if_different(
+        self, mock_get: MagicMock
+    ) -> None:
+        endpoint = MagicMock()
+        site_mock = MockNetBoxRecord(id=1, name="Site1")
+        cache: SiteNameCache = {}
+
+        # Rack existente con location antigua (id=88)
+        mock_old_loc = MockNetBoxRecord(id=88, name="Fila B")
+        mock_rack = MagicMock(id=5, name="Rack1", location=mock_old_loc)
+
+        mock_get.return_value = (mock_rack, cache)
+
+        _, _ = ensure_rack(
+            endpoint, "Rack1", site_mock, cache, dry_run=False, location_id=99
+        )
+
+        # Debe haber llamado update en el mock_rack para asignarle el 99
+        mock_rack.update.assert_called_once_with({"location": 99})
+
+    @patch("export_to_netbox.get_or_create_cached")
+    def test_ensure_rack_does_not_update_if_location_matches(
+        self, mock_get: MagicMock
+    ) -> None:
+        endpoint = MagicMock()
+        site_mock = MockNetBoxRecord(id=1, name="Site1")
+        cache: SiteNameCache = {}
+
+        mock_loc = MockNetBoxRecord(id=99, name="Fila A")
+        mock_rack = MagicMock(id=5, name="Rack1", location=mock_loc)
+
+        mock_get.return_value = (mock_rack, cache)
+
+        _, _ = ensure_rack(
+            endpoint, "Rack1", site_mock, cache, dry_run=False, location_id=99
+        )
+
+        mock_rack.update.assert_not_called()
+
+
+class TestEnsureLocation:
+    """Verifica que ensure_location cree o recupere localizaciones correctamente."""
+
+    @patch("export_to_netbox.get_or_create_cached")
+    def test_ensure_location_calls_get_or_create(self, mock_get: MagicMock) -> None:
+        endpoint = MagicMock()
+        site_mock = MockNetBoxRecord(id=10, name="Site1")
+        cache: SiteNameCache = {}
+        mock_get.return_value = (MockNetBoxRecord(id=5, name="Fila A"), cache)
+
+        obj, _ = ensure_location(endpoint, "Fila A", site_mock, cache, False)
+
+        mock_get.assert_called_once_with(
+            endpoint=endpoint,
+            cache=cache,
+            cache_key=(10, "Fila A"),
+            filter_kwargs={"name": "Fila A", "site_id": 10},
+            create_kwargs={"name": "Fila A", "site": 10},
+            name="Fila A",
+            dry_run=False,
+            skip_filter=False,
+        )
+        assert getattr(obj, "id", 0) == 5
+
 
 class TestEnsureCluster:
     """Verifica que ensure_cluster capture RequestError al crear."""
@@ -1971,6 +2037,7 @@ class TestSyncSkips:
         mock_config = MagicMock()
         mock_config.is_empty.return_value = False
         mock_config.csv_columns = {
+            "rack_location": MagicMock(source="rack_location"),
             "manufacturer": MagicMock(source="manufacturer"),
             "model": MagicMock(source="model"),
             "machine_name": MagicMock(source="machine_name"),
@@ -1997,6 +2064,7 @@ class TestSyncSkips:
         mock_config = MagicMock()
         mock_config.is_empty.return_value = False
         mock_config.csv_columns = {
+            "rack_location": MagicMock(source="rack_location"),
             "cluster_name": MagicMock(source="cluster_name"),
             "machine_name": MagicMock(source="machine_name"),
             "inventory_uuid": MagicMock(source="inventory_uuid"),
@@ -2026,6 +2094,7 @@ class TestSyncSkips:
         mock_config = MagicMock()
         mock_config.is_empty.return_value = False
         mock_config.csv_columns = {
+            "rack_location": MagicMock(source="rack_location"),
             "cluster_name": MagicMock(source="cluster_name", map=None),
             "machine_name": MagicMock(source="machine_name", map=None),
             "inventory_uuid": MagicMock(source="inventory_uuid", map=None),
@@ -2077,6 +2146,7 @@ class TestSyncDevice:
         mock_config.is_empty.return_value = False
         mock_config.is_cluster_host.return_value = False
         mock_config.csv_columns = {
+            "rack_location": MagicMock(source="rack_location"),
             "manufacturer": MagicMock(source="manufacturer"),
             "model": MagicMock(source="model"),
             "rack": MagicMock(source="rack"),
@@ -2507,6 +2577,7 @@ class TestSyncVM:
         mock_config = MagicMock()
         mock_config.is_empty.return_value = False
         mock_config.csv_columns = {
+            "rack_location": MagicMock(source="rack_location"),
             "cluster_name": MagicMock(source="cluster_name"),
             "machine_name": MagicMock(source="machine_name"),
             "host_device": MagicMock(source="host_device"),

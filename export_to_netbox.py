@@ -270,6 +270,7 @@ class NetBoxEndpoints(BaseModel):
     manufacturers: Endpoint
     device_types: Endpoint
     platforms: Endpoint
+    locations: Endpoint
     racks: Endpoint
     clusters: Endpoint
     device_roles: Endpoint
@@ -492,6 +493,8 @@ class FieldMappingConfig(BaseModel):
 
 
 class StatusDefaultConfig(BaseModel):
+    """Configuración de estado por defecto."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
     default: str = Field(min_length=1)
 
@@ -522,6 +525,8 @@ class NodeTypesConfig(BaseModel):
 
 
 class CsvColumnDef(BaseModel):
+    """Definición de columna CSV de origen."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
     source: str = Field(min_length=1)
     required: bool = False
@@ -774,6 +779,7 @@ class CacheStore(BaseModel):
     manufacturers: NameCache = Field(default_factory=dict)
     device_types: ManufModelCache = Field(default_factory=dict)
     platforms: NameCache = Field(default_factory=dict)
+    locations: SiteNameCache = Field(default_factory=dict)
     racks: SiteNameCache = Field(default_factory=dict)
     clusters: NameCache = Field(default_factory=dict)
     cluster_types: NameCache = Field(default_factory=dict)
@@ -1243,6 +1249,7 @@ def build_netbox_endpoints(nb: Api) -> NetBoxEndpoints:
             manufacturers=nb.dcim.manufacturers,
             device_types=nb.dcim.device_types,
             platforms=nb.dcim.platforms,
+            locations=nb.dcim.locations,
             racks=nb.dcim.racks,
             clusters=nb.virtualization.clusters,
             device_roles=nb.dcim.device_roles,
@@ -2137,20 +2144,20 @@ def ensure_device_type(
     return obj, cache
 
 
-def ensure_rack(
-    racks_endpoint: Endpoint,
+def ensure_location(
+    locations_endpoint: Endpoint,
     name: str,
     site: NetBoxObject,
     cache: SiteNameCache,
     dry_run: bool,
 ) -> tuple[NetBoxObject, SiteNameCache]:
-    """Garantiza que el Rack exista en NetBox.
-    Retorna el objeto Rack creado y la caché actualizada."""
+    """Garantiza que el Location (Fila) exista en NetBox.
+    Retorna el objeto Location creado y la caché actualizada."""
     site_id = get_netbox_object_id(site)
     cache_key = (site_id, name)
 
     return get_or_create_cached(
-        endpoint=racks_endpoint,
+        endpoint=locations_endpoint,
         cache=cache,
         cache_key=cache_key,
         filter_kwargs={"name": name, "site_id": site_id},
@@ -2159,6 +2166,64 @@ def ensure_rack(
         dry_run=dry_run,
         skip_filter=(site_id == 0),
     )
+
+
+def ensure_rack(
+    racks_endpoint: Endpoint,
+    name: str,
+    site: NetBoxObject,
+    cache: SiteNameCache,
+    dry_run: bool,
+    location_id: int | None = None,
+) -> tuple[NetBoxObject, SiteNameCache]:
+    """Garantiza que el Rack exista en NetBox y esté asociado a la Location indicada.
+    Retorna el objeto Rack creado/actualizado y la caché actualizada."""
+    site_id = get_netbox_object_id(site)
+    cache_key = (site_id, name)
+
+    create_kwargs = {"name": name, "site": site_id}
+    if location_id is not None:
+        create_kwargs["location"] = location_id
+
+    obj, cache = get_or_create_cached(
+        endpoint=racks_endpoint,
+        cache=cache,
+        cache_key=cache_key,
+        filter_kwargs={"name": name, "site_id": site_id},
+        create_kwargs=create_kwargs,
+        name=name,
+        dry_run=dry_run,
+        skip_filter=(site_id == 0),
+    )
+
+    # Si ya existía, garantizamos que tenga la location correcta (Idempotencia)
+    if getattr(obj, "id", 0) != 0 and location_id is not None:
+        # Pynetbox devuelve las referencias a objetos relacionales como diccionarios o Record
+        current_loc = getattr(obj, "location", None)
+        current_loc_id = getattr(current_loc, "id", None) if current_loc else None
+
+        if current_loc_id != location_id:
+            if dry_run:
+                log.info(
+                    "[DRY-RUN] Actualizaría rack '%s' con location_id=%s (actual=%s)",
+                    name,
+                    location_id,
+                    current_loc_id,
+                )
+            else:
+                # TODO: tal vez envolver en netbox_error_wrap
+                try:
+                    cast(Record, obj).update({"location": location_id})
+                    log.info(
+                        "UPDATED rack '%s': location %s -> %s",
+                        name,
+                        current_loc_id,
+                        location_id,
+                    )
+                except RequestError as e:
+                    log.error("Fallo al actualizar location de rack '%s': %s", name, e)
+
+    return obj, cache
 
 
 # ============================================================
@@ -2939,6 +3004,19 @@ def sync_device(
         else:
             log.info("INFO (%s): Hipervisor sin cluster asignado.", machine_name)
 
+    # Location (Fila).
+    location_id: int | None = None
+    location_name = extract_csv_value(row, "rack_location", config)
+    if location_name:
+        location_obj, caches.locations = ensure_location(
+            endpoints.locations,
+            location_name,
+            site,
+            caches.locations,
+            dry_run,
+        )
+        location_id = get_netbox_object_id(location_obj)
+
     # Rack.
     rack_name = extract_csv_value(row, "rack", config)
     if rack_name:
@@ -2948,6 +3026,7 @@ def sync_device(
             site,
             caches.racks,
             dry_run,
+            location_id=location_id,
         )
         payload["rack"] = get_netbox_object_id(rack)
 

@@ -54,6 +54,8 @@ csv_columns:
     required: true
   rack:
     source: "Rack"
+  rack_location:
+    source: "Fila"
   host_device:
     source: "Dispositivo Host"
   cluster_name:
