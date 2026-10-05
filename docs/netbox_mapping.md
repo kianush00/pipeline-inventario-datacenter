@@ -50,7 +50,8 @@ This table acts as a data dictionary of the fields the script expects to extract
 | `desc` | `Descripcion` | Brief free text to describe the node. | `Primary DB server` |
 | `cluster_name` | `Cluster` | Name of the cluster the node belongs to. | `Cluster-VMware-01`, `KVM-Pool-B` |
 | `host_device` | `Dispositivo Host` | (For VMs) Name of the physical server running the VM. | `hyper-node-05` |
-| `rack` | `Rack` | Name of the physical rack where it is located. | `Rack-A1`, `Fila-2-R4` |
+| `rack` | `Rack` | Name of the physical rack where it is located. | `Rack-A1`, `Row-2-R4` |
+| `rack_location` | `Fila` | Name of the Location (row/corridor) where the rack is grouped. | `Row A`, `Row B` |
 | `pos_u` | `Posicion (U)` | Physical position or lowest bay number within the rack. | `12`, `25` |
 | `hei_u` | `Altura (U)` | Total U height the device occupies in the rack (usually 1, 2, or fractional). | `1.0`, `1.5`, `2.0` |
 | `os` | `SO Host` | Base operating system of the node. | `Ubuntu`, `Windows Server 2022` |
@@ -78,9 +79,9 @@ This table acts as a data dictionary of the fields the script expects to extract
 | `inventory_uuid` | `UUID` | Unique and deterministic identifier of the node (ideally extracted from DMI or virtual system). | `564d...e2f1` |
 | `bios_ver` | `Version BIOS` | Current BIOS/UEFI firmware version. | `2.14.0` |
 | `bios_date` | `Fecha BIOS` | Release or update date of the BIOS. | `2023-01-15` |
-| `status` | `Estado` | Lifecycle status (active, offline, decommissioning). | `Activo`, `offline`, `En baja` |
-| `environment` | `Entorno` | Deployment environment (Production, QA, Development). | `Producción`, `Desarrollo` |
-| `rundeck_node` | `Nodo Rundeck` | Indicates if the node was discovered via Rundeck (boolean). | `Sí`, `No` |
+| `status` | `Estado` | Lifecycle status (active, offline, decommissioning). | `Active`, `Offline`, `Decommissioning` |
+| `environment` | `Entorno` | Deployment environment (Production, QA, Development). | `Production`, `Development` |
+| `rundeck_node` | `Nodo Rundeck` | Indicates if the node was discovered via Rundeck (boolean). | `Yes`, `No` |
 | `notes` | `Notas` | Extensive notes or additional audit metadata (flexible placement). | `Replace disks in Q3` |
 
 ---
@@ -114,7 +115,14 @@ cluster_type:
 
 ## Device Roles (`device_roles`)
 
-Canonical list of Device Roles. The value of the `Rol` column in the CSV must match one of these names. They are created automatically if they do not exist. The colors are hex values without `#`.
+Canonical list of Device Roles. The value of the `Rol` column in the CSV must match one of these names. They are created automatically if they do not exist.
+
+| Subfield | Required | Description |
+| ---------- | ----------- | ------------- |
+| `name` | Yes | Human-readable name of the role |
+| `slug` | No | Internal identifier in NetBox |
+| `color` | No | Hex color code without `#` (default: `9e9e9e`) |
+| `vm_role` | No | Boolean flag indicating if this role can be assigned to Virtual Machines. Defaults to `true`. Set to `false` for physical-only roles (e.g. Chassis, Tape Drive, Hypervisor). |
 
 If the CSV role does not match any in the list, the `Others` role is assigned as a fallback.
 

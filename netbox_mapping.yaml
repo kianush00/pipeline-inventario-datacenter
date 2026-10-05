@@ -145,6 +145,7 @@ device_roles:
   - name: "Hypervisor"
     slug: "hypervisor"
     color: "9c27b0"
+    vm_role: false
   - name: "DNS Server"
     slug: "dns-server"
     color: "2196f3"
@@ -196,9 +197,11 @@ device_roles:
   - name: "Tape Drive"
     slug: "tape-drive"
     color: "795548"
+    vm_role: false
   - name: "Chassis"
     slug: "chassis"
     color: "607d8b"
+    vm_role: false
   - name: "Container Host"
     slug: "container-host"
     color: "00bcd4"

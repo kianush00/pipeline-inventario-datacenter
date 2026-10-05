@@ -2534,12 +2534,15 @@ class TestEnsureTaxonomyQACases:
         self, mock_get_or_create: MagicMock
     ) -> None:
         """
-        Escenario: Un DeviceRole ya existe en caché, pero tiene vm_role=False.
+        Escenario: Un DeviceRole ya existe en caché, pero tiene vm_role distinto al YAML.
         _sync_single_device_role debe mutarlo in-place invocando .update(),
         y la caché debe retornar con el objeto correcto sin reasignaciones redundantes.
         """
         endpoints = MagicMock()
-        role_def = DeviceRoleConfig(name="AccessSwitch", slug="access", color="000000")
+        # En el yaml, este rol dice vm_role=True
+        role_def = DeviceRoleConfig(
+            name="AccessSwitch", slug="access", color="000000", vm_role=True
+        )
 
         mock_obj = MagicMock(id=10, vm_role=False)
         cache_initial = cast(NameCache, {"accessswitch": mock_obj})
@@ -2552,6 +2555,30 @@ class TestEnsureTaxonomyQACases:
         mock_obj.update.assert_called_once_with({"vm_role": True})
         assert returned_obj is mock_obj
         assert returned_cache["accessswitch"] is mock_obj
+
+    @patch("export_to_netbox.get_or_create_cached")
+    def test_sync_single_device_role_cache_and_update_to_false(
+        self, mock_get_or_create: MagicMock
+    ) -> None:
+        """
+        Escenario: Un DeviceRole tiene vm_role=False en el YAML, pero True en NetBox.
+        Debe actualizarse hacia False.
+        """
+        endpoints = MagicMock()
+        role_def = DeviceRoleConfig(
+            name="Hypervisor", slug="hypervisor", color="000000", vm_role=False
+        )
+
+        mock_obj = MagicMock(id=10, vm_role=True)
+        cache_initial = cast(NameCache, {"hypervisor": mock_obj})
+        mock_get_or_create.return_value = (mock_obj, cache_initial)
+
+        returned_obj, _ = _sync_single_device_role(
+            endpoints, role_def, cache_initial, dry_run=False
+        )
+
+        mock_obj.update.assert_called_once_with({"vm_role": False})
+        assert returned_obj is mock_obj
 
     def test_get_or_create_preventive_slug_without_slug_kwarg(self) -> None:
         """

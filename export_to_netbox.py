@@ -359,6 +359,7 @@ class DeviceRoleConfig(BaseModel):
     name: str = Field(min_length=1)
     slug: str | None = None
     color: str = Field(default="9e9e9e", pattern=r"^[0-9a-fA-F]{6}$")
+    vm_role: bool = Field(default=True)
 
     @model_validator(mode="before")
     @classmethod
@@ -1993,7 +1994,7 @@ def _sync_single_device_role(
                 "name": name,
                 "slug": slug,
                 "color": role_def.color,
-                "vm_role": True,
+                "vm_role": role_def.vm_role,
             },
             name=name,
             dry_run=dry_run,
@@ -2001,13 +2002,25 @@ def _sync_single_device_role(
     except NetBoxApiError as e:
         raise ConfigValidationError(f"Error procesando DeviceRole '{name}': {e}") from e
 
-    if getattr(obj, "id", 0) != 0 and not getattr(obj, "vm_role", False):
-        if dry_run:
-            log.info("[DRY-RUN] WOULD UPDATE DeviceRole, para permitir VM: %s", name)
-        else:
-            with netbox_error_wrap(f"Error actualizando DeviceRole '{name}'"):
-                cast(Record, obj).update({"vm_role": True})
-                log.info("UPDATED DeviceRole, para permitir VM: %s", name)
+    if getattr(obj, "id", 0) != 0:
+        current_vm_role = getattr(obj, "vm_role", False)
+        if current_vm_role != role_def.vm_role:
+            if dry_run:
+                log.info(
+                    "[DRY-RUN] WOULD UPDATE DeviceRole, vm_role %s -> %s: %s",
+                    current_vm_role,
+                    role_def.vm_role,
+                    name,
+                )
+            else:
+                with netbox_error_wrap(f"Error actualizando DeviceRole '{name}'"):
+                    cast(Record, obj).update({"vm_role": role_def.vm_role})
+                    log.info(
+                        "UPDATED DeviceRole, vm_role %s -> %s: %s",
+                        current_vm_role,
+                        role_def.vm_role,
+                        name,
+                    )
 
     return obj, device_roles_cache
 

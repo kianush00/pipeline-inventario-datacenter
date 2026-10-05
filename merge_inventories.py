@@ -47,8 +47,8 @@ La unión se comporta como un LEFT JOIN:
 
 Uso:
     python3 merge_inventories.py \
-        parsed_inventory.csv \
-        master_inventory.csv \
+        parsed_job_output.csv \
+        prepared_master_inventory.csv \
         [merged_inventory.csv] \
         [rundeck_header_list.txt]
 
@@ -347,8 +347,8 @@ def main() -> None:
     if len(sys.argv) < 3:
         usage(
             f"Uso: {sys.argv[0]} "
-            "parsed_inventory.csv "
-            "master_inventory.csv "
+            "parsed_job_output.csv "
+            "prepared_master_inventory.csv "
             "[merged_inventory.csv] "
             "[rundeck_header_list.txt]"
         )
@@ -357,8 +357,8 @@ def main() -> None:
         usage(
             f"Cantidad de argumentos inválida.\n"
             f"Uso: {sys.argv[0]} "
-            "parsed_inventory.csv "
-            "master_inventory.csv "
+            "parsed_job_output.csv "
+            "prepared_master_inventory.csv "
             "[merged_inventory.csv] "
             "[rundeck_header_list.txt]"
         )
