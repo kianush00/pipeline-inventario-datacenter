@@ -60,6 +60,7 @@ from export_to_netbox import (
     _sanitize_mac_address,
     _search_in_netbox,
     _sync_device_type_u_height,
+    _sync_rack_location,
     _sync_row,
     _sync_single_device_role,
     _sync_single_interface,
@@ -1589,48 +1590,29 @@ class TestEnsureRack:
         ):
             ensure_rack(endpoint, "Rack1", site_mock, cache, dry_run=False)
 
+    @patch("export_to_netbox._sync_rack_location")
     @patch("export_to_netbox.get_or_create_cached")
-    def test_ensure_rack_updates_location_if_different(
-        self, mock_get: MagicMock
+    def test_ensure_rack_calls_sync_location(
+        self, mock_get: MagicMock, mock_sync_loc: MagicMock
     ) -> None:
         endpoint = MagicMock()
         site_mock = MockNetBoxRecord(id=1, name="Site1")
         cache: SiteNameCache = {}
 
-        # Rack existente con location antigua (id=88)
-        mock_old_loc = MockNetBoxRecord(id=88, name="Fila B")
-        mock_rack = MagicMock(id=5, name="Rack1", location=mock_old_loc)
-
+        mock_rack = MagicMock(id=5, name="Rack1")
         mock_get.return_value = (mock_rack, cache)
 
         _, _ = ensure_rack(
             endpoint, "Rack1", site_mock, cache, dry_run=False, location_id=99
         )
 
-        # Debe haber llamado update en el mock_rack para asignarle el 99
-        mock_rack.update.assert_called_once_with({"location": 99})
+        mock_sync_loc.assert_called_once_with(mock_rack, "Rack1", 99, False)
 
+    @patch("export_to_netbox._sync_rack_location")
     @patch("export_to_netbox.get_or_create_cached")
-    def test_ensure_rack_does_not_update_if_location_matches(
-        self, mock_get: MagicMock
+    def test_ensure_rack_without_location(
+        self, mock_get: MagicMock, mock_sync_loc: MagicMock
     ) -> None:
-        endpoint = MagicMock()
-        site_mock = MockNetBoxRecord(id=1, name="Site1")
-        cache: SiteNameCache = {}
-
-        mock_loc = MockNetBoxRecord(id=99, name="Fila A")
-        mock_rack = MagicMock(id=5, name="Rack1", location=mock_loc)
-
-        mock_get.return_value = (mock_rack, cache)
-
-        _, _ = ensure_rack(
-            endpoint, "Rack1", site_mock, cache, dry_run=False, location_id=99
-        )
-
-        mock_rack.update.assert_not_called()
-
-    @patch("export_to_netbox.get_or_create_cached")
-    def test_ensure_rack_without_location(self, mock_get: MagicMock) -> None:
         endpoint = MagicMock()
         site_mock = MockNetBoxRecord(id=1, name="Site1")
         cache: SiteNameCache = {}
@@ -1652,20 +1634,48 @@ class TestEnsureRack:
             dry_run=False,
             skip_filter=False,
         )
-        mock_rack.update.assert_not_called()
+        mock_sync_loc.assert_not_called()
 
-    @patch("export_to_netbox.get_or_create_cached")
-    def test_ensure_rack_update_location_raises_error(
-        self, mock_get: MagicMock
-    ) -> None:
-        endpoint = MagicMock()
-        site_mock = MockNetBoxRecord(id=1, name="Site1")
-        cache: SiteNameCache = {}
 
+class TestSyncRackLocation:
+    """Verifica la lógica de _sync_rack_location."""
+
+    def test_sync_rack_location_different(self) -> None:
         mock_old_loc = MockNetBoxRecord(id=88, name="Fila B")
         mock_rack = MagicMock(id=5, name="Rack1", location=mock_old_loc)
-        mock_get.return_value = (mock_rack, cache)
 
+        result = _sync_rack_location(mock_rack, "Rack1", 99, dry_run=False)
+
+        assert result is True
+        mock_rack.update.assert_called_once_with({"location": 99})
+
+    def test_sync_rack_location_no_previous(self) -> None:
+        mock_rack = MagicMock(id=5, name="Rack1", location=None)
+
+        result = _sync_rack_location(mock_rack, "Rack1", 99, dry_run=False)
+
+        assert result is True
+        mock_rack.update.assert_called_once_with({"location": 99})
+
+    def test_sync_rack_location_matches(self) -> None:
+        mock_loc = MockNetBoxRecord(id=99, name="Fila A")
+        mock_rack = MagicMock(id=5, name="Rack1", location=mock_loc)
+
+        result = _sync_rack_location(mock_rack, "Rack1", 99, dry_run=False)
+
+        assert result is False
+        mock_rack.update.assert_not_called()
+
+    def test_sync_rack_location_dry_run(self) -> None:
+        mock_rack = MagicMock(id=5, name="Rack1", location=None)
+
+        result = _sync_rack_location(mock_rack, "Rack1", 99, dry_run=True)
+
+        assert result is True
+        mock_rack.update.assert_not_called()
+
+    def test_sync_rack_location_raises_error(self) -> None:
+        mock_rack = MagicMock(id=5, name="Rack1", location=None)
         mock_rack.update.side_effect = RequestError(
             MagicMock(status_code=400, reason="Bad Request")
         )
@@ -1674,9 +1684,7 @@ class TestEnsureRack:
             NetBoxApiError,
             match="actualizar location de rack 'Rack1'",
         ):
-            ensure_rack(
-                endpoint, "Rack1", site_mock, cache, dry_run=False, location_id=99
-            )
+            _sync_rack_location(mock_rack, "Rack1", 99, dry_run=False)
 
 
 class TestEnsureLocation:

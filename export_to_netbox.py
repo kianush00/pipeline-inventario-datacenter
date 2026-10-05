@@ -2168,6 +2168,44 @@ def ensure_location(
     )
 
 
+def _sync_rack_location(
+    existing_rack: Record,
+    name: str,
+    target_location_id: int,
+    dry_run: bool,
+) -> bool:
+    """
+    Sincroniza la location (fila) del rack.
+    Actualiza el objeto in-place si es necesario.
+    Retorna True si el objeto fue (o habría sido) actualizado, False en caso contrario.
+    """
+    # Pynetbox devuelve las referencias a objetos relacionales como diccionarios o Record
+    current_loc = getattr(existing_rack, "location", None)
+    current_loc_id = getattr(current_loc, "id", None) if current_loc else None
+
+    if current_loc_id == target_location_id:
+        return False
+
+    if dry_run:
+        log.info(
+            "[DRY-RUN] Actualizaría rack '%s' con location_id=%s (actual=%s)",
+            name,
+            target_location_id,
+            current_loc_id,
+        )
+        return True
+
+    with netbox_error_wrap(f"actualizar location de rack '{name}'"):
+        existing_rack.update({"location": target_location_id})
+        log.info(
+            "UPDATED rack '%s': location %s -> %s",
+            name,
+            current_loc_id,
+            target_location_id,
+        )
+        return True
+
+
 def ensure_rack(
     racks_endpoint: Endpoint,
     name: str,
@@ -2198,27 +2236,7 @@ def ensure_rack(
 
     # Si ya existía, garantizamos que tenga la location correcta (Idempotencia)
     if getattr(obj, "id", 0) != 0 and location_id is not None:
-        # Pynetbox devuelve las referencias a objetos relacionales como diccionarios o Record
-        current_loc = getattr(obj, "location", None)
-        current_loc_id = getattr(current_loc, "id", None) if current_loc else None
-
-        if current_loc_id != location_id:
-            if dry_run:
-                log.info(
-                    "[DRY-RUN] Actualizaría rack '%s' con location_id=%s (actual=%s)",
-                    name,
-                    location_id,
-                    current_loc_id,
-                )
-            else:
-                with netbox_error_wrap(f"actualizar location de rack '{name}'"):
-                    cast(Record, obj).update({"location": location_id})
-                    log.info(
-                        "UPDATED rack '%s': location %s -> %s",
-                        name,
-                        current_loc_id,
-                        location_id,
-                    )
+        _sync_rack_location(cast(Record, obj), name, location_id, dry_run)
 
     return obj, cache
 
