@@ -2913,13 +2913,15 @@ def _execute_sync(
         )
         return SyncResult(SyncStatus.UNCHANGED, existing_id, existing_obj)
 
+    diff_keys = format_diff_keys(existing_obj, diff)
+
     if dry_run:
         log.info(
             "[DRY-RUN] WOULD UPDATE %s: %s (UUID=%s) - Cambios: %s",
             node_type,
             machine_name,
             uuid,
-            format_diff_keys(existing_obj, diff),
+            diff_keys,
         )
         return SyncResult(SyncStatus.UPDATED, existing_id, existing_obj)
 
@@ -2927,7 +2929,7 @@ def _execute_sync(
         updated = existing_obj.update(diff)
 
     if updated:
-        log.info("UPDATED %s: %s", node_type, machine_name)
+        log.info("UPDATED %s: %s - Cambios: %s", node_type, machine_name, diff_keys)
         return SyncResult(SyncStatus.UPDATED, existing_id, existing_obj)
 
     # Fallback si updated == False pero diff no estaba vacío (comportamiento defensivo)
@@ -3565,18 +3567,20 @@ def _upsert_interface_record(
     if not diff:
         return existing_obj, False
 
+    diff_keys = format_diff_keys(existing_obj, diff)
+
     if dry_run:
         log.info(
             "[DRY-RUN] WOULD UPDATE interfaz %s en objeto %s - Cambios: %s",
             name,
             obj_id,
-            format_diff_keys(existing_obj, diff),
+            diff_keys,
         )
         return existing_obj, True
 
     with netbox_error_wrap(f"Error procesando interfaz '{name}'"):
         cast(Record, existing_obj).update(payload)
-        log.info("UPDATED Interfaz: %s", name)
+        log.info("UPDATED Interfaz: %s - Cambios: %s", name, diff_keys)
 
     return existing_obj, True
 
