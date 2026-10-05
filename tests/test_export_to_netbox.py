@@ -80,6 +80,7 @@ from export_to_netbox import (
     ensure_rack,
     ensure_site,
     extract_csv_value,
+    format_diff_keys,
     generate_fallback_slug,
     get_netbox_object_id,
     get_node_type_from_row,
@@ -2822,6 +2823,56 @@ class TestClassifyRows:
         assert len(result.device_rows) == 1
         assert len(result.vm_rows) == 0
         assert new_counts[SyncStatus.ERROR] == 6  # Se sumó 1 error
+
+
+class TestFormatDiffKeys:
+    """Pruebas exhaustivas (qa-tester) para la utilidad format_diff_keys."""
+
+    def test_format_diff_keys_simple(self) -> None:
+        """Caso 1: Llaves planas sin anidación."""
+        obj = MagicMock(status="active", serial="123")
+        diff = {"status": "planned", "serial": "456"}
+        keys = format_diff_keys(obj, diff)
+        assert keys == ["status", "serial"]
+
+    def test_format_diff_keys_custom_fields_partial(self) -> None:
+        """Caso 2: Subdiccionario donde solo cambia una subllave específica."""
+        # El record actual tiene un custom_field "ambiente" y "prioridad"
+        obj = MagicMock()
+        obj.custom_fields = {"ambiente": "PROD", "prioridad": 1}
+
+        # El payload actualiza "ambiente" a "DEV", y vuelve a enviar "prioridad" igual, y añade "nuevo"
+        diff = {"custom_fields": {"ambiente": "DEV", "prioridad": 1, "nuevo": "test"}}
+
+        keys = format_diff_keys(obj, diff)
+        # Solo deben reportarse los que realmente cambiaron respecto al original
+        assert keys == ["custom_fields.ambiente", "custom_fields.nuevo"]
+
+    def test_format_diff_keys_dict_attribute_missing(self) -> None:
+        """Caso 3: El objeto no tiene el atributo anidado (fallback a key padre)."""
+        obj = MagicMock()
+        del obj.custom_fields  # Simulamos que no existe la propiedad
+
+        diff = {"custom_fields": {"ambiente": "DEV"}}
+        keys = format_diff_keys(obj, diff)
+
+        assert keys == ["custom_fields"]
+
+    def test_format_diff_keys_attribute_not_dict(self) -> None:
+        """Caso 4: El objeto tiene el atributo pero NO es un diccionario (fallback)."""
+        obj = MagicMock()
+        obj.custom_fields = "esto es un string, no un dict"
+
+        diff = {"custom_fields": {"ambiente": "DEV"}}
+        keys = format_diff_keys(obj, diff)
+
+        assert keys == ["custom_fields"]
+
+    def test_format_diff_keys_empty_diff(self) -> None:
+        """Caso 5: Diff completamente vacío."""
+        obj = MagicMock()
+        keys = format_diff_keys(obj, {})
+        assert keys == []
 
 
 class TestCheckRecordChanges:

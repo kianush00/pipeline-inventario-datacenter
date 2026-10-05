@@ -855,7 +855,7 @@ def _is_field_changed(key: str, curr_val: Any, new_val: Any) -> bool:
 
 
 def check_record_changes(
-    record: Record,
+    record: NetBoxObject,
     payload: NetBoxPayload,
 ) -> NetBoxPayload:
     """
@@ -875,6 +875,33 @@ def check_record_changes(
         log.debug("Cambios detectados en %s: %s", obj_name, updates)
 
     return updates
+
+
+def format_diff_keys(existing_obj: NetBoxObject, diff: dict[str, Any]) -> list[str]:
+    """
+    Genera una lista plana de llaves modificadas a partir de un diccionario de diferencias.
+    Si una llave es un diccionario (ej. 'custom_fields'), evalúa contra el objeto
+    existente para extraer únicamente las subllaves específicas que cambiaron.
+    """
+    keys: list[str] = []
+    for key, new_val in diff.items():
+        if not isinstance(new_val, dict) or not hasattr(existing_obj, key):
+            keys.append(key)
+            continue
+
+        curr_val = getattr(existing_obj, key, {})
+        if not isinstance(curr_val, dict):
+            keys.append(key)
+            continue
+
+        # Extraemos las subllaves que realmente cambiaron
+        keys.extend(
+            f"{key}.{sub_k}"
+            for sub_k, sub_v in new_val.items()
+            if curr_val.get(sub_k) != sub_v
+        )
+
+    return keys
 
 
 def parse_int(value: Any) -> int:
@@ -2885,7 +2912,7 @@ def _execute_sync(
             node_type,
             machine_name,
             uuid,
-            list(diff.keys()),
+            format_diff_keys(existing_obj, diff),
         )
         return SyncResult(SyncStatus.UPDATED, existing_id, existing_obj)
 
@@ -3526,7 +3553,7 @@ def _upsert_interface_record(
             log.info("CREATED Interfaz: %s", name)
             return new_obj, True
 
-    diff = check_record_changes(cast(Record, existing_obj), payload)
+    diff = check_record_changes(existing_obj, payload)
 
     if not diff:
         return existing_obj, False
@@ -3536,7 +3563,7 @@ def _upsert_interface_record(
             "[DRY-RUN] WOULD UPDATE interfaz %s en objeto %s - Cambios: %s",
             name,
             obj_id,
-            list(diff.keys()),
+            format_diff_keys(existing_obj, diff),
         )
         return existing_obj, True
 
