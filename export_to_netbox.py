@@ -1422,7 +1422,7 @@ def _create_dry_run_mock(
     endpoint: Endpoint, name: str, create_kwargs: dict[str, Any]
 ) -> NetBoxObject:
     """Genera un mock del objeto para el modo Dry-Run."""
-    log.info("[DRY-RUN] Crearía objeto en '%s': %s", endpoint.name, name)
+    log.info("[DRY-RUN] WOULD CREATE objeto en '%s': %s", endpoint.name, name)
     mock_kwargs = create_kwargs.copy()
     return MockNetBoxRecord(id=0, **mock_kwargs)
 
@@ -1475,7 +1475,7 @@ def _execute_creation(
         )
     else:
         obj = cast(Record, endpoint.create(**create_kwargs))
-    log.info("Objeto creado en '%s': %s", endpoint.name, name)
+    log.info("CREATED Objeto en '%s': %s", endpoint.name, name)
     return obj
 
 
@@ -1634,7 +1634,7 @@ def _sync_choice_set_choices(
         return _get_choice_set_id(choice_set)
 
     if dry_run:
-        log.info("[DRY-RUN] Actualizaría Choice Set: %s", choice_set_name)
+        log.info("[DRY-RUN] WOULD UPDATE Choice Set: %s", choice_set_name)
         return _get_choice_set_id(choice_set)
 
     with netbox_error_wrap(f"Error al actualizar Choice Set '{choice_set_name}'"):
@@ -1644,7 +1644,7 @@ def _sync_choice_set_choices(
                 "order_alphabetically": False,
             }
         )
-        log.info("Choice Set actualizado: %s", choice_set_name)
+        log.info("UPDATED Choice Set: %s", choice_set_name)
 
     return _get_choice_set_id(choice_set)
 
@@ -1969,11 +1969,11 @@ def _sync_single_device_role(
 
     if getattr(obj, "id", 0) != 0 and not getattr(obj, "vm_role", False):
         if dry_run:
-            log.info("[DRY-RUN] Actualizaría DeviceRole para permitir VM: %s", name)
+            log.info("[DRY-RUN] WOULD UPDATE DeviceRole, para permitir VM: %s", name)
         else:
             with netbox_error_wrap(f"Error actualizando DeviceRole '{name}'"):
                 cast(Record, obj).update({"vm_role": True})
-                log.info("DeviceRole actualizado para permitir VM: %s", name)
+                log.info("UPDATED DeviceRole, para permitir VM: %s", name)
 
     return obj, device_roles_cache
 
@@ -2086,7 +2086,7 @@ def _sync_device_type_u_height(
 
     if dry_run:
         log.info(
-            "[DRY-RUN] Actualizaría u_height de DeviceType '%s' (de %g a %g)",
+            "[DRY-RUN] WOULD UPDATE u_height de DeviceType '%s' (de %g a %g)",
             model,
             current_height,
             target_height,
@@ -2096,7 +2096,7 @@ def _sync_device_type_u_height(
     with netbox_error_wrap(f"Error actualizando u_height de DeviceType '{model}'"):
         existing_dt.update({"u_height": target_height})
         log.info(
-            "DeviceType '%s' u_height actualizado a %g",
+            "UPDATED DeviceType '%s' u_height a %g",
             model,
             target_height,
         )
@@ -2188,14 +2188,14 @@ def _sync_rack_location(
 
     if dry_run:
         log.info(
-            "[DRY-RUN] Actualizaría rack '%s' con location_id=%s (actual=%s)",
+            "[DRY-RUN] WOULD UPDATE rack '%s' con location_id=%s (actual=%s)",
             name,
             target_location_id,
             current_loc_id,
         )
         return True
 
-    with netbox_error_wrap(f"actualizar location de rack '{name}'"):
+    with netbox_error_wrap(f"Error actualizando location de rack '{name}'"):
         existing_rack.update({"location": target_location_id})
         log.info(
             "UPDATED rack '%s': location %s -> %s",
@@ -2849,7 +2849,7 @@ def _execute_sync(
     if not existing:
         if dry_run:
             log.info(
-                "[DRY-RUN] Crearía %s: %s (UUID=%s)",
+                "[DRY-RUN] WOULD CREATE %s: %s (UUID=%s)",
                 node_type,
                 machine_name,
                 uuid,
@@ -2881,7 +2881,7 @@ def _execute_sync(
 
     if dry_run:
         log.info(
-            "[DRY-RUN] Actualizaría %s: %s (UUID=%s) - Cambios: %s",
+            "[DRY-RUN] WOULD UPDATE %s: %s (UUID=%s) - Cambios: %s",
             node_type,
             machine_name,
             uuid,
@@ -3418,7 +3418,7 @@ def _assign_network_resource(
     if unassigned:
         if dry_run:
             log.info(
-                "[DRY-RUN] Actualizaría %s libre %s (asignación a objeto %s)",
+                "[DRY-RUN] WOULD UPDATE %s libre %s (asignación a objeto %s)",
                 resource_name,
                 value_str,
                 iface_obj.id,
@@ -3436,13 +3436,13 @@ def _assign_network_resource(
                     "assigned_object_id": iface_obj.id,
                 }
             )
-            log.info("%s libre reasignada: %s", resource_name, value_str)
+            log.info("UPDATED %s libre reasignada: %s", resource_name, value_str)
             return unassigned, True
 
     # 3. Crear nuevo recurso
     if dry_run:
         log.info(
-            "[DRY-RUN] Crearía nuev@ %s %s (asignada a objeto %s)",
+            "[DRY-RUN] WOULD CREATE nuevo %s %s (asignada a objeto %s)",
             resource_name,
             value_str,
             iface_obj.id,
@@ -3464,7 +3464,7 @@ def _assign_network_resource(
             ),
         )
 
-    log.info("%s creada y asignada: %s", resource_name, value_str)
+    log.info("%s CREATED y asignada: %s", resource_name, value_str)
     return obj, True
 
 
@@ -3518,12 +3518,12 @@ def _upsert_interface_record(
     """
     if not existing_obj:
         if dry_run:
-            log.info("[DRY-RUN] Crearía interfaz %s en objeto %s", name, obj_id)
+            log.info("[DRY-RUN] WOULD CREATE interfaz %s en objeto %s", name, obj_id)
             return MockNetBoxRecord(id=0, name=name, **payload), True
 
         with netbox_error_wrap(f"Error procesando interfaz '{name}'"):
             new_obj = cast(Record, iface_endpoint.create(**payload))
-            log.info("Interfaz creada: %s", name)
+            log.info("CREATED Interfaz: %s", name)
             return new_obj, True
 
     diff = check_record_changes(cast(Record, existing_obj), payload)
@@ -3533,7 +3533,7 @@ def _upsert_interface_record(
 
     if dry_run:
         log.info(
-            "[DRY-RUN] Actualizaría interfaz %s en objeto %s - Cambios: %s",
+            "[DRY-RUN] WOULD UPDATE interfaz %s en objeto %s - Cambios: %s",
             name,
             obj_id,
             list(diff.keys()),
@@ -3542,7 +3542,7 @@ def _upsert_interface_record(
 
     with netbox_error_wrap(f"Error procesando interfaz '{name}'"):
         cast(Record, existing_obj).update(payload)
-        log.info("Interfaz actualizada: %s", name)
+        log.info("UPDATED Interfaz: %s", name)
 
     return existing_obj, True
 
@@ -3772,7 +3772,7 @@ def _assign_primary_resource(
 
     if dry_run:
         log.info(
-            "[DRY-RUN] Asignaría %s %s a %s",
+            "[DRY-RUN] WOULD UPDATE %s %s a %s",
             resource_type_label,
             resource_val,
             log_context,
@@ -3790,7 +3790,7 @@ def _assign_primary_resource(
         return True
     except RequestError as e:
         log.error(
-            "Fallo al actualizar %s en %s: %s", resource_type_label, log_context, e
+            "Error al actualizar %s en %s: %s", resource_type_label, log_context, e
         )
         return False
 

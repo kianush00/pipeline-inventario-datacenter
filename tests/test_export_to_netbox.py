@@ -1682,7 +1682,7 @@ class TestSyncRackLocation:
 
         with pytest.raises(
             NetBoxApiError,
-            match="actualizar location de rack 'Rack1'",
+            match="Error actualizando location de rack 'Rack1'",
         ):
             _sync_rack_location(mock_rack, "Rack1", 99, dry_run=False)
 
