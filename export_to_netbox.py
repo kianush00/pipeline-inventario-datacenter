@@ -49,6 +49,7 @@ import random
 import re
 import sys
 import time
+import unicodedata
 from collections import Counter
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -793,10 +794,16 @@ class CacheStore(BaseModel):
 
 
 def slugify(name: str) -> str:
-    """Genera un slug válido para NetBox desde un nombre."""
-    slug = name.lower().strip()
+    """Genera un slug válido para NetBox desde un nombre (removiendo tildes y diacríticos)."""
+    # 1. Descomponer diacríticos (ej. é -> e + ´) y eliminar los no ascii
+    slug = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+    # 2. Convertir a minúsculas y limpiar bordes
+    slug = slug.lower().strip()
+    # 3. Eliminar cualquier caracter que no sea alfanumérico, espacio, guion o guion bajo
     slug = re.sub(r"[^\w\s-]", "", slug)
+    # 4. Reemplazar bloques de espacios, guiones bajos o guiones por un único guion
     slug = re.sub(r"[\s_-]+", "-", slug)
+    # 5. Limpiar guiones en los bordes
     slug = slug.strip("-")
     # NetBox limita los slugs a 100 caracteres.
     return slug[:100]

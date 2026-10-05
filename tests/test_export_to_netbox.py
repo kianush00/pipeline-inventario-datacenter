@@ -129,12 +129,19 @@ class TestSlugify:
         """Guiones al inicio y final del slug se eliminan."""
         assert slugify("--nombre--") == "nombre"
 
-    def test_preserves_accents(self) -> None:
-        """Caracteres acentuados (válidos en NetBox) se preservan."""
-        assert slugify("Producción") == "producción"
+    def test_removes_accents(self) -> None:
+        """Caracteres acentuados se normalizan a ASCII válido para NetBox."""
+        assert slugify("Producción") == "produccion"
+        assert slugify("Genérico") == "generico"
+        assert slugify("Niño") == "nino"
+        assert slugify("Árbol_Cúbico") == "arbol-cubico"
 
-    def test_slugify_accents_and_symbols(self) -> None:
+    def test_slugify_accents_and_symbols_complex(self) -> None:
+        """Comportamiento QA ante strings basura con símbolos y múltiples espacios."""
         assert slugify("  --H.P.!!__  ") == "hp"
+        assert slugify("¿Quién es el #1?") == "quien-es-el-1"
+        assert slugify("   ___---___   ") == ""
+        assert slugify("a" * 150) == "a" * 100  # truncamiento
 
 
 class TestGenerateFallbackSlug:
