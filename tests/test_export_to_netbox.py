@@ -107,8 +107,8 @@ class TestSlugify:
         assert slugify("Produccion") == "produccion"
 
     def test_spaces_and_dashes(self) -> None:
-        """Espacios, guiones bajos y guiones múltiples se unifican en '-'."""
-        assert slugify("Data  Center__Principal--Rack") == "data-center-principal-rack"
+        """Espacios y guiones múltiples se unifican en '-', y se conservan guiones bajos."""
+        assert slugify("Data  Center__Principal--Rack") == "data-center__principal-rack"
 
     def test_special_characters(self) -> None:
         """Caracteres no alfanuméricos (excepto guiones) se eliminan."""
@@ -126,20 +126,21 @@ class TestSlugify:
         assert slugify("") == ""
 
     def test_strips_extreme_dashes(self) -> None:
-        """Guiones al inicio y final del slug se eliminan."""
-        assert slugify("--nombre--") == "nombre"
+        """Guiones o guiones bajos al inicio y final del slug se eliminan."""
+        assert slugify("--__nombre__--") == "nombre"
 
     def test_removes_accents(self) -> None:
         """Caracteres acentuados se normalizan a ASCII válido para NetBox."""
         assert slugify("Producción") == "produccion"
         assert slugify("Genérico") == "generico"
         assert slugify("Niño") == "nino"
-        assert slugify("Árbol_Cúbico") == "arbol-cubico"
+        assert slugify("Árbol_Cúbico") == "arbol_cubico"
 
     def test_slugify_accents_and_symbols_complex(self) -> None:
         """Comportamiento QA ante strings basura con símbolos y múltiples espacios."""
         assert slugify("  --H.P.!!__  ") == "hp"
         assert slugify("¿Quién es el #1?") == "quien-es-el-1"
+        assert slugify("  -_H_P_-  ") == "h_p"
         assert slugify("   ___---___   ") == ""
         assert slugify("a" * 150) == "a" * 100  # truncamiento
 
