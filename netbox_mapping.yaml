@@ -217,7 +217,6 @@ custom_field_definitions:
   - name: &cf_environment "environment"
     label: "Entorno"
     type: "select"
-    required: false
     object_types:
       - "dcim.device"
       - "virtualization.virtualmachine"
@@ -234,7 +233,6 @@ custom_field_definitions:
   - name: &cf_inventory_uuid "inventory_uuid"
     label: "UUID de inventario"
     type: "text"
-    required: false
     object_types:
       - "dcim.device"
       - "virtualization.virtualmachine"
@@ -242,7 +240,6 @@ custom_field_definitions:
   - name: &cf_cpu_model "cpu_model"
     label: "Modelo CPU"
     type: "text"
-    required: false
     object_types:
       - "dcim.device"
       - "virtualization.virtualmachine"
@@ -250,28 +247,24 @@ custom_field_definitions:
   - name: &cf_cpu_cores "cpu_cores"
     label: "Cores CPU"
     type: "integer"
-    required: false
     object_types:
       - "dcim.device"
 
   - name: &cf_cpu_threads "cpu_threads"
     label: "Threads CPU"
     type: "integer"
-    required: false
     object_types:
       - "dcim.device"
 
   - name: &cf_cpu_sockets "cpu_sockets"
     label: "Sockets CPU"
     type: "integer"
-    required: false
     object_types:
       - "dcim.device"
 
   - name: &cf_disks "disks"
     label: "Discos"
     type: "text"
-    required: false
     object_types:
       - "dcim.device"
       - "virtualization.virtualmachine"
@@ -279,28 +272,24 @@ custom_field_definitions:
   - name: &cf_raid "raid"
     label: "RAID"
     type: "text"
-    required: false
     object_types:
       - "dcim.device"
 
   - name: &cf_bios_version "bios_version"
     label: "Version BIOS"
     type: "text"
-    required: false
     object_types:
       - "dcim.device"
 
   - name: &cf_bios_date "bios_date"
     label: "Fecha BIOS"
     type: "text"
-    required: false
     object_types:
       - "dcim.device"
 
   - name: &cf_rundeck_node "rundeck_node"
     label: "Nodo Rundeck"
     type: "boolean"
-    required: false
     default: false
     object_types:
       - "dcim.device"
@@ -309,7 +298,6 @@ custom_field_definitions:
   - name: &cf_os_version "os_version"
     label: "Version SO Host"
     type: "text"
-    required: false
     object_types:
       - "dcim.device"
       - "virtualization.virtualmachine"
@@ -317,14 +305,12 @@ custom_field_definitions:
   - name: &cf_hypervisor_os "hypervisor_os"
     label: "SO Hipervisor"
     type: "text"
-    required: false
     object_types:
       - "dcim.device"
 
   - name: &cf_hypervisor_version "hypervisor_version"
     label: "Version SO Hipervisor"
     type: "text"
-    required: false
     object_types:
       - "dcim.device"
 
@@ -341,23 +327,19 @@ node_types:
       - source: [*col_serial, *col_service_tag]
         target: "serial"
         transform: "coalesce"
-        required: false
         is_unique: true
 
       - source: *col_asset_tag
         target: "asset_tag"
-        required: false
         is_unique: true
 
       - source: *col_pos_u
         target: "position"
-        required: false
         cast: "int"
 
       - source: [*col_desc, *col_notes]
         target: "description"
         transform: "concat_dot"
-        required: false
 
     custom_mappings:
       - source: *col_inventory_uuid
@@ -417,23 +399,19 @@ node_types:
 
       - source: *col_cpu_cores
         target: "vcpus"
-        required: false
         cast: "float"
 
       - source: *col_ram_gb
         target: "memory"
-        required: false
         cast: "int_gb_to_mb"
 
       - source: *col_disk_cap
         target: "disk"
-        required: false
         cast: "int_gb_to_mb"
 
       - source: [*col_desc, *col_notes]
         target: "description"
         transform: "concat_dot"
-        required: false
 
     custom_mappings:
       - source: *col_inventory_uuid
