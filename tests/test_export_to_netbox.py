@@ -50,7 +50,7 @@ from export_to_netbox import (
     _is_relation_changed,
     _parse_network_interfaces,
     _parse_single_network_interface,
-    _prune_orphan_interfaces,
+    _prune_network_orphans,
     _resolve_cluster,
     _resolve_default_or_empty,
     _resolve_device_role,
@@ -2051,49 +2051,103 @@ class TestResolveDeviceTypeUHeight:
         assert isinstance(args[3], float)
 
 
-class TestPruneInterfaces:
-    """Verifica la poda de interfaces huérfanas."""
+class TestPruneNetworkOrphans:
+    """Verifica la poda de interfaces, IPs y MACs huérfanas."""
 
-    def test_pruning_removes_orphan(self) -> None:
-        mock_iface1 = MagicMock()
+    def test_pruning_removes_orphans(self) -> None:
+        mock_iface1 = MagicMock(id=101)
         mock_iface1.name = "eth0"
-
-        mock_iface2 = MagicMock()
+        mock_iface2 = MagicMock(id=102)
         mock_iface2.name = "eth1"
 
         ifaces_cache: dict[str, Any] = {"eth0": mock_iface1, "eth1": mock_iface2}
+        csv_iface_names = {"eth0"}  # eth1 becomes orphan
+        csv_ips = {"10.0.0.1/24"}
+        csv_macs = {"AA:BB:CC"}
 
-        # El CSV solo reporta "eth0"
-        csv_iface_names = {"eth0"}
+        endpoints = MagicMock()
+        mock_ip_orphan = MagicMock(address="192.168.1.5/24")
+        mock_ip_valid = MagicMock(address="10.0.0.1/24")
 
-        deleted, errors = _prune_orphan_interfaces(
+        # Simula que eth0 tiene una IP válida y una IP huérfana
+        def filter_ips(**kwargs):
+            if kwargs.get("assigned_object_id") == 101:
+                return [mock_ip_valid, mock_ip_orphan]
+            return []
+
+        endpoints.ip_addresses.filter.side_effect = filter_ips
+
+        mock_mac_orphan = MagicMock(mac_address="FF:EE:DD")
+
+        def filter_macs(**kwargs):
+            if kwargs.get("assigned_object_id") == 101:
+                return [mock_mac_orphan]
+            return []
+
+        endpoints.mac_addresses.filter.side_effect = filter_macs
+
+        from export_to_netbox import NodeType
+
+        metrics = _prune_network_orphans(
+            endpoints=endpoints,
+            node_type=NodeType.DEVICE,
             ifaces_cache=ifaces_cache,
             csv_iface_names=csv_iface_names,
-            obj_id=10,
+            csv_ips=csv_ips,
+            csv_macs=csv_macs,
             dry_run=False,
         )
 
-        assert deleted == 1
-        assert errors == 0
+        assert metrics.pruned_interfaces == 1
+        assert metrics.pruned_ips == 1
+        assert metrics.pruned_macs == 1
+        assert metrics.errors == 0
+
+        # Interfaz 1 no se borra, la 2 sí
         mock_iface1.delete.assert_not_called()
         mock_iface2.delete.assert_called_once()
 
-    def test_pruning_dry_run_skips_delete(self) -> None:
-        mock_iface = MagicMock()
+        # IP huérfana se desvincula, válida no
+        mock_ip_orphan.update.assert_called_once_with(
+            {"assigned_object_type": None, "assigned_object_id": None}
+        )
+        mock_ip_valid.update.assert_not_called()
+
+        # MAC huérfana se borra
+        mock_mac_orphan.delete.assert_called_once()
+
+    def test_pruning_dry_run_skips_actions(self) -> None:
+        mock_iface = MagicMock(id=101)
         mock_iface.name = "eth1"
         ifaces_cache: dict[str, Any] = {"eth1": mock_iface}
         csv_iface_names = set()
 
-        deleted, errors = _prune_orphan_interfaces(
+        endpoints = MagicMock()
+        mock_ip = MagicMock(address="192.168.1.5/24")
+        endpoints.ip_addresses.filter.return_value = [mock_ip]
+        mock_mac = MagicMock(mac_address="FF:EE:DD")
+        endpoints.mac_addresses.filter.return_value = [mock_mac]
+
+        from export_to_netbox import NodeType
+
+        metrics = _prune_network_orphans(
+            endpoints=endpoints,
+            node_type=NodeType.DEVICE,
             ifaces_cache=ifaces_cache,
             csv_iface_names=csv_iface_names,
-            obj_id=10,
+            csv_ips=set(),
+            csv_macs=set(),
             dry_run=True,
         )
 
-        assert deleted == 1
-        assert errors == 0
+        assert metrics.pruned_interfaces == 1
+        assert metrics.pruned_ips == 0  # No se evalúan IPs/MACs si la interfaz se poda
+        assert metrics.pruned_macs == 0
+        assert metrics.errors == 0
+
         mock_iface.delete.assert_not_called()
+        mock_ip.update.assert_not_called()
+        mock_mac.delete.assert_not_called()
 
 
 class TestSyncSkips:
@@ -2729,7 +2783,7 @@ class TestProcessInterfacesAndIps:
             node_type=MagicMock(),
             interfaces=[],
             dry_run=False,
-            prune_interfaces=False,
+            prune_network_orphans=False,
             main_obj=MagicMock(),
             machine_name="test-machine",
         )

@@ -104,8 +104,8 @@ Use `--verbose` to enable DEBUG logging:
 python3 export_to_netbox.py merged_inventory.csv --dry-run --verbose
 ```
 
-To automatically delete interfaces from NetBox that no longer exist in the CSV (pruning), use the `--prune-interfaces` flag. This action is opt-in and destructive. Use with `--dry-run` first to see what would be deleted:
+To automatically delete interfaces and MAC addresses, and unassign IP addresses from NetBox that no longer exist in the CSV (network pruning), use the `--prune-network-orphans` flag. This action is opt-in and destructive. Use with `--dry-run` first to see what would be deleted/unassigned:
 
 ```bash
-python3 export_to_netbox.py merged_inventory.csv --prune-interfaces --dry-run
+python3 export_to_netbox.py merged_inventory.csv --prune-network-orphans --dry-run
 ```

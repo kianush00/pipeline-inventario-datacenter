@@ -203,6 +203,13 @@ class Ipv4Candidate(NamedTuple):
     mac_obj: NetBoxObject | None
 
 
+class PrunedNetworkMetrics(NamedTuple):
+    pruned_interfaces: int
+    pruned_ips: int
+    pruned_macs: int
+    errors: int
+
+
 class SingleInterfaceResult(NamedTuple):
     """
     Resultado de procesar una única interfaz.
@@ -3636,41 +3643,105 @@ def _sync_single_interface(
     return SingleInterfaceResult(iface_obj, ip_obj, mac_obj, any_changes), ifaces_cache
 
 
-def _prune_orphan_interfaces(
+def _prune_network_orphans(
+    endpoints: NetBoxEndpoints,
+    node_type: NodeType,
     ifaces_cache: NameCache,
     csv_iface_names: set[str],
-    obj_id: int,
+    csv_ips: set[str],
+    csv_macs: set[str],
     dry_run: bool,
-) -> tuple[int, int]:
+) -> PrunedNetworkMetrics:
     """
-    Elimina (poda) de NetBox las interfaces que ya no existen en el CSV.
-    Retorna (cantidad_eliminadas, cantidad_errores).
+    Elimina (poda) de NetBox las interfaces y MACs huérfanas, y desvincula IPs.
+    Retorna PrunedNetworkMetrics.
     """
     errors = 0
-    deleted_count = 0
+    p_ifaces = 0
+    p_ips = 0
+    p_macs = 0
+
+    # TODO: este bloque exacto se repite en línea L3443. Refactorizar en una nueva función helper
+    assigned_type = (
+        "dcim.interface"
+        if node_type == NodeType.DEVICE
+        else "virtualization.vminterface"
+    )
 
     for name, iface_obj in ifaces_cache.items():
-        if name in csv_iface_names:
+        iface_id = getattr(iface_obj, "id", 0)
+
+        # FASE A: Interfaces
+        if name not in csv_iface_names:
+            if dry_run:
+                log.info("[DRY-RUN] WOULD DELETE huérfano de red (interfaz) '%s'", name)
+                p_ifaces += 1
+                continue
+            try:
+                cast(Record, iface_obj).delete()
+                log.info("DELETED huérfano de red (interfaz): %s", name)
+                p_ifaces += 1
+            except RequestError as e:
+                log.error("Error eliminando interfaz huérfana '%s': %s", name, e)
+                errors += 1
+            continue  # Si se borra la interfaz, NetBox desasigna/elimina IPs/MACs
+
+        if iface_id == 0:
             continue
 
-        if dry_run:
-            log.info(
-                "[DRY-RUN] Eliminaría interfaz huérfana '%s' en objeto %s",
-                name,
-                obj_id,
-            )
-            deleted_count += 1
-            continue
-
+        # FASE B: IPs (Desvincular)
         try:
-            cast(Record, iface_obj).delete()
-            log.info("DELETED interfaz huérfana: %s", name)
-            deleted_count += 1
+            iface_ips = list(
+                endpoints.ip_addresses.filter(
+                    assigned_object_type=assigned_type, assigned_object_id=iface_id
+                )
+            )
+            for ip_obj in iface_ips:
+                address = str(getattr(ip_obj, "address", ""))
+                # TODO: evaluar si en este bloque se puede usar algun patron early-return
+                if address and address not in csv_ips:
+                    if dry_run:
+                        log.info(
+                            "[DRY-RUN] WOULD UNASSIGN huérfano de red (IP) '%s'",
+                            address,
+                        )
+                        p_ips += 1
+                        continue
+                    cast(Record, ip_obj).update(
+                        {"assigned_object_type": None, "assigned_object_id": None}
+                    )
+                    log.info("UNASSIGNED huérfano de red (IP): %s", address)
+                    p_ips += 1
         except RequestError as e:
-            log.error("Error eliminando interfaz huérfana '%s': %s", name, e)
+            log.error("Error buscando IPs huérfanas en '%s': %s", name, e)
             errors += 1
 
-    return deleted_count, errors
+        # FASE C: MACs (Borrar)
+        try:
+            iface_macs = list(
+                endpoints.mac_addresses.filter(
+                    assigned_object_type=assigned_type, assigned_object_id=iface_id
+                )
+            )
+            for mac_obj in iface_macs:
+                mac_addr = str(getattr(mac_obj, "mac_address", "")).upper()
+                if mac_addr and mac_addr not in csv_macs:
+                    if dry_run:
+                        log.info(
+                            "[DRY-RUN] WOULD DELETE huérfano de red (MAC) '%s'",
+                            mac_addr,
+                        )
+                        p_macs += 1
+                        continue
+                    cast(Record, mac_obj).delete()
+                    log.info("DELETED huérfano de red (MAC): %s", mac_addr)
+
+                    p_macs += 1
+        except RequestError as e:
+            log.error("Error buscando MACs huérfanas en '%s': %s", name, e)
+            errors += 1
+
+    return PrunedNetworkMetrics(p_ifaces, p_ips, p_macs, errors)
 
 
 def _get_interface_endpoint_and_filter(
@@ -3738,14 +3809,14 @@ def _log_interface_deltas(
     obj_id: int,
     interfaces: list[NetworkInterfaceData],
     ifaces_cache: dict[str, NetBoxObject],
-    prune_interfaces: bool,
+    prune_network_orphans: bool,
 ) -> None:
     """Calcula y registra los deltas de las interfaces antes de sincronizar."""
     csv_names = {iface["name"] for iface in interfaces}
     cache_names = set(ifaces_cache.keys())
     to_create = csv_names - cache_names
     to_update = csv_names & cache_names
-    to_prune = cache_names - csv_names if prune_interfaces else set()
+    to_prune = cache_names - csv_names if prune_network_orphans else set()
 
     log.debug(
         "Deltas de interfaces (obj_id=%s) -> Crear: %d | Actualizar: %d | Eliminar: %d",
@@ -3762,7 +3833,7 @@ def _sync_interfaces_for_object(
     node_type: NodeType,
     interfaces: list[NetworkInterfaceData],
     dry_run: bool,
-    prune_interfaces: bool = False,
+    prune_network_orphans: bool = False,
 ) -> InterfaceSyncResult:
     """Sincroniza interfaces y sus IPs para un Device o VM.
     Retorna: InterfaceSyncResult."""
@@ -3771,20 +3842,31 @@ def _sync_interfaces_for_object(
     )
     ifaces_cache = _fetch_interfaces_cache(iface_endpoint, iface_filter, obj_id)
 
-    _log_interface_deltas(obj_id, interfaces, ifaces_cache, prune_interfaces)
+    _log_interface_deltas(obj_id, interfaces, ifaces_cache, prune_network_orphans)
 
     sync_res, ifaces_cache = _process_interfaces_sync(
         interfaces, obj_id, iface_endpoint, ifaces_cache, endpoints, dry_run
     )
     errors, ipv4_candidates, any_changes = sync_res
 
-    if prune_interfaces and obj_id != 0:
+    if prune_network_orphans and obj_id != 0:
         csv_names = {iface["name"] for iface in interfaces}
-        pruned_count, prune_errors = _prune_orphan_interfaces(
-            ifaces_cache, csv_names, obj_id, dry_run
+        csv_ips = {iface["cidr"] for iface in interfaces if iface.get("cidr")}
+        csv_macs = {iface["mac"].upper() for iface in interfaces if iface.get("mac")}
+
+        metrics = _prune_network_orphans(
+            endpoints,
+            node_type,
+            ifaces_cache,
+            csv_names,
+            csv_ips,
+            csv_macs,
+            dry_run,
         )
-        errors += prune_errors
-        any_changes |= pruned_count > 0
+        errors += metrics.errors
+        any_changes |= (
+            metrics.pruned_interfaces + metrics.pruned_ips + metrics.pruned_macs
+        ) > 0
 
     return InterfaceSyncResult(errors, ipv4_candidates, any_changes)
 
@@ -3889,7 +3971,7 @@ def process_interfaces_and_ips(
     node_type: NodeType,
     interfaces: list[NetworkInterfaceData],
     dry_run: bool,
-    prune_interfaces: bool,
+    prune_network_orphans: bool,
     main_obj: NetBoxObject | None,
     machine_name: str,
 ) -> tuple[int, bool]:
@@ -3910,7 +3992,7 @@ def process_interfaces_and_ips(
         node_type,
         interfaces,
         dry_run,
-        prune_interfaces,
+        prune_network_orphans,
     )
     primary_ip_changed = False
     primary_mac_changed = False
@@ -4051,7 +4133,7 @@ def _sync_row(
     csv_name_counts: Counter[str],
     counts: SyncCounts,
     dry_run: bool,
-    prune_interfaces: bool = False,
+    prune_network_orphans: bool = False,
 ) -> tuple[SyncCounts, CacheStore]:
     """
     Unidad de trabajo (Unit of Work) para procesar de forma atómica una fila completa del CSV.
@@ -4138,7 +4220,7 @@ def _sync_row(
             node_type,
             interfaces,
             dry_run,
-            prune_interfaces,
+            prune_network_orphans,
             main_obj,
             machine_name,
         )
@@ -4216,7 +4298,7 @@ def main() -> None:
         help="Activa logs de nivel DEBUG.",
     )
     parser.add_argument(
-        "--prune-interfaces",
+        "--prune-network-orphans",
         action="store_true",
         help="Elimina las interfaces de NetBox que ya no existan en el CSV para ese nodo.",
     )
@@ -4294,6 +4376,7 @@ def main() -> None:
     # ── Fase 1: Sincronizar Devices ──────────────────────────
     log.info("── Fase 1: Sincronizando %d Device(s) ──", len(device_rows))
     for row_num, row in device_rows:
+        # TODO: Juntar los 2 parametros args en un solo parametro de args
         counts, caches = _sync_row(
             row_num,
             row,
@@ -4307,7 +4390,7 @@ def main() -> None:
             csv_name_counts,
             counts,
             args.dry_run,
-            args.prune_interfaces,
+            args.prune_network_orphans,
         )
 
     # ── Fase 2: Sincronizar VMs ──────────────────────────────
@@ -4326,7 +4409,7 @@ def main() -> None:
             csv_name_counts,
             counts,
             args.dry_run,
-            args.prune_interfaces,
+            args.prune_network_orphans,
         )
 
     # ── Resumen ──────────────────────────────────────────────
