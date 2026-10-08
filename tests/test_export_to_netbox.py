@@ -3131,7 +3131,7 @@ class TestSyncRowEdgeCases:
             caches=MagicMock(),
             csv_name_counts=Counter(),
             counts=counts,
-            dry_run=False,
+            args=MagicMock(dry_run=False, prune_network_orphans=False),
         )
 
         # El status UNCHANGED debe incrementar (porque no se escaló a UPDATED)
@@ -3183,7 +3183,7 @@ class TestSyncRowEdgeCases:
             caches=MagicMock(),
             csv_name_counts=Counter(),
             counts=counts,
-            dry_run=False,
+            args=MagicMock(dry_run=False, prune_network_orphans=False),
         )
 
         assert counts[SyncStatus.UNCHANGED] == 0
