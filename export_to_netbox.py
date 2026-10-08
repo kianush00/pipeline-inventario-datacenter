@@ -3676,7 +3676,7 @@ def _prune_orphan_interface(
 
 
 def _prune_orphan_ips(
-    endpoints: NetBoxEndpoints,
+    ip_endpoint: Endpoint,
     assigned_type: str,
     iface_id: int,
     csv_ips: set[str],
@@ -3690,7 +3690,7 @@ def _prune_orphan_ips(
     p_ips = errors = 0
     try:
         iface_ips = list(
-            endpoints.ip_addresses.filter(
+            ip_endpoint.filter(
                 assigned_object_type=assigned_type, assigned_object_id=iface_id
             )
         )
@@ -3717,7 +3717,7 @@ def _prune_orphan_ips(
 
 
 def _prune_orphan_macs(
-    endpoints: NetBoxEndpoints,
+    mac_endpoint: Endpoint,
     assigned_type: str,
     iface_id: int,
     csv_macs: set[str],
@@ -3731,7 +3731,7 @@ def _prune_orphan_macs(
     p_macs = errors = 0
     try:
         iface_macs = list(
-            endpoints.mac_addresses.filter(
+            mac_endpoint.filter(
                 assigned_object_type=assigned_type, assigned_object_id=iface_id
             )
         )
@@ -3785,16 +3785,15 @@ def _prune_network_orphans(
             continue
 
         # FASE B: IPs (Desvincular)
-        # TODO: a las funciones prune orphan_ips y orphan_macs pasarles el endpoint directo en vez del objeto NetBox
         del_ips, err_ips = _prune_orphan_ips(
-            endpoints, assigned_type, iface_id, csv_ips, dry_run
+            endpoints.ip_addresses, assigned_type, iface_id, csv_ips, dry_run
         )
         p_ips += del_ips
         errors += err_ips
 
         # FASE C: MACs (Borrar)
         del_macs, err_macs = _prune_orphan_macs(
-            endpoints, assigned_type, iface_id, csv_macs, dry_run
+            endpoints.mac_addresses, assigned_type, iface_id, csv_macs, dry_run
         )
         p_macs += del_macs
         errors += err_macs
@@ -3890,8 +3889,7 @@ def _sync_interfaces_for_object(
     obj_id: int,
     node_type: NodeType,
     interfaces: list[NetworkInterfaceData],
-    dry_run: bool,
-    prune_network_orphans: bool = False,
+    args: argparse.Namespace,
 ) -> InterfaceSyncResult:
     """Sincroniza interfaces y sus IPs para un Device o VM.
     Retorna: InterfaceSyncResult."""
@@ -3900,14 +3898,14 @@ def _sync_interfaces_for_object(
     )
     ifaces_cache = _fetch_interfaces_cache(iface_endpoint, iface_filter, obj_id)
 
-    _log_interface_deltas(obj_id, interfaces, ifaces_cache, prune_network_orphans)
+    _log_interface_deltas(obj_id, interfaces, ifaces_cache, args.prune_network_orphans)
 
     sync_res, ifaces_cache = _process_interfaces_sync(
-        interfaces, obj_id, iface_endpoint, ifaces_cache, endpoints, dry_run
+        interfaces, obj_id, iface_endpoint, ifaces_cache, endpoints, args.dry_run
     )
     errors, ipv4_candidates, any_changes = sync_res
 
-    if prune_network_orphans and obj_id != 0:
+    if args.prune_network_orphans and obj_id != 0:
         csv_names = {iface["name"] for iface in interfaces}
         csv_ips = {iface["cidr"] for iface in interfaces if iface.get("cidr")}
         csv_macs = {iface["mac"].upper() for iface in interfaces if iface.get("mac")}
@@ -3919,7 +3917,7 @@ def _sync_interfaces_for_object(
             csv_names,
             csv_ips,
             csv_macs,
-            dry_run,
+            args.dry_run,
         )
         errors += metrics.errors
         any_changes |= (
@@ -4028,8 +4026,7 @@ def process_interfaces_and_ips(
     obj_id: int,
     node_type: NodeType,
     interfaces: list[NetworkInterfaceData],
-    dry_run: bool,
-    prune_network_orphans: bool,
+    args: argparse.Namespace,
     main_obj: NetBoxObject | None,
     machine_name: str,
 ) -> tuple[int, bool]:
@@ -4049,8 +4046,7 @@ def process_interfaces_and_ips(
         obj_id,
         node_type,
         interfaces,
-        dry_run,
-        prune_network_orphans,
+        args,
     )
     primary_ip_changed = False
     primary_mac_changed = False
@@ -4060,10 +4056,10 @@ def process_interfaces_and_ips(
 
         if main_obj is not None:
             primary_ip_changed = _assign_primary_ipv4(
-                main_obj, ip_id, machine_name, dry_run
+                main_obj, ip_id, machine_name, args.dry_run
             )
 
-        primary_mac_changed = _assign_primary_mac(iface_obj, mac_obj, dry_run)
+        primary_mac_changed = _assign_primary_mac(iface_obj, mac_obj, args.dry_run)
 
     any_changes = ifaces_changed or primary_ip_changed or primary_mac_changed
     return iface_errors, any_changes
@@ -4271,14 +4267,12 @@ def _sync_row(
 
     # ── Sincronizar interfaces del objeto ─────────────────
     try:
-        # TODO: Juntar los 2 parametros args en un solo parametro de args
         iface_errors, any_changes = process_interfaces_and_ips(
             endpoints,
             obj_id,
             node_type,
             interfaces,
-            args.dry_run,
-            args.prune_network_orphans,
+            args,
             main_obj,
             machine_name,
         )

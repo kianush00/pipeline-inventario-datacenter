@@ -2782,8 +2782,7 @@ class TestProcessInterfacesAndIps:
             obj_id=1,
             node_type=MagicMock(),
             interfaces=[],
-            dry_run=False,
-            prune_network_orphans=False,
+            args=MagicMock(dry_run=False, prune_network_orphans=False),
             main_obj=MagicMock(),
             machine_name="test-machine",
         )
