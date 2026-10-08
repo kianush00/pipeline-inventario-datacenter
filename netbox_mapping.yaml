@@ -15,35 +15,21 @@ csv_columns:
     source: "Tipo de maquina"
     required: true
     map:
-      "Dedicada": "dedicated"
-      "dedicated": "dedicated"
-      "Hipervisor": "hypervisor"
-      "hypervisor": "hypervisor"
-      "VM": "vm"
+      "dedicada": "dedicated"
+      "hipervisor": "hypervisor"
       "vm": "vm"
-    cluster_host_types:
-      - "hypervisor"
-    virtual_machine_types:
-      - "vm"
   os:
     source: "SO Host"
   status:
     source: "Estado"
     map:
-      "Activo": "active"
-      "active": "active"
-      "Planificado": "planned"
-      "planned": "planned"
-      "En preparación": "staged"
-      "staged": "staged"
-      "Fallido": "failed"
-      "failed": "failed"
-      "En inventario": "inventory"
-      "inventory": "inventory"
-      "En baja": "decommissioning"
-      "decommissioning": "decommissioning"
-      "Fuera de línea": "offline"
-      "offline": "offline"
+      "activo": "active"
+      "planificado": "planned"
+      "en preparación": "staged"
+      "fallido": "failed"
+      "en inventario": "inventory"
+      "en baja": "decommissioning"
+      "fuera de línea": "offline"
   role:
     source: "Rol"
   manufacturer:
@@ -87,12 +73,9 @@ csv_columns:
   environment:
     source: &col_environment "Entorno"
     map:
-      "Producción": "production"
-      "production": "production"
-      "Certificación": "certification"
-      "certification": "certification"
-      "Desarrollo": "development"
-      "development": "development"
+      "producción": "production"
+      "certificación": "certification"
+      "desarrollo": "development"
   service_tag:
     source: &col_service_tag "Service Tag"
   cpu_model:

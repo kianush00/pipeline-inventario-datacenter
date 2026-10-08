@@ -3188,3 +3188,65 @@ class TestSyncRowEdgeCases:
         assert counts[SyncStatus.UNCHANGED] == 0
         assert counts[SyncStatus.UPDATED] == 1
         assert counts[SyncStatus.ERROR] == 0
+
+
+class TestNetBoxMappingConfig:
+    """QA-Tester: Valida el comportamiento de mapeo normalizado y fall-through."""
+
+    @pytest.fixture
+    def config(self) -> NetBoxMappingConfig:
+        return NetBoxMappingConfig(
+            csv_columns={
+                "status": export_to_netbox.CsvColumnDef(
+                    source="Estado",
+                    map={
+                        "activo": "active",
+                        "en baja": "decommissioning",
+                    },
+                ),
+                "desc": export_to_netbox.CsvColumnDef(source="Descripcion"),
+                "machine_type": export_to_netbox.CsvColumnDef(source="Tipo", map={"vm": "vm"}),
+            },
+            node_types=export_to_netbox.NodeTypesConfig(
+                device=export_to_netbox.NodeMappingConfig(
+                    status=export_to_netbox.StatusDefaultConfig(default="inventory"),
+                    native_mappings=[]
+                ),
+                virtual_machine=export_to_netbox.NodeMappingConfig(
+                    status=export_to_netbox.StatusDefaultConfig(default="inventory"),
+                    native_mappings=[]
+                )
+            ),
+            custom_field_definitions=[],
+            site=export_to_netbox.SiteConfig(name="Site", slug="site"),
+            cluster_type=export_to_netbox.ClusterTypeConfig(
+                default=export_to_netbox.ClusterTypeDefaultConfig(name="Cluster", slug="cluster")
+            ),
+            device_roles=[export_to_netbox.DeviceRoleConfig(name="Others", slug="others", color="123456")],
+        )
+
+    def test_apply_map_exact_match(self, config: NetBoxMappingConfig) -> None:
+        assert config.map_value("status", "activo") == "active"
+
+    def test_apply_map_case_insensitive_and_spaces(self, config: NetBoxMappingConfig) -> None:
+        """Simula un edge case común en CSV: mayúsculas y espacios basura."""
+        assert config.map_value("status", "  ACTIVO  ") == "active"
+        assert config.map_value("status", "En Baja") == "decommissioning"
+
+    def test_apply_map_fall_through(self, config: NetBoxMappingConfig) -> None:
+        """Si el valor ingresado ya es un valor destino válido, debe pasar directo (fall-through)."""
+        assert config.map_value("status", "active") == "active"
+        assert config.map_value("status", "  DECOMMISSIONING  ") == "decommissioning"
+
+    def test_apply_map_no_map_defined(self, config: NetBoxMappingConfig) -> None:
+        """Si la columna no tiene map configurado, retorna el valor crudo."""
+        assert config.map_value("desc", "Cualquier cosa") == "Cualquier cosa"
+
+    def test_apply_map_strict_violation(self, config: NetBoxMappingConfig) -> None:
+        """Si no coincide ni en llaves ni en valores destino, y strict=True, explota."""
+        with pytest.raises(RowValidationError, match="no está definido en el mapa"):
+            config.map_value("status", "desconocido")
+
+    def test_apply_map_non_strict(self, config: NetBoxMappingConfig) -> None:
+        """Si strict=False, valores desconocidos retornan None."""
+        assert config.map_value("status", "desconocido", strict=False) is None

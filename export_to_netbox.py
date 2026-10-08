@@ -540,8 +540,6 @@ class CsvColumnDef(BaseModel):
     source: str = Field(min_length=1)
     required: bool = False
     map: dict[str, Any] | None = None
-    cluster_host_types: list[str] | None = None
-    virtual_machine_types: list[str] = Field(default_factory=list)
 
 
 class NetBoxMappingConfig(BaseModel):
@@ -659,9 +657,14 @@ class NetBoxMappingConfig(BaseModel):
         if not col_def or not col_def.map:
             return value
 
-        mapped = col_def.map.get(value.strip())
+        norm_val = value.strip().lower()
+        mapped = col_def.map.get(norm_val)
         if mapped is not None:
             return mapped
+
+        # Si el valor ya es un valor de destino válido (fall-through)
+        if norm_val in col_def.map.values():
+            return norm_val
 
         if not strict:
             return None
@@ -705,21 +708,11 @@ class NetBoxMappingConfig(BaseModel):
 
     def is_cluster_host(self, machine_type: str) -> bool:
         """Determina si un machine_type (ya mapeado) es un host de clúster (hipervisor)."""
-        col_def = self.csv_columns.get("machine_type")
-        return bool(
-            col_def
-            and col_def.cluster_host_types
-            and machine_type in col_def.cluster_host_types
-        )
+        return machine_type == "hypervisor"
 
     def is_virtual_machine(self, machine_type: str) -> bool:
         """Determina si un machine_type (ya mapeado) corresponde a una máquina virtual."""
-        col_def = self.csv_columns.get("machine_type")
-        return bool(
-            col_def
-            and col_def.virtual_machine_types
-            and machine_type in col_def.virtual_machine_types
-        )
+        return machine_type == "vm"
 
     def resolve_node_type(self, machine_type: str) -> NodeType:
         """
