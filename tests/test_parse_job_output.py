@@ -150,3 +150,65 @@ class TestParseJobOutputMain:
             pytest.raises(SystemExit),
         ):
             main()
+
+    def test_main_invalid_arguments_too_few(self) -> None:
+        with patch.object(sys, "argv", ["script.py"]), pytest.raises(SystemExit):
+            main()
+
+    def test_main_invalid_arguments_too_many(self) -> None:
+        with (
+            patch.object(sys, "argv", ["script.py", "1", "2", "3", "4", "5"]),
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+    def test_main_input_file_not_found(
+        self, setup_files: tuple[Path, Path, Path]
+    ) -> None:
+        input_log, output_csv, header_list = setup_files
+        with (
+            patch.object(
+                sys,
+                "argv",
+                ["script.py", str(input_log), str(output_csv), str(header_list)],
+            ),
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+    def test_main_input_output_collision(
+        self, setup_files: tuple[Path, Path, Path]
+    ) -> None:
+        input_log, _, header_list = setup_files
+        with (
+            patch.object(
+                sys,
+                "argv",
+                ["script.py", str(input_log), str(input_log), str(header_list)],
+            ),
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+    def test_main_cleans_up_temp_file_on_failure(
+        self, setup_files: tuple[Path, Path, Path]
+    ) -> None:
+        input_log, output_csv, header_list = setup_files
+        # Forzar un error fatal durante el procesamiento (ej. clave inválida)
+        input_log.write_text('UUID="123",BAD_KEY="uh oh"\\n')
+
+        with (
+            patch.object(
+                sys,
+                "argv",
+                ["script.py", str(input_log), str(output_csv), str(header_list)],
+            ),
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+        # El archivo de salida final no debe haber sido creado (ya que falló antes de moverlo)
+        assert not output_csv.exists()
+        # Verificar que no existen archivos temporales huérfanos en el directorio
+        tmp_files = list(output_csv.parent.glob(f".{output_csv.name}.*.tmp"))
+        assert len(tmp_files) == 0
