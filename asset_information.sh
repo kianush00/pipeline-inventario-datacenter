@@ -1348,7 +1348,7 @@ get_network_cidr() {
     fi
     local ip_int mask_int network_int
     ip_int=$(ip_to_int "$ip")
-    mask_int=$(( (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF ))
+    mask_int=$(( (0xFFFFFFFF * (2 ** (32 - prefix))) & 0xFFFFFFFF ))
     network_int=$(( ip_int & mask_int ))
     echo "$(int_to_ip "$network_int")/$prefix"
 }

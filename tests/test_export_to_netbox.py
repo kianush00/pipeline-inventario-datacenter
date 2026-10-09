@@ -15,7 +15,10 @@ from export_to_netbox import (
     CastType,
     ChoiceItemConfig,
     ChoiceSetConfig,
+    ClusterTypeConfig,
+    ClusterTypeDefaultConfig,
     ConfigValidationError,
+    CsvColumnDef,
     CustomFieldConfig,
     DeviceRoleConfig,
     Endpoint,
@@ -28,11 +31,14 @@ from export_to_netbox import (
     NetBoxMappingConfig,
     NetBoxObject,
     NetworkInterfaceData,
+    NodeMappingConfig,
     NodeType,
+    NodeTypesConfig,
     RowSkipCondition,
     RowValidationError,
     SiteConfig,
     SiteNameCache,
+    StatusDefaultConfig,
     SyncResult,
     SyncStatus,
     ValidationError,
@@ -3197,38 +3203,42 @@ class TestNetBoxMappingConfig:
     def config(self) -> NetBoxMappingConfig:
         return NetBoxMappingConfig(
             csv_columns={
-                "status": export_to_netbox.CsvColumnDef(
+                "status": CsvColumnDef(
                     source="Estado",
                     map={
                         "activo": "active",
                         "en baja": "decommissioning",
                     },
                 ),
-                "desc": export_to_netbox.CsvColumnDef(source="Descripcion"),
-                "machine_type": export_to_netbox.CsvColumnDef(source="Tipo", map={"vm": "vm"}),
+                "desc": CsvColumnDef(source="Descripcion"),
+                "machine_type": CsvColumnDef(source="Tipo", map={"vm": "vm"}),
             },
-            node_types=export_to_netbox.NodeTypesConfig(
-                device=export_to_netbox.NodeMappingConfig(
-                    status=export_to_netbox.StatusDefaultConfig(default="inventory"),
-                    native_mappings=[]
+            node_types=NodeTypesConfig(
+                device=NodeMappingConfig(
+                    status=StatusDefaultConfig(default="inventory"),
+                    native_mappings=[],
                 ),
-                virtual_machine=export_to_netbox.NodeMappingConfig(
-                    status=export_to_netbox.StatusDefaultConfig(default="inventory"),
-                    native_mappings=[]
-                )
+                virtual_machine=NodeMappingConfig(
+                    status=StatusDefaultConfig(default="inventory"),
+                    native_mappings=[],
+                ),
             ),
             custom_field_definitions=[],
-            site=export_to_netbox.SiteConfig(name="Site", slug="site"),
-            cluster_type=export_to_netbox.ClusterTypeConfig(
-                default=export_to_netbox.ClusterTypeDefaultConfig(name="Cluster", slug="cluster")
+            site=SiteConfig(name="Site", slug="site"),
+            cluster_type=ClusterTypeConfig(
+                default=ClusterTypeDefaultConfig(name="Cluster", slug="cluster")
             ),
-            device_roles=[export_to_netbox.DeviceRoleConfig(name="Others", slug="others", color="123456")],
+            device_roles=[
+                DeviceRoleConfig(name="Others", slug="others", color="123456")
+            ],
         )
 
     def test_apply_map_exact_match(self, config: NetBoxMappingConfig) -> None:
         assert config.map_value("status", "activo") == "active"
 
-    def test_apply_map_case_insensitive_and_spaces(self, config: NetBoxMappingConfig) -> None:
+    def test_apply_map_case_insensitive_and_spaces(
+        self, config: NetBoxMappingConfig
+    ) -> None:
         """Simula un edge case común en CSV: mayúsculas y espacios basura."""
         assert config.map_value("status", "  ACTIVO  ") == "active"
         assert config.map_value("status", "En Baja") == "decommissioning"
