@@ -2103,38 +2103,45 @@ def ensure_manufacturer(
     )
 
 
-def _sync_device_type_u_height(
+def _sync_device_type_attributes(
     existing_dt: Record,
     model: str,
     target_height: float,
+    target_part_number: str,
     dry_run: bool,
 ) -> bool:
     """
-    Sincroniza la altura en U del modelo de servidor.
+    Sincroniza los atributos del DeviceType (u_height y part_number).
     Actualiza el objeto in-place si es necesario.
     Retorna True si el objeto fue (o habría sido) actualizado, False en caso contrario.
     """
     current_val = getattr(existing_dt, "u_height", 1)
     current_height = float(current_val) if current_val is not None else 1.0
+    current_pn = getattr(existing_dt, "part_number", "") or ""
 
-    if current_height == target_height:
+    updates: dict[str, float | str] = {}
+    if current_height != target_height:
+        updates["u_height"] = target_height
+    if current_pn != target_part_number:
+        updates["part_number"] = target_part_number
+
+    if not updates:
         return False
 
     if dry_run:
         log.info(
-            "[DRY-RUN] WOULD UPDATE u_height de DeviceType '%s' (de %g a %g)",
+            "[DRY-RUN] WOULD UPDATE DeviceType '%s' con: %s",
             model,
-            current_height,
-            target_height,
+            updates,
         )
         return True
 
-    with netbox_error_wrap(f"Error actualizando u_height de DeviceType '{model}'"):
-        existing_dt.update({"u_height": target_height})
+    with netbox_error_wrap(f"Error actualizando DeviceType '{model}'"):
+        existing_dt.update(updates)
         log.info(
-            "UPDATED DeviceType '%s' u_height a %g",
+            "UPDATED DeviceType '%s' con: %s",
             model,
-            target_height,
+            updates,
         )
         return True
 
@@ -2143,6 +2150,7 @@ def ensure_device_type(
     device_types_endpoint: Endpoint,
     manufacturer: NetBoxObject,
     model: str,
+    part_number: str,
     u_height: float,
     cache: ManufModelCache,
     dry_run: bool,
@@ -2164,6 +2172,7 @@ def ensure_device_type(
         filter_kwargs={"model": model, "manufacturer_id": manufacturer_id},
         create_kwargs={
             "model": model,
+            "part_number": part_number,
             "slug": slug,
             "manufacturer": manufacturer_id,
             "u_height": u_height,
@@ -2176,7 +2185,9 @@ def ensure_device_type(
     )
 
     if getattr(obj, "id", 0) != 0:
-        _sync_device_type_u_height(cast(Record, obj), model, u_height, dry_run)
+        _sync_device_type_attributes(
+            cast(Record, obj), model, u_height, part_number, dry_run
+        )
     return obj, cache
 
 
@@ -2678,10 +2689,13 @@ def _resolve_device_type(
                 f"Valor numérico inválido '{raw_u_height}' para 'hei_u'."
             )
 
+    part_number = extract_csv_value(row, "part_number", config) or ""
+
     device_type, caches.device_types = ensure_device_type(
         endpoints.device_types,
         manufacturer_obj,
         model,
+        part_number,
         u_height,
         caches.device_types,
         dry_run,

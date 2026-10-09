@@ -28,7 +28,7 @@ The information gathered by the script is categorized into the following areas:
 
 - Manufacturer
 - Model
-- Part Number (P/N) (Non-Dell systems)
+- P/N (Non-Dell systems)
 - Serial Number (Non-Dell systems)
 - Service Tag (Dell systems)
 

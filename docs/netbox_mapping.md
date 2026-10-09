@@ -74,6 +74,7 @@ This table acts as a data dictionary of the fields the script expects to extract
 | `manufacturer` | `Marca` | Hardware brand or manufacturer. | `Dell`, `HP`, `Cisco` |
 | `model` | `Modelo` | Specific hardware model. | `PowerEdge R740`, `ProLiant DL380` |
 | `serial` | `Serial Number` | Physical serial number for general hardware (non-Dell). Coalesced with Service Tag. | `ABC12345` |
+| `part_number` | `P/N` | Part Number (P/N) or SKU of the hardware. | `123-456-789` |
 | `service_tag` | `Service Tag` | Conventionally reserved for the Service Tag of Dell equipment. Coalesced into native Serial. | `ST-442-XY` |
 | `asset_tag` | `Nro Inventario` | Internal inventory plate or number. | `INV-9876` |
 | `inventory_uuid` | `UUID` | Unique and deterministic identifier of the node (ideally extracted from DMI or virtual system). | `564d...e2f1` |

@@ -65,7 +65,7 @@ from export_to_netbox import (
     _resolve_netbox_status,
     _sanitize_mac_address,
     _search_in_netbox,
-    _sync_device_type_u_height,
+    _sync_device_type_attributes,
     _sync_rack_location,
     _sync_row,
     _sync_single_device_role,
@@ -1953,24 +1953,24 @@ class TestResolveCluster:
         assert cache == {}
 
 
-class TestSyncDeviceTypeUHeight:
-    """Verifica la sincronización de u_height en DeviceTypes."""
+class TestSyncDeviceTypeAttributes:
+    """Verifica la sincronización de atributos en DeviceTypes."""
 
     def test_sync_no_update_needed(self) -> None:
         existing = MagicMock()
         existing.u_height = 1.5
-        # fractional target height matches
-        result = _sync_device_type_u_height(existing, "Model A", 1.5, False)
+        existing.part_number = "PN1"
+        result = _sync_device_type_attributes(existing, "Model A", 1.5, "PN1", False)
         assert result is False
         existing.update.assert_not_called()
 
     def test_sync_update_needed(self) -> None:
         existing = MagicMock()
         existing.u_height = 1.0
-        # update to fractional
-        result = _sync_device_type_u_height(existing, "Model B", 1.5, False)
+        existing.part_number = ""
+        result = _sync_device_type_attributes(existing, "Model B", 1.5, "PN2", False)
         assert result is True
-        existing.update.assert_called_once_with({"u_height": 1.5})
+        existing.update.assert_called_once_with({"u_height": 1.5, "part_number": "PN2"})
 
 
 class TestResolveDeviceTypeUHeight:
@@ -2013,9 +2013,9 @@ class TestResolveDeviceTypeUHeight:
         # Verificar que ensure_device_type recibe el argumento u_height como un float=1.5
         mock_ensure_device_type.assert_called_once()
         args, _ = mock_ensure_device_type.call_args
-        # ensure_device_type(device_types_endpoint, manufacturer, model, u_height, cache, dry_run)
-        assert args[3] == 1.5
-        assert isinstance(args[3], float)
+        # ensure_device_type(device_types_endpoint, manufacturer, model, part_number, u_height, cache, dry_run)
+        assert args[4] == 1.5
+        assert isinstance(args[4], float)
 
     def test_empty_u_height_defaults_to_1_0(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2053,8 +2053,8 @@ class TestResolveDeviceTypeUHeight:
 
         mock_ensure_device_type.assert_called_once()
         args, _ = mock_ensure_device_type.call_args
-        assert args[3] == 1.0
-        assert isinstance(args[3], float)
+        assert args[4] == 1.0
+        assert isinstance(args[4], float)
 
 
 class TestPruneNetworkOrphans:
@@ -2690,6 +2690,7 @@ class TestEnsureTaxonomyQACases:
             device_types_endpoint=endpoint,
             manufacturer=manufacturer,
             model="Blade",
+            part_number="",
             u_height=0.0,
             cache={},
             dry_run=False,
@@ -2699,19 +2700,24 @@ class TestEnsureTaxonomyQACases:
         create_call_args = endpoint.create.call_args[1]
         assert create_call_args["u_height"] == 0.0
 
-    def test_sync_device_type_u_height_update_failure(self) -> None:
+    def test_sync_device_type_attributes_update_failure(self) -> None:
         """
-        Escenario: Actualización de u_height falla debido a un problema con NetBox.
+        Escenario: Actualización de u_height/part_number falla debido a un problema con NetBox.
         """
         mock_record = MagicMock()
         mock_record.u_height = 1.0
+        mock_record.part_number = ""
         mock_record.update.side_effect = RequestError(MagicMock(status_code=500))
 
         with pytest.raises(
-            NetBoxApiError, match="Error actualizando u_height de DeviceType 'R640'"
+            NetBoxApiError, match="Error actualizando DeviceType 'R640'"
         ):
-            _sync_device_type_u_height(
-                existing_dt=mock_record, model="R640", target_height=2.0, dry_run=False
+            _sync_device_type_attributes(
+                existing_dt=mock_record,
+                model="R640",
+                target_height=2.0,
+                target_part_number="PN",
+                dry_run=False,
             )
 
 

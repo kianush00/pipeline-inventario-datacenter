@@ -60,6 +60,8 @@ csv_columns:
     source: &col_hypervisor_version "Version SO Hipervisor"
   serial:
     source: &col_serial "Serial Number"
+  part_number:
+    source: "P/N"
   asset_tag:
     source: &col_asset_tag "Nro Inventario"
   pos_u:
