@@ -113,6 +113,22 @@ def is_invalid_key(value: str) -> bool:
     return is_empty_or_na(value)
 
 
+def is_replica(row_a: list[str], row_b: list[str], positions: dict[str, int]) -> bool:
+    """
+    Comprueba si dos filas con la misma clave son réplicas exactas basándose
+    en campos fundamentales de identificación.
+    """
+    fields_to_check = ["Nombre maquina", "MAC", "IP", "Serial Number"]
+    for field in fields_to_check:
+        idx = positions.get(field)
+        if idx is not None and idx < len(row_a) and idx < len(row_b):
+            val_a = strip_quotes(row_a[idx]).strip().lower()
+            val_b = strip_quotes(row_b[idx]).strip().lower()
+            if val_a != val_b:
+                return False
+    return True
+
+
 # ============================================================
 # RESOLVER POSICIONES EN UN HEADER
 # ============================================================
@@ -263,6 +279,7 @@ def validate_rows(
 def build_parsed_data(
     rows: list[list[str]],
     key_idx: int,
+    positions: dict[str, int],
 ) -> tuple[dict[str, list[str]], set[str]]:
     """
     Construye un mapa:
@@ -270,7 +287,7 @@ def build_parsed_data(
         clave -> fila
 
     Las claves duplicadas se registran y quedan excluidas del
-    mapa para impedir cualquier fusión posterior.
+    mapa para impedir cualquier fusión posterior, a menos que sean réplicas.
     """
     parsed_data: dict[str, list[str]] = {}
     duplicated_keys: set[str] = set()
@@ -285,10 +302,18 @@ def build_parsed_data(
             continue
 
         if key in parsed_data:
+            if is_replica(parsed_data[key], fields, positions):
+                print(
+                    f"[INFO] Réplica detectada en el inventario parseado para la clave "
+                    f"'{key}'. Omitiendo duplicado.",
+                    file=sys.stderr,
+                )
+                continue
+
             print(
                 f"[WARNING] Clave duplicada en el inventario "
                 f"parseado: '{key}'. Las filas con esta clave "
-                "no serán fusionadas.",
+                "difieren y no serán fusionadas.",
                 file=sys.stderr,
             )
             del parsed_data[key]
@@ -308,13 +333,14 @@ def build_parsed_data(
 def find_parent_duplicated_keys(
     rows: list[list[str]],
     key_idx: int,
+    positions: dict[str, int],
 ) -> set[str]:
     """
     Detecta claves duplicadas en el inventario maestro.
 
-    Retorna el conjunto de claves duplicadas.
+    Retorna el conjunto de claves duplicadas (aquellas que no son réplicas exactas).
     """
-    seen_keys: set[str] = set()
+    seen_keys: dict[str, list[str]] = {}
     duplicated_keys: set[str] = set()
 
     for fields in rows:
@@ -323,15 +349,27 @@ def find_parent_duplicated_keys(
         if is_invalid_key(key):
             continue
 
+        if key in duplicated_keys:
+            continue
+
         if key in seen_keys:
+            if is_replica(seen_keys[key], fields, positions):
+                print(
+                    f"[INFO] Réplica detectada en el inventario maestro para la clave "
+                    f"'{key}'. Omitiendo duplicado.",
+                    file=sys.stderr,
+                )
+                continue
+
             duplicated_keys.add(key)
+            del seen_keys[key]
         else:
-            seen_keys.add(key)
+            seen_keys[key] = fields
 
     for key in sorted(duplicated_keys):
         print(
             f"[WARNING] Clave duplicada en el inventario maestro: "
-            f"'{key}'. Las filas con esta clave no serán fusionadas.",
+            f"'{key}'. Las filas con esta clave difieren y no serán fusionadas.",
             file=sys.stderr,
         )
 
@@ -490,11 +528,13 @@ def main() -> None:
     parsed_data, parsed_duplicated_keys = build_parsed_data(
         parsed_rows,
         key_parsed_idx,
+        parsed_positions,
     )
 
     parent_duplicated_keys = find_parent_duplicated_keys(
         parent_rows,
         key_parent_idx,
+        parent_positions,
     )
 
     # --------------------------------------------------------
