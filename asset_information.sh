@@ -222,6 +222,9 @@ get_dmi() {
         system-serial-number)
             sysfs_file="/sys/class/dmi/id/product_serial"
             ;;
+        system-sku-number)
+            sysfs_file="/sys/class/dmi/id/product_sku"
+            ;;
         baseboard-product-name)
             sysfs_file="/sys/class/dmi/id/board_name"
             ;;
@@ -273,6 +276,36 @@ get_system_serial() {
             echo "$serial"
             ;;
     esac
+}
+
+###############################################################################
+# Obtener el Part Number (P/N) o SKU Number del sistema físico.
+###############################################################################
+get_part_number() {
+    local pn
+
+    pn=$(get_dmi system-sku-number)
+
+    # Fallback para kernels antiguos o dmidecode desactualizados que no soportan product_sku
+    if [[ -z "$pn" && -n "$DMIDECODE_CMD" ]]; then
+        pn=$(safe_capture sudo "$DMIDECODE_CMD" -t 1 -t 2 -t 3 | awk '
+            /SKU Number|Part Number/ {
+                val = $0
+                sub(/^[^:]+: */, "", val)
+                if (val != "" && val !~ /Not Specified|To [Bb]e [Ff]illed|O\.E\.M\.|Default string|^None$/) {
+                    print val
+                    exit
+                }
+            }
+        ')
+    fi
+
+    # Limpieza final de espacios o saltos de linea
+    if [[ -n "$pn" ]]; then
+        echo "$pn" | sed 's/^[ \t]*//;s/[ \t]*$//'
+    else
+        echo ""
+    fi
 }
 
 ###############################################################################
@@ -1594,11 +1627,13 @@ MARCA=""
 MODELO=""
 SERIAL=""
 SERVICE_TAG=""
+PART_NUMBER=""
 
 if [[ "$TIPO_MAQUINA" == "Hipervisor" || "$TIPO_MAQUINA" == "Dedicada" ]]; then
     MARCA=$(get_dmi system-manufacturer)
     MODELO=$(get_dmi system-product-name)
     SERIAL=$(get_system_serial)
+    PART_NUMBER=$(get_part_number)
 
     if [[ "$MARCA" == *Dell* ]]; then
         SERVICE_TAG="$SERIAL"
@@ -1692,6 +1727,7 @@ OUTPUT_KEYS=(
     "Modelo"
     "Serial Number"
     "Service Tag"
+    "P/N"
     "UUID"
     "Version BIOS"
     "Fecha BIOS"
@@ -1723,6 +1759,7 @@ OUTPUT_VALUES=(
     "$MODELO"
     "$SERIAL"
     "$SERVICE_TAG"
+    "$PART_NUMBER"
     "$UUID"
     "$BIOS_VERSION"
     "$BIOS_DATE"

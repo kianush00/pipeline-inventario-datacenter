@@ -19,10 +19,11 @@ RAM (GB)|1
 Discos|1
 Capacidad visible (GB)|1
 RAID|0
-Marca|1
-Modelo|1
-Serial Number|1
-Service Tag|1
+Marca|0
+Modelo|0
+Serial Number|0
+Service Tag|0
+P/N|0
 UUID|2
 Version BIOS|1
 Fecha BIOS|1
