@@ -6,6 +6,9 @@
 
 set -Eeuo pipefail
 
+export LC_ALL=C
+export LANG=C
+
 trap '
 rc=$?
 printf "[ERROR] Exit Code: %s\n" "$rc"
@@ -691,7 +694,7 @@ get_hypervisor_os_version() {
 get_cpu_model() {
     local model=""
     if exists lscpu; then
-        model=$(LC_ALL=C lscpu 2>/dev/null | awk -F': *' '/^Model name/ {print $2; exit}') || true
+        model=$(lscpu 2>/dev/null | awk -F': *' '/^Model name/ {print $2; exit}') || true
     fi
     if [[ -z "$model" && -r /proc/cpuinfo ]]; then
         model=$(safe_capture awk -F': ' '/^model name/ {print $2; exit}' /proc/cpuinfo)
@@ -707,7 +710,7 @@ get_cpu_cores() {
     local cores=""
     if exists lscpu; then
         cores=$(
-            LC_ALL=C lscpu 2>/dev/null | awk -F': *' '
+            lscpu 2>/dev/null | awk -F': *' '
                 /^Core\(s\) per socket/          { cores=$2 }
                 /^(Socket\(s\)|CPU socket\(s\))/ { sockets=$2 }
                 END {
@@ -744,7 +747,7 @@ get_cpu_threads() {
     local threads=""
     if exists lscpu; then
         threads=$(
-            LC_ALL=C lscpu 2>/dev/null | awk -F': *' '
+            lscpu 2>/dev/null | awk -F': *' '
                 /^CPU\(s\)/ { print $2; exit }
             '
         ) || true
@@ -763,7 +766,7 @@ get_cpu_sockets() {
     local sockets=""
     if exists lscpu; then
         sockets=$(
-            LC_ALL=C lscpu 2>/dev/null | awk -F': *' '
+            lscpu 2>/dev/null | awk -F': *' '
                 /^(Socket\(s\)|CPU socket\(s\))/ { print $2; exit }
             '
         ) || true
@@ -872,7 +875,7 @@ get_disk_sizes_bytes() {
 
     elif [[ -n "$FDISK_CMD" ]]; then
 
-        LC_ALL=C sudo "$FDISK_CMD" -l 2>/dev/null |
+        sudo "$FDISK_CMD" -l 2>/dev/null |
         awk '
             /^Disk \/dev\// {
 
