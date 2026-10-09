@@ -353,6 +353,31 @@ is_vm_signature() {
     esac
 }
 
+is_kvm_hypervisor() {
+    # 1. Validacion de socket (Bash builtin): ultra rapido, sin forks ni subprocesos.
+    if [[ -S /var/run/libvirt/libvirt-sock || -S /run/libvirt/libvirt-sock ]]; then
+        return 0
+    fi
+
+    # 2. Validacion de demonio systemd (1 subproceso): muy rapido, detecta libvirtd activo.
+    if exists systemctl && systemctl is-active --quiet libvirtd 2>/dev/null; then
+        return 0
+    fi
+
+    # 3. KVM/libvirt tradicional via comando (2 subprocesos + riesgo de timeout/permisos).
+    if exists virsh && with_timeout virsh -c qemu:///system list --all >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # 4. Busqueda de procesos en crudo (2 subprocesos): atrapa KVMs sin libvirt.
+    # shellcheck disable=SC2009
+    if ps -e -o comm= 2>/dev/null | grep -q '^qemu-system-'; then
+        return 0
+    fi
+
+    return 1
+}
+
 is_hypervisor() {
     # NOTA: si el sistema no tiene el comando timeout (coreutils viejo) y 
     # virsh/xl cuelgan por un daemon no responsivo, el script podria quedarse 
@@ -378,8 +403,8 @@ is_hypervisor() {
         return 0
     fi
 
-    # KVM/libvirt (conexion local explicita, no la URI por defecto)
-    if exists virsh && with_timeout virsh -c qemu:///system list --all >/dev/null 2>&1; then
+    # KVM / libvirt
+    if is_kvm_hypervisor; then
         return 0
     fi
 
