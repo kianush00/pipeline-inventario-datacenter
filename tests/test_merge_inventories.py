@@ -7,7 +7,9 @@ from merge_inventories import (
     find_master_duplicated_keys,
     is_invalid_key,
     is_replica,
+    resolve_key_column,
     resolve_positions,
+    validate_rows,
 )
 
 
@@ -173,6 +175,49 @@ class TestResolvePositions:
         header_fields = ["A", "B"]
         rundeck_header_list = [("B", 1), ("C", 0)]
         with pytest.raises(SystemExit):
-            resolve_positions(
-                rundeck_header_list, header_fields, Path("dummy.csv")
-            )
+            resolve_positions(rundeck_header_list, header_fields, Path("dummy.csv"))
+
+    def test_resolve_positions_duplicated_headers(self) -> None:
+        header_fields = ["A", "B", "A"]
+        rundeck_header_list = [("A", 1), ("B", 1)]
+        with pytest.raises(SystemExit):
+            resolve_positions(rundeck_header_list, header_fields, Path("dummy.csv"))
+
+
+class TestResolveKeyColumn:
+    """Valida la resolución de la clave principal (flag 2)."""
+
+    def test_resolve_key_column_happy_path(self) -> None:
+        rundeck_header_list = [("A", 1), ("B", 2), ("C", 0)]
+        key_column = resolve_key_column(rundeck_header_list)
+        assert key_column == "B"
+
+    def test_resolve_key_column_missing_flag2(self) -> None:
+        rundeck_header_list = [("A", 1), ("B", 1)]
+        with pytest.raises(SystemExit):
+            resolve_key_column(rundeck_header_list)
+
+    def test_resolve_key_column_multiple_flag2(self) -> None:
+        rundeck_header_list = [("A", 2), ("B", 2)]
+        with pytest.raises(SystemExit):
+            resolve_key_column(rundeck_header_list)
+
+
+class TestValidateRows:
+    """Valida el filtro de filas en base al número de columnas."""
+
+    def test_validate_rows_happy_path(self) -> None:
+        rows = [["a", "b", "c"], ["d", "e", "f"]]
+        valid = validate_rows(rows, 3, Path("dummy.csv"))
+        assert len(valid) == 2
+        assert valid == rows
+
+    def test_validate_rows_invalid_lengths_skipped(self) -> None:
+        rows = [
+            ["a", "b", "c"],  # valid
+            ["d", "e"],  # invalid (too short)
+            ["f", "g", "h", "i"],  # invalid (too long)
+        ]
+        valid = validate_rows(rows, 3, Path("dummy.csv"))
+        assert len(valid) == 1
+        assert valid[0] == ["a", "b", "c"]
