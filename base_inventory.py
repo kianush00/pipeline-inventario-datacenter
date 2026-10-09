@@ -249,7 +249,7 @@ def is_empty_or_na(value: str) -> bool:
         '"   "' -> True
         'hello' -> False
     """
-    return strip_quotes(value).strip() in ("", "N/A")
+    return strip_quotes(value).strip().upper() in ("", "N/A")
 
 
 def clean_value(value: str) -> str:
