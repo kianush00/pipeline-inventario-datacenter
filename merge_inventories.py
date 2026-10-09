@@ -330,7 +330,7 @@ def build_parsed_data(
 # ============================================================
 
 
-def find_parent_duplicated_keys(
+def find_master_duplicated_keys(
     rows: list[list[str]],
     key_idx: int,
     positions: dict[str, int],
@@ -402,7 +402,7 @@ def main() -> None:
         )
 
     input_parsed_path = Path(sys.argv[1])
-    input_parent_path = Path(sys.argv[2])
+    input_master_path = Path(sys.argv[2])
     output_path = (
         Path(sys.argv[3])
         if len(sys.argv) >= 4
@@ -416,7 +416,7 @@ def main() -> None:
 
     for path, label in (
         (input_parsed_path, "inventario parseado"),
-        (input_parent_path, "inventario maestro"),
+        (input_master_path, "inventario maestro"),
     ):
         if not path.is_file():
             error(f"No se encontró el {label}: {path}")
@@ -426,7 +426,7 @@ def main() -> None:
     # --------------------------------------------------------
     resolved_output = output_path.resolve()
     resolved_parsed = input_parsed_path.resolve()
-    resolved_parent = input_parent_path.resolve()
+    resolved_master = input_master_path.resolve()
 
     if resolved_output == resolved_parsed:
         error(
@@ -435,7 +435,7 @@ def main() -> None:
             f"  {output_path}"
         )
 
-    if resolved_output == resolved_parent:
+    if resolved_output == resolved_master:
         error(
             "El archivo de salida no puede ser el mismo archivo "
             "que el inventario maestro:\n"
@@ -480,25 +480,25 @@ def main() -> None:
     # Leer completamente el inventario maestro.
     # --------------------------------------------------------
     (
-        parent_header_line,
-        parent_header_fields,
-        parent_rows,
-    ) = load_csv_data(input_parent_path)
+        master_header_line,
+        master_header_fields,
+        master_rows,
+    ) = load_csv_data(input_master_path)
 
-    parent_positions = resolve_positions(
+    master_positions = resolve_positions(
         rundeck_header_list,
-        parent_header_fields,
-        input_parent_path,
+        master_header_fields,
+        input_master_path,
     )
 
-    key_parent_idx = parent_positions[key_name]
-    parent_total_columns = len(parent_header_fields)
-    extra_columns = parent_total_columns - defined_fields
+    key_master_idx = master_positions[key_name]
+    master_total_columns = len(master_header_fields)
+    extra_columns = master_total_columns - defined_fields
 
-    parent_rows = validate_rows(
-        parent_rows,
-        parent_total_columns,
-        input_parent_path,
+    master_rows = validate_rows(
+        master_rows,
+        master_total_columns,
+        input_master_path,
     )
 
     # --------------------------------------------------------
@@ -516,10 +516,10 @@ def main() -> None:
         if flag != 1:
             continue
 
-        parent_idx = parent_positions[name]
+        master_idx = master_positions[name]
         parsed_idx = parsed_positions[name]
 
-        merge_pairs.append((parent_idx, parsed_idx))
+        merge_pairs.append((master_idx, parsed_idx))
 
     # --------------------------------------------------------
     # Validar unicidad de claves usando las filas ya cargadas
@@ -531,27 +531,27 @@ def main() -> None:
         parsed_positions,
     )
 
-    parent_duplicated_keys = find_parent_duplicated_keys(
-        parent_rows,
-        key_parent_idx,
-        parent_positions,
+    master_duplicated_keys = find_master_duplicated_keys(
+        master_rows,
+        key_master_idx,
+        master_positions,
     )
 
     # --------------------------------------------------------
     # Resumen informativo.
     # --------------------------------------------------------
     print(f"Columnas definidas en rundeck_header_list : {defined_fields}")
-    print(f"Columnas totales en el maestro    : {parent_total_columns}")
+    print(f"Columnas totales en el maestro    : {master_total_columns}")
 
     if extra_columns > 0:
         print(f"Columnas adicionales del maestro  : {extra_columns}")
 
     print(f"Clave de unión                    : {key_name}")
-    print(f"Posición de clave en el maestro   : {key_parent_idx + 1}")
+    print(f"Posición de clave en el maestro   : {key_master_idx + 1}")
     print(f"Posición de clave en el parseado  : {key_parsed_idx + 1}")
     print(f"Claves válidas en el parseado     : {len(parsed_data)}")
     print(f"Claves duplicadas en el parseado  : {len(parsed_duplicated_keys)}")
-    print(f"Claves duplicadas en el maestro   : {len(parent_duplicated_keys)}")
+    print(f"Claves duplicadas en el maestro   : {len(master_duplicated_keys)}")
 
     # --------------------------------------------------------
     # Crear archivo temporal en el mismo directorio que la
@@ -575,14 +575,14 @@ def main() -> None:
             # ------------------------------------------------
             # Escribir header del maestro sin modificar.
             # ------------------------------------------------
-            out_f.write(parent_header_line + "\n")
+            out_f.write(master_header_line + "\n")
 
             # ------------------------------------------------
             # Procesar todas las filas del maestro ya cargadas
             # en memoria.
             # ------------------------------------------------
-            for line_number, fields in enumerate(parent_rows, start=2):
-                key = strip_quotes(fields[key_parent_idx]).lower()
+            for line_number, fields in enumerate(master_rows, start=2):
+                key = strip_quotes(fields[key_master_idx]).lower()
 
                 # ------------------------------------------------
                 # Clave inválida:
@@ -596,7 +596,7 @@ def main() -> None:
                 # Clave duplicada en el maestro:
                 # conservar la fila sin fusionar.
                 # ------------------------------------------------
-                if key in parent_duplicated_keys:
+                if key in master_duplicated_keys:
                     out_f.write(",".join(fields) + "\n")
                     continue
 
@@ -620,13 +620,13 @@ def main() -> None:
                 # ------------------------------------------------
                 parsed_fields = parsed_data[key]
 
-                for parent_idx, parsed_idx in merge_pairs:
+                for master_idx, parsed_idx in merge_pairs:
                     parsed_value = parsed_fields[parsed_idx]
 
                     if is_empty_or_na(parsed_value):
                         continue
 
-                    fields[parent_idx] = parsed_value
+                    fields[master_idx] = parsed_value
 
                 out_f.write(",".join(fields) + "\n")
 
@@ -654,7 +654,7 @@ def main() -> None:
     print()
     print("[OK] Inventarios fusionados correctamente.")
     print(f"Inventario parseado : {input_parsed_path}")
-    print(f"Inventario maestro  : {input_parent_path}")
+    print(f"Inventario maestro  : {input_master_path}")
     print(f"Inventario salida   : {output_path}")
 
 
