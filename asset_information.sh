@@ -263,19 +263,72 @@ get_system_serial() {
     serial=$(get_dmi system-serial-number)
 
     case "$serial" in
-        ""|"To Be Filled By O.E.M."|"Default string")
-            echo ""
-            ;;
-        "Unknown"|"Not Specified"|"None")
-            echo ""
-            ;;
-        "0123456789"|"S123456789"|"............")
+        ""|"To Be Filled By O.E.M."|"Default string"|"Unknown"|"Not Specified"|"None"|"0123456789"|"S123456789"|"............")
             echo ""
             ;;
         *)
             echo "$serial"
             ;;
     esac
+}
+
+###############################################################################
+# Obtener y validar el UUID del sistema, con fallbacks para hardware antiguo.
+###############################################################################
+get_system_uuid() {
+    local uuid
+    uuid=$(get_dmi system-uuid)
+
+    # Convertir a minusculas de forma compatible con bash 3.0
+    if [[ -n "$uuid" ]]; then
+        uuid=$(echo "$uuid" | tr '[:upper:]' '[:lower:]')
+    fi
+
+    # Filtrar valores invalidos devueltos por DMI defectuosos
+    case "$uuid" in
+        ""|"not settable"|"not present"|"none"|"unknown"|"to be filled by o.e.m."|"03000200-0400-0500-0006-000700080009"|"00000000-0000-0000-0000-000000000000"|"ffffffff-ffff-ffff-ffff-ffffffffffff")
+            uuid=""
+            ;;
+    esac
+
+    # Si es valido, retornarlo
+    if [[ -n "$uuid" ]]; then
+        echo "$uuid"
+        return
+    fi
+
+    # Fallback 1: dbus machine-id (presente en CentOS 4+)
+    if [[ -r /var/lib/dbus/machine-id ]]; then
+        uuid=$(safe_capture cat /var/lib/dbus/machine-id)
+        if [[ -n "$uuid" && ${#uuid} -eq 32 ]]; then
+            echo "${uuid:0:8}-${uuid:8:4}-${uuid:12:4}-${uuid:16:4}-${uuid:20:12}"
+            return
+        fi
+    fi
+
+    # Fallback 2: systemd machine-id (distros modernas)
+    if [[ -r /etc/machine-id ]]; then
+        uuid=$(safe_capture cat /etc/machine-id)
+        if [[ -n "$uuid" && ${#uuid} -eq 32 ]]; then
+            echo "${uuid:0:8}-${uuid:8:4}-${uuid:12:4}-${uuid:16:4}-${uuid:20:12}"
+            return
+        fi
+    fi
+
+    # Fallback 3: Generacion de un UUID seudo-estable basado en MAC y Hostname
+    # md5sum esta en coreutils, awk es mandatorio.
+    local mac
+    mac=$(get_mac_address)
+    local hostname
+    hostname=$(safe_capture hostname)
+    
+    if [[ -n "$mac" || -n "$hostname" ]]; then
+        uuid=$(echo "${mac}${hostname}" | md5sum | awk '{print $1}')
+        if [[ -n "$uuid" && ${#uuid} -ge 32 ]]; then
+            echo "${uuid:0:8}-${uuid:8:4}-${uuid:12:4}-${uuid:16:4}-${uuid:20:12}"
+            return
+        fi
+    fi
 }
 
 ###############################################################################
@@ -1484,7 +1537,7 @@ TIPO_MAQUINA=$(get_machine_type)
 # UUID
 ###############################################################################
 
-UUID=$(get_dmi system-uuid)
+UUID=$(get_system_uuid)
 
 
 ###############################################################################
