@@ -1527,10 +1527,45 @@ def _create_record(
         return _execute_creation(endpoint, create_kwargs, name, use_fallback_slug=False)
 
 
-def _update_if_changed(
+def apply_update(
+    existing_obj: NetBoxObject,
+    diff: NetBoxPayload,
+    label: str,
+    dry_run: bool,
+) -> bool:
+    """
+    Aplica en NetBox un diff ya calculado sobre un objeto existente.
+
+    Decisiones de diseño:
+    - Primitiva de escritura para quienes calculan su propio diff (normalización
+      específica del dominio); quienes no, usan `update_if_changed`.
+    - El retorno de `Record.update` se propaga: pynetbox retorna False cuando no
+      envió nada a la API, y eso debe reportarse como "sin cambios".
+
+    Retorna:
+        bool: True si el objeto fue (o habría sido) actualizado.
+    """
+    diff_keys = format_diff_keys(existing_obj, diff)
+
+    if dry_run:
+        log.info("[DRY-RUN] WOULD UPDATE %s - Cambios: %s", label, diff_keys)
+        return True
+
+    with netbox_error_wrap(f"Error actualizando {label}"):
+        updated = cast(Record, existing_obj).update(diff)
+
+    if not updated:
+        log.debug("NetBox no aplicó cambios en %s pese al diff: %s", label, diff_keys)
+        return False
+
+    log.info("UPDATED %s - Cambios: %s", label, diff_keys)
+    return True
+
+
+def update_if_changed(
     existing_obj: NetBoxObject,
     payload: NetBoxPayload,
-    name: str,
+    label: str,
     dry_run: bool,
 ) -> tuple[NetBoxObject, bool]:
     """
@@ -1547,16 +1582,7 @@ def _update_if_changed(
     if not diff:
         return existing_obj, False
 
-    diff_keys = format_diff_keys(existing_obj, diff)
-
-    if dry_run:
-        log.info("[DRY-RUN] WOULD UPDATE '%s' - Cambios: %s", name, diff_keys)
-        return existing_obj, True
-
-    with netbox_error_wrap(f"Error actualizando objeto '{name}'"):
-        cast(Record, existing_obj).update(diff)
-    log.info("UPDATED '%s' - Cambios: %s", name, diff_keys)
-    return existing_obj, True
+    return existing_obj, apply_update(existing_obj, diff, label, dry_run)
 
 
 def _handle_concurrency_backoff(
@@ -2175,7 +2201,7 @@ def _sync_device_type_attributes(
     current_height = float(current_val) if current_val is not None else 1.0
     current_pn = getattr(existing_dt, "part_number", "") or ""
 
-    updates: dict[str, float | str] = {}
+    updates: NetBoxPayload = {}
     if current_height != target_height:
         updates["u_height"] = target_height
     if current_pn != target_part_number:
@@ -2184,22 +2210,7 @@ def _sync_device_type_attributes(
     if not updates:
         return False
 
-    if dry_run:
-        log.info(
-            "[DRY-RUN] WOULD UPDATE DeviceType '%s' con: %s",
-            model,
-            updates,
-        )
-        return True
-
-    with netbox_error_wrap(f"Error actualizando DeviceType '{model}'"):
-        existing_dt.update(updates)
-        log.info(
-            "UPDATED DeviceType '%s' con: %s",
-            model,
-            updates,
-        )
-        return True
+    return apply_update(existing_dt, updates, f"DeviceType '{model}'", dry_run)
 
 
 def ensure_device_type(
@@ -2282,31 +2293,14 @@ def _sync_rack_location(
     Actualiza el objeto in-place si es necesario.
     Retorna True si el objeto fue (o habría sido) actualizado, False en caso contrario.
     """
-    # Pynetbox devuelve las referencias a objetos relacionales como diccionarios o Record
-    current_loc = getattr(existing_rack, "location", None)
-    current_loc_id = getattr(current_loc, "id", None) if current_loc else None
-
-    if current_loc_id == target_location_id:
-        return False
-
-    if dry_run:
-        log.info(
-            "[DRY-RUN] WOULD UPDATE rack '%s' con location_id=%s (actual=%s)",
-            name,
-            target_location_id,
-            current_loc_id,
-        )
-        return True
-
-    with netbox_error_wrap(f"Error actualizando location de rack '{name}'"):
-        existing_rack.update({"location": target_location_id})
-        log.info(
-            "UPDATED rack '%s': location %s -> %s",
-            name,
-            current_loc_id,
-            target_location_id,
-        )
-        return True
+    # check_record_changes resuelve la referencia relacional (Record o id) de 'location'
+    _, changed = update_if_changed(
+        existing_rack,
+        {"location": target_location_id},
+        f"rack '{name}'",
+        dry_run,
+    )
+    return changed
 
 
 def ensure_rack(
@@ -3008,40 +3002,23 @@ def _execute_sync(
     existing_id = get_netbox_object_id(existing_obj)
 
     # Evaluación de diferencias para optimizar red
-    diff = check_record_changes(existing_obj, payload)
-    # TODO: evaluar si aquí se puede o no reutilizar la función _update_if_changed
-    if not diff:
-        prefix = "[DRY-RUN] " if dry_run else ""
-        log.info(
-            "%sUNCHANGED %s: %s (UUID=%s)",
-            prefix,
-            node_type,
-            machine_name,
-            uuid,
-        )
-        return SyncResult(SyncStatus.UNCHANGED, existing_id, existing_obj)
-
-    diff_keys = format_diff_keys(existing_obj, diff)
-
-    if dry_run:
-        log.info(
-            "[DRY-RUN] WOULD UPDATE %s: %s (UUID=%s) - Cambios: %s",
-            node_type,
-            machine_name,
-            uuid,
-            diff_keys,
-        )
+    _, changed = update_if_changed(
+        existing_obj,
+        payload,
+        f"{node_type} '{machine_name}' (UUID={uuid})",
+        dry_run,
+    )
+    if changed:
         return SyncResult(SyncStatus.UPDATED, existing_id, existing_obj)
 
-    with netbox_error_wrap(f"Error al actualizar {node_type} '{machine_name}'"):
-        updated = existing_obj.update(diff)
-
-    if updated:
-        log.info("UPDATED %s: %s - Cambios: %s", node_type, machine_name, diff_keys)
-        return SyncResult(SyncStatus.UPDATED, existing_id, existing_obj)
-
-    # Fallback si updated == False pero diff no estaba vacío (comportamiento defensivo)
-    log.info("UNCHANGED %s: %s", node_type, machine_name)
+    prefix = "[DRY-RUN] " if dry_run else ""
+    log.info(
+        "%sUNCHANGED %s: %s (UUID=%s)",
+        prefix,
+        node_type,
+        machine_name,
+        uuid,
+    )
     return SyncResult(SyncStatus.UNCHANGED, existing_id, existing_obj)
 
 
@@ -3726,11 +3703,11 @@ def _upsert_interface_record(
     Ejecuta la lógica de creación o actualización de una interfaz.
     Retorna una tupla con (Interfaz, hubo cambios).
     """
-    qualified_name = f"{name} (objeto {obj_id})"
+    label = f"interfaz '{name}' (objeto {obj_id})"
     if not existing_obj:
-        return _create_record(iface_endpoint, payload, qualified_name, dry_run), True
+        return _create_record(iface_endpoint, payload, label, dry_run), True
 
-    return _update_if_changed(existing_obj, payload, qualified_name, dry_run)
+    return update_if_changed(existing_obj, payload, label, dry_run)
 
 
 def _sync_single_interface(

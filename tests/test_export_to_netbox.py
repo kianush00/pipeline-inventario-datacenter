@@ -74,12 +74,12 @@ from export_to_netbox import (
     _sync_row,
     _sync_single_device_role,
     _sync_single_interface,
-    _update_if_changed,
     _upsert_interface_record,
     _validate_csv_headers,
     _validate_interface_ip,
     _validate_select_choice,
     apply_cast,
+    apply_update,
     build_payload,
     check_record_changes,
     concat_dot,
@@ -109,6 +109,7 @@ from export_to_netbox import (
     slugify,
     sync_device,
     sync_vm,
+    update_if_changed,
 )
 
 
@@ -1276,7 +1277,7 @@ class TestExecuteSync:
         del mock_existing._init_cache
 
         with pytest.raises(
-            NetBoxApiError, match="Error al actualizar NodeType.VIRTUAL_MACHINE 'SRV'"
+            NetBoxApiError, match="Error actualizando NodeType.VIRTUAL_MACHINE 'SRV'"
         ):
             _execute_sync(
                 endpoint,
@@ -1446,27 +1447,48 @@ class TestCreateRecord:
             _create_record(endpoint, {"name": "eth0"}, "eth0", dry_run=False)
 
 
+class TestApplyUpdate:
+    """Verifica la primitiva de escritura para diffs precalculados."""
+
+    def test_propagates_false_when_netbox_applies_nothing(self) -> None:
+        existing = MagicMock()
+        existing.update.return_value = False
+        assert apply_update(existing, {"mtu": 9000}, "eth0", dry_run=False) is False
+        existing.update.assert_called_once_with({"mtu": 9000})
+
+    def test_dry_run_does_not_call_api(self) -> None:
+        existing = MagicMock()
+        assert apply_update(existing, {"mtu": 9000}, "eth0", dry_run=True) is True
+        existing.update.assert_not_called()
+
+
 class TestUpdateIfChanged:
     """Verifica la primitiva de actualización basada en diff."""
 
     def test_no_diff_does_not_update(self) -> None:
         existing = MagicMock(enabled=True)
-        obj, changed = _update_if_changed(existing, {"enabled": True}, "eth0", False)
+        obj, changed = update_if_changed(existing, {"enabled": True}, "eth0", False)
         assert obj is existing
         assert changed is False
         existing.update.assert_not_called()
 
     def test_diff_updates_only_changed_fields(self) -> None:
         existing = MagicMock(enabled=True, mtu=1500)
-        _, changed = _update_if_changed(
+        _, changed = update_if_changed(
             existing, {"enabled": False, "mtu": 1500}, "eth0", False
         )
         assert changed is True
         existing.update.assert_called_once_with({"enabled": False})
 
+    def test_netbox_applying_nothing_reports_no_change(self) -> None:
+        existing = MagicMock(enabled=True)
+        existing.update.return_value = False
+        _, changed = update_if_changed(existing, {"enabled": False}, "eth0", False)
+        assert changed is False
+
     def test_dry_run_reports_change_without_update(self) -> None:
         existing = MagicMock(enabled=True)
-        _, changed = _update_if_changed(existing, {"enabled": False}, "eth0", True)
+        _, changed = update_if_changed(existing, {"enabled": False}, "eth0", True)
         assert changed is True
         existing.update.assert_not_called()
 
@@ -1474,7 +1496,7 @@ class TestUpdateIfChanged:
         existing = MagicMock(enabled=True)
         existing.update.side_effect = RequestError(MagicMock(status_code=400))
         with pytest.raises(NetBoxApiError):
-            _update_if_changed(existing, {"enabled": False}, "eth0", False)
+            update_if_changed(existing, {"enabled": False}, "eth0", False)
 
 
 class TestUpsertInterfaceRecord:
@@ -1984,7 +2006,7 @@ class TestSyncRackLocation:
 
         with pytest.raises(
             NetBoxApiError,
-            match="Error actualizando location de rack 'Rack1'",
+            match="Error actualizando rack 'Rack1'",
         ):
             _sync_rack_location(mock_rack, "Rack1", 99, dry_run=False)
 
