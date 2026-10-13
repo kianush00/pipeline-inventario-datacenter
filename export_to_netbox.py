@@ -1507,6 +1507,58 @@ def _execute_creation(
     return obj
 
 
+def _create_record(
+    endpoint: Endpoint,
+    create_kwargs: NetBoxPayload,
+    name: str,
+    dry_run: bool,
+) -> NetBoxObject:
+    """
+    Crea un objeto en NetBox (o su mock en dry-run) sin búsqueda previa.
+
+    Decisiones de diseño:
+    - Primitiva de escritura compartida por los `ensure_*` / `upsert_*` que ya
+      resolvieron por su cuenta la existencia del objeto y solo necesitan crearlo.
+    """
+    if dry_run:
+        return _create_dry_run_mock(endpoint, name, create_kwargs)
+
+    with netbox_error_wrap(f"Error creando objeto en '{endpoint.name}': {name}"):
+        return _execute_creation(endpoint, create_kwargs, name, use_fallback_slug=False)
+
+
+def _update_if_changed(
+    existing_obj: NetBoxObject,
+    payload: NetBoxPayload,
+    name: str,
+    dry_run: bool,
+) -> tuple[NetBoxObject, bool]:
+    """
+    Actualiza en NetBox únicamente los campos del payload que difieren del objeto.
+
+    Decisiones de diseño:
+    - Envía solo el diff (no el payload completo) para minimizar el tráfico y
+      mantener la idempotencia: sin diferencias no se realiza ninguna petición.
+
+    Retorna:
+        tuple[NetBoxObject, bool]: El objeto y un booleano indicando si hubo cambios.
+    """
+    diff = check_record_changes(existing_obj, payload)
+    if not diff:
+        return existing_obj, False
+
+    diff_keys = format_diff_keys(existing_obj, diff)
+
+    if dry_run:
+        log.info("[DRY-RUN] WOULD UPDATE '%s' - Cambios: %s", name, diff_keys)
+        return existing_obj, True
+
+    with netbox_error_wrap(f"Error actualizando objeto '{name}'"):
+        cast(Record, existing_obj).update(diff)
+    log.info("UPDATED '%s' - Cambios: %s", name, diff_keys)
+    return existing_obj, True
+
+
 def _handle_concurrency_backoff(
     name: str, endpoint_name: str, attempt: int, max_retries: int
 ) -> None:
@@ -1552,7 +1604,7 @@ def _attempt_get_or_create(
 
     try:
         return _execute_creation(endpoint, create_kwargs, name, use_fallback_slug)
-
+    # TODO: evaluar si aquí se puede o no reutilizar la función _create_record
     except RequestError as e:
         if not _is_name_collision(e) or attempt >= max_retries - 1:
             with netbox_error_wrap(
@@ -2305,6 +2357,12 @@ def ensure_prefix(
       contención de dirección. Basta con que el Prefix exista para que la IP quede
       dentro de él (la validación de contención se hace al parsear el CSV).
     - Idempotente: si el Prefix ya existe, no se modifica.
+    - No usa `get_or_create_cached` a propósito: esa función no informa si el objeto
+      fue creado o ya existía, y aquí ese booleano alimenta el estado de sincronización
+      de la interfaz (`any_changes`). Derivarlo del retorno exigiría cambiar el contrato
+      de `get_or_create_cached` y de todos sus consumidores. Además, sus mecanismos
+      basados en slug (búsqueda preventiva, slug de respaldo) no aplican: el Prefix
+      no tiene slug. En su lugar reutiliza la primitiva `_create_record`.
 
     Retorna:
         tuple[NetBoxObject, bool]: El Prefix y un booleano indicando si hubo cambios.
@@ -2313,14 +2371,12 @@ def ensure_prefix(
     if existing:
         return existing[0], False
 
-    if dry_run:
-        log.info("[DRY-RUN] WOULD CREATE nuevo Prefix %s", network)
-        return MockNetBoxRecord(id=0, prefix=network), True
-
-    # TODO: evaluar si utilizar o no funcion get_or_create_cached de este mismo módulo.
-    with netbox_error_wrap(f"Error creando Prefix {network}"):
-        obj = cast(Record, prefixes_endpoint.create(prefix=network, status="active"))
-    log.info("Prefix CREATED: %s", network)
+    obj = _create_record(
+        prefixes_endpoint,
+        {"prefix": network, "status": "active"},
+        network,
+        dry_run,
+    )
     return obj, True
 
 
@@ -2953,7 +3009,7 @@ def _execute_sync(
 
     # Evaluación de diferencias para optimizar red
     diff = check_record_changes(existing_obj, payload)
-
+    # TODO: evaluar si aquí se puede o no reutilizar la función _update_if_changed
     if not diff:
         prefix = "[DRY-RUN] " if dry_run else ""
         log.info(
@@ -3670,37 +3726,11 @@ def _upsert_interface_record(
     Ejecuta la lógica de creación o actualización de una interfaz.
     Retorna una tupla con (Interfaz, hubo cambios).
     """
+    qualified_name = f"{name} (objeto {obj_id})"
     if not existing_obj:
-        if dry_run:
-            log.info("[DRY-RUN] WOULD CREATE interfaz %s en objeto %s", name, obj_id)
-            return MockNetBoxRecord(id=0, name=name, **payload), True
+        return _create_record(iface_endpoint, payload, qualified_name, dry_run), True
 
-        with netbox_error_wrap(f"Error procesando interfaz '{name}'"):
-            new_obj = cast(Record, iface_endpoint.create(**payload))
-            log.info("CREATED Interfaz: %s", name)
-            return new_obj, True
-
-    diff = check_record_changes(existing_obj, payload)
-
-    if not diff:
-        return existing_obj, False
-
-    diff_keys = format_diff_keys(existing_obj, diff)
-
-    if dry_run:
-        log.info(
-            "[DRY-RUN] WOULD UPDATE interfaz %s en objeto %s - Cambios: %s",
-            name,
-            obj_id,
-            diff_keys,
-        )
-        return existing_obj, True
-
-    with netbox_error_wrap(f"Error procesando interfaz '{name}'"):
-        cast(Record, existing_obj).update(payload)
-        log.info("UPDATED Interfaz: %s - Cambios: %s", name, diff_keys)
-
-    return existing_obj, True
+    return _update_if_changed(existing_obj, payload, qualified_name, dry_run)
 
 
 def _sync_single_interface(

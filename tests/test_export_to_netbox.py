@@ -46,6 +46,7 @@ from export_to_netbox import (
     _assign_primary_ipv4,
     _build_interface_cidr,
     _classify_rows,
+    _create_record,
     _create_with_fallback_slug,
     _execute_sync,
     _extract_concat_dot_value,
@@ -73,6 +74,8 @@ from export_to_netbox import (
     _sync_row,
     _sync_single_device_role,
     _sync_single_interface,
+    _update_if_changed,
+    _upsert_interface_record,
     _validate_csv_headers,
     _validate_interface_ip,
     _validate_select_choice,
@@ -1417,6 +1420,94 @@ class TestEnsurePrefix:
         endpoint.create.side_effect = RequestError(MagicMock(status_code=400))
         with pytest.raises(NetBoxApiError):
             ensure_prefix(endpoint, "192.168.1.0/24", dry_run=False)
+
+
+class TestCreateRecord:
+    """Verifica la primitiva de creación compartida (real y dry-run)."""
+
+    def test_creates_in_netbox(self) -> None:
+        endpoint = MagicMock()
+        obj = _create_record(endpoint, {"name": "eth0"}, "eth0", dry_run=False)
+        endpoint.create.assert_called_once_with(name="eth0")
+        assert obj is endpoint.create.return_value
+
+    def test_dry_run_returns_mock_without_creating(self) -> None:
+        endpoint = MagicMock()
+        obj = _create_record(endpoint, {"name": "eth0"}, "eth0", dry_run=True)
+        endpoint.create.assert_not_called()
+        assert isinstance(obj, MockNetBoxRecord)
+        assert obj.id == 0
+        assert obj.name == "eth0"
+
+    def test_api_error_is_wrapped(self) -> None:
+        endpoint = MagicMock()
+        endpoint.create.side_effect = RequestError(MagicMock(status_code=400))
+        with pytest.raises(NetBoxApiError):
+            _create_record(endpoint, {"name": "eth0"}, "eth0", dry_run=False)
+
+
+class TestUpdateIfChanged:
+    """Verifica la primitiva de actualización basada en diff."""
+
+    def test_no_diff_does_not_update(self) -> None:
+        existing = MagicMock(enabled=True)
+        obj, changed = _update_if_changed(existing, {"enabled": True}, "eth0", False)
+        assert obj is existing
+        assert changed is False
+        existing.update.assert_not_called()
+
+    def test_diff_updates_only_changed_fields(self) -> None:
+        existing = MagicMock(enabled=True, mtu=1500)
+        _, changed = _update_if_changed(
+            existing, {"enabled": False, "mtu": 1500}, "eth0", False
+        )
+        assert changed is True
+        existing.update.assert_called_once_with({"enabled": False})
+
+    def test_dry_run_reports_change_without_update(self) -> None:
+        existing = MagicMock(enabled=True)
+        _, changed = _update_if_changed(existing, {"enabled": False}, "eth0", True)
+        assert changed is True
+        existing.update.assert_not_called()
+
+    def test_api_error_is_wrapped(self) -> None:
+        existing = MagicMock(enabled=True)
+        existing.update.side_effect = RequestError(MagicMock(status_code=400))
+        with pytest.raises(NetBoxApiError):
+            _update_if_changed(existing, {"enabled": False}, "eth0", False)
+
+
+class TestUpsertInterfaceRecord:
+    """Verifica que el upsert de interfaces componga creación y actualización."""
+
+    def test_creates_when_not_cached(self) -> None:
+        endpoint = MagicMock()
+        payload = {"name": "eth0", "enabled": True}
+        obj, changed = _upsert_interface_record(
+            "eth0", payload, None, endpoint, 7, False
+        )
+        endpoint.create.assert_called_once_with(**payload)
+        assert obj is endpoint.create.return_value
+        assert changed is True
+
+    def test_dry_run_create_does_not_call_api(self) -> None:
+        endpoint = MagicMock()
+        payload = {"name": "eth0", "enabled": True}
+        obj, changed = _upsert_interface_record(
+            "eth0", payload, None, endpoint, 7, True
+        )
+        endpoint.create.assert_not_called()
+        assert isinstance(obj, MockNetBoxRecord)
+        assert changed is True
+
+    def test_existing_unchanged_is_noop(self) -> None:
+        existing = MagicMock(enabled=True)
+        existing.name = "eth0"
+        _, changed = _upsert_interface_record(
+            "eth0", {"name": "eth0", "enabled": True}, existing, MagicMock(), 7, False
+        )
+        assert changed is False
+        existing.update.assert_not_called()
 
 
 class TestSanitizeMacAddress:
