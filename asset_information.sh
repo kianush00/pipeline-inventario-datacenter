@@ -444,55 +444,78 @@ is_hypervisor() {
     return 1
 }
 
-get_machine_type() {
-    local machine_type="Dedicada"
+detect_guest_type() {
+    # Imprime "VM" o "Contenedor" si el sistema corre virtualizado/contenerizado;
+    # no imprime nada si no se detecta virtualizacion (equipo fisico).
+    # Debe evaluarse ANTES que is_hypervisor: un guest puede exponer sockets
+    # libvirt, procesos qemu, etc. (nested virt, herramientas) y no es un host fisico.
 
-    # Deteccion de hipervisor
-    if is_hypervisor; then
-        machine_type="Hipervisor"
-
-    # Deteccion de VM/contenedor mediante systemd
-    elif exists systemd-detect-virt; then
+    # Deteccion de VM/contenedor mediante systemd (resultado autoritativo)
+    if exists systemd-detect-virt; then
         local virt
         virt=$(safe_capture systemd-detect-virt)
 
-        if [[ -n "$virt" && "$virt" != "none" ]]; then
-            case "$virt" in
-                docker|podman|container-other|lxc|lxc-libvirt|openvz|systemd-nspawn)
-                    machine_type="Contenedor"
-                    ;;
-                *)
-                    machine_type="VM"
-                    ;;
-            esac
+        if [[ -z "$virt" || "$virt" == "none" ]]; then
+            return 0
         fi
 
+        case "$virt" in
+            docker|podman|container-other|lxc|lxc-libvirt|openvz|systemd-nspawn)
+                echo "Contenedor"
+                ;;
+            *)
+                echo "VM"
+                ;;
+        esac
+        return 0
+    fi
+
     # Contenedores sin systemd
-    elif [[ -f /.dockerenv || -f /run/.containerenv ]]; then
-        machine_type="Contenedor"
-        
-    elif grep -qa '\(docker\|lxc\|container\|kubepods\)' /proc/1/cgroup 2>/dev/null; then
-        machine_type="Contenedor"
+    if [[ -f /.dockerenv || -f /run/.containerenv ]]; then
+        echo "Contenedor"
+        return 0
+    fi
+
+    if grep -qa '\(docker\|lxc\|container\|kubepods\)' /proc/1/cgroup 2>/dev/null; then
+        echo "Contenedor"
+        return 0
+    fi
 
     # Deteccion de VM mediante DMI (sysfs con fallback a dmidecode via get_dmi)
-    elif [[ -r /sys/class/dmi/id/product_name || -n "$DMIDECODE_CMD" ]];  then
-
+    if [[ -r /sys/class/dmi/id/product_name || -n "$DMIDECODE_CMD" ]]; then
         local product_name sys_vendor bios_vendor
         product_name=$(get_dmi system-product-name | tr '[:upper:]' '[:lower:]')
         sys_vendor=$(get_dmi system-manufacturer | tr '[:upper:]' '[:lower:]')
         bios_vendor=$(get_dmi bios-vendor | tr '[:upper:]' '[:lower:]')
 
         if is_vm_signature "$product_name $sys_vendor $bios_vendor"; then
-            machine_type="VM"
+            echo "VM"
         fi
-
-    # Ultimo recurso: flag del CPU
-    elif grep -qi hypervisor /proc/cpuinfo 2>/dev/null; then
-        machine_type="VM"
-
+        return 0
     fi
 
-    echo "$machine_type"
+    # Ultimo recurso: flag del CPU
+    if grep -qi hypervisor /proc/cpuinfo 2>/dev/null; then
+        echo "VM"
+    fi
+}
+
+get_machine_type() {
+    # Prioridad: guest (VM/Contenedor) > Hipervisor > Dedicada
+    local guest_type
+    guest_type=$(detect_guest_type)
+
+    if [[ -n "$guest_type" ]]; then
+        echo "$guest_type"
+        return 0
+    fi
+
+    if is_hypervisor; then
+        echo "Hipervisor"
+        return 0
+    fi
+
+    echo "Dedicada"
 }
 
 ###############################################################################
