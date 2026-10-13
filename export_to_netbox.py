@@ -242,6 +242,7 @@ class NetworkInterfaceData(TypedDict):
     ip: str | None
     prefix: str | None
     cidr: str | None
+    network: str | None
 
 
 class BaseNodeData(TypedDict):
@@ -287,6 +288,7 @@ class NetBoxEndpoints(BaseModel):
     device_interfaces: Endpoint
     vm_interfaces: Endpoint
     ip_addresses: Endpoint
+    prefixes: Endpoint
     mac_addresses: Endpoint
 
 
@@ -750,6 +752,7 @@ class MockNetBoxRecord(BaseModel):
 
     # Red y asignaciones (para simulaciones de IP/MAC)
     address: str | None = None
+    prefix: str | None = None
     mac_address: str | None = None
     assigned_object_id: int | None = None
     assigned_object_type: str | None = None
@@ -1282,6 +1285,7 @@ def build_netbox_endpoints(nb: Api) -> NetBoxEndpoints:
             device_interfaces=nb.dcim.interfaces,
             vm_interfaces=nb.virtualization.interfaces,
             ip_addresses=nb.ipam.ip_addresses,
+            prefixes=nb.ipam.prefixes,
             mac_addresses=nb.dcim.mac_addresses,
         )
     except AttributeError as e:
@@ -2288,6 +2292,38 @@ def ensure_rack(
     return obj, cache
 
 
+def ensure_prefix(
+    prefixes_endpoint: Endpoint,
+    network: str,
+    dry_run: bool,
+) -> tuple[NetBoxObject, bool]:
+    """
+    Garantiza que el Prefix (red) exista en NetBox.
+
+    Decisiones de diseño:
+    - NetBox no asigna una IP a un Prefix de forma explícita: la pertenencia es por
+      contención de dirección. Basta con que el Prefix exista para que la IP quede
+      dentro de él (la validación de contención se hace al parsear el CSV).
+    - Idempotente: si el Prefix ya existe, no se modifica.
+
+    Retorna:
+        tuple[NetBoxObject, bool]: El Prefix y un booleano indicando si hubo cambios.
+    """
+    existing: list[Record] = list(prefixes_endpoint.filter(prefix=network))
+    if existing:
+        return existing[0], False
+
+    if dry_run:
+        log.info("[DRY-RUN] WOULD CREATE nuevo Prefix %s", network)
+        return MockNetBoxRecord(id=0, prefix=network), True
+
+    # TODO: evaluar si utilizar o no funcion get_or_create_cached de este mismo módulo.
+    with netbox_error_wrap(f"Error creando Prefix {network}"):
+        obj = cast(Record, prefixes_endpoint.create(prefix=network, status="active"))
+    log.info("Prefix CREATED: %s", network)
+    return obj, True
+
+
 # ============================================================
 # CONSTRUCCIÓN DE PAYLOAD
 # ============================================================
@@ -3239,16 +3275,46 @@ def _split_ip_and_embedded_prefix(ip_raw: str) -> tuple[str, str | None]:
 
 
 def _build_interface_cidr(ip_val: str, pfx_val: str, name: str) -> str:
-    """Valida IP y prefijo construyendo una dirección CIDR válida."""
+    """
+    Valida IP y 'Red IP' construyendo una dirección CIDR válida.
+
+    'Red IP' admite red completa ('192.168.1.0/24', '192.168.1.0/255.255.255.0'),
+    prefijo solo ('24') o máscara sola ('255.255.255.0'). Cuando se entrega la red
+    completa, la IP debe pertenecer a ella; de lo contrario se levanta FieldParseError.
+    Se rechaza el prefijo /0 (ruta por defecto), que no es una red de interfaz.
+    """
     try:
-        mask_or_prefix = (
-            pfx_val.split("/")[1].strip() if "/" in pfx_val else pfx_val.strip()
+        ip_obj = ipaddress.ip_address(ip_val)
+        declared_network = (
+            ipaddress.ip_network(pfx_val.strip(), strict=False)
+            if "/" in pfx_val
+            else None
         )
-        return str(ipaddress.ip_interface(f"{ip_val}/{mask_or_prefix}"))
+        mask_or_prefix = (
+            str(declared_network.prefixlen)
+            if declared_network is not None
+            else pfx_val.strip()
+        )
+        interface = ipaddress.ip_interface(f"{ip_obj}/{mask_or_prefix}")
     except ValueError as e:
         raise FieldParseError(
             f"Prefijo o CIDR inválido '{pfx_val}' para IP '{ip_val}' en interfaz '{name}'."
         ) from e
+
+    if declared_network is not None and ip_obj not in declared_network:
+        raise FieldParseError(
+            f"IP '{ip_val}' no pertenece a la 'Red IP' '{pfx_val}' en interfaz '{name}'."
+        )
+    if interface.network.prefixlen == 0:
+        raise FieldParseError(
+            f"Prefijo /0 no permitido para IP '{ip_val}' en interfaz '{name}'."
+        )
+    return str(interface)
+
+
+def _network_from_cidr(cidr: str) -> str:
+    """Deriva la red canónica (ej. '192.168.1.0/24') a partir de un CIDR de host."""
+    return str(ipaddress.ip_interface(cidr).network)
 
 
 def _sanitize_mac_address(mac_raw: str, name: str) -> str:
@@ -3318,6 +3384,7 @@ def _parse_single_network_interface(
     except FieldParseError as e:
         raise RowValidationError(str(e)) from e
 
+    network = _network_from_cidr(cidr) if cidr else None
     return {
         "name": name,
         "enabled": enabled,
@@ -3325,6 +3392,7 @@ def _parse_single_network_interface(
         "ip": ip_val,
         "prefix": pfx_val,
         "cidr": cidr,
+        "network": network,
     }
 
 
@@ -3357,7 +3425,10 @@ def _parse_network_interfaces(
         - Máscara sola: "255.255.255.0"             → se usa directamente
 
       En todos los casos, el script normaliza al formato CIDR canónico
-      antes de enviarlo a NetBox.
+      antes de enviarlo a NetBox. Cuando se indica la red completa, la IP
+      debe pertenecer a ella (de lo contrario se rechaza la fila de
+      interfaces). A partir del CIDR se deriva además la red (Prefix) que
+      se sincroniza en NetBox antes de asignar la IP.
     """
 
     def split_col(col_name: str) -> list[str]:
@@ -3665,7 +3736,10 @@ def _sync_single_interface(
 
     ip_obj = None
     ip_changed = False
+    prefix_changed = False
     if cidr := iface_data.get("cidr"):
+        if network := iface_data.get("network"):
+            _, prefix_changed = ensure_prefix(endpoints.prefixes, network, dry_run)
         ip_obj, ip_changed = _assign_ip(
             endpoints.ip_addresses, cidr, iface_obj, dry_run
         )
@@ -3677,7 +3751,7 @@ def _sync_single_interface(
             endpoints.mac_addresses, mac.upper(), iface_obj, dry_run
         )
 
-    any_changes = iface_changed or ip_changed or mac_changed
+    any_changes = iface_changed or prefix_changed or ip_changed or mac_changed
     return SingleInterfaceResult(iface_obj, ip_obj, mac_obj, any_changes), ifaces_cache
 
 

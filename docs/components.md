@@ -124,7 +124,7 @@ Downstream ETL stage. Reads the consolidated CSV and creates or updates Devices 
 
 - Sites, Cluster Types, Manufacturers, Device Types
 - Platforms, Racks, Clusters, Device Roles
-- Custom Fields, Interfaces, IP Addresses
+- Custom Fields, Interfaces, Prefixes, IP Addresses
 - Automatic primary IPv4 assignment (when exactly one IP exists)
 
 **Exit codes:**

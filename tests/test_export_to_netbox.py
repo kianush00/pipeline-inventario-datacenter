@@ -55,6 +55,7 @@ from export_to_netbox import (
     _is_custom_field_changed,
     _is_name_safely_unique,
     _is_relation_changed,
+    _network_from_cidr,
     _parse_network_interfaces,
     _parse_single_network_interface,
     _prune_network_orphans,
@@ -85,6 +86,7 @@ from export_to_netbox import (
     ensure_dynamic_cluster_types,
     ensure_location,
     ensure_manufacturer,
+    ensure_prefix,
     ensure_rack,
     ensure_site,
     extract_csv_value,
@@ -1340,6 +1342,82 @@ class TestBuildInterfaceCidr:
         with pytest.raises(FieldParseError, match="Prefijo o CIDR inválido"):
             _build_interface_cidr("192.168.1.5", "33", "eth0")  # /33 no existe en IPv4
 
+    def test_mask_only(self) -> None:
+        assert (
+            _build_interface_cidr("192.168.1.5", "255.255.255.0", "eth0")
+            == "192.168.1.5/24"
+        )
+
+    def test_network_with_host_bits_is_tolerated(self) -> None:
+        """'192.168.1.5/24' como Red IP se interpreta como la red 192.168.1.0/24."""
+        assert (
+            _build_interface_cidr("192.168.1.10", "192.168.1.5/24", "eth0")
+            == "192.168.1.10/24"
+        )
+
+    def test_ip_outside_declared_network_raises_error(self) -> None:
+        with pytest.raises(FieldParseError, match="no pertenece a la 'Red IP'"):
+            _build_interface_cidr("192.168.1.10", "10.0.0.0/8", "eth0")
+
+    def test_ipv6_in_ipv4_network_raises_error(self) -> None:
+        with pytest.raises(FieldParseError, match="no pertenece a la 'Red IP'"):
+            _build_interface_cidr("2001:db8::1", "10.0.0.0/8", "eth0")
+
+    @pytest.mark.parametrize("pfx", ["0.0.0.0/0", "0", "0.0.0.0"])
+    def test_zero_prefix_raises_error(self, pfx: str) -> None:
+        with pytest.raises(FieldParseError, match="/0 no permitido"):
+            _build_interface_cidr("192.168.1.5", pfx, "eth0")
+
+
+class TestNetworkFromCidr:
+    @pytest.mark.parametrize(
+        ("cidr", "expected"),
+        [
+            ("192.168.1.10/24", "192.168.1.0/24"),
+            ("136.12.34.129/26", "136.12.34.128/26"),
+            ("2001:db8::1/64", "2001:db8::/64"),
+        ],
+    )
+    def test_network_from_cidr(self, cidr: str, expected: str) -> None:
+        assert _network_from_cidr(cidr) == expected
+
+
+class TestEnsurePrefix:
+    """Verifica el get-or-create idempotente del Prefix en NetBox."""
+
+    def test_existing_prefix_is_not_recreated(self) -> None:
+        endpoint = MagicMock()
+        existing = MagicMock()
+        endpoint.filter.return_value = [existing]
+        obj, changed = ensure_prefix(endpoint, "192.168.1.0/24", dry_run=False)
+        assert obj is existing
+        assert changed is False
+        endpoint.filter.assert_called_once_with(prefix="192.168.1.0/24")
+        endpoint.create.assert_not_called()
+
+    def test_missing_prefix_is_created(self) -> None:
+        endpoint = MagicMock()
+        endpoint.filter.return_value = []
+        _, changed = ensure_prefix(endpoint, "192.168.1.0/24", dry_run=False)
+        assert changed is True
+        endpoint.create.assert_called_once_with(
+            prefix="192.168.1.0/24", status="active"
+        )
+
+    def test_dry_run_does_not_create(self) -> None:
+        endpoint = MagicMock()
+        endpoint.filter.return_value = []
+        _, changed = ensure_prefix(endpoint, "192.168.1.0/24", dry_run=True)
+        assert changed is True
+        endpoint.create.assert_not_called()
+
+    def test_api_error_on_create_is_wrapped(self) -> None:
+        endpoint = MagicMock()
+        endpoint.filter.return_value = []
+        endpoint.create.side_effect = RequestError(MagicMock(status_code=400))
+        with pytest.raises(NetBoxApiError):
+            ensure_prefix(endpoint, "192.168.1.0/24", dry_run=False)
+
 
 class TestSanitizeMacAddress:
     """Verifica el saneamiento y validación de direcciones MAC."""
@@ -1480,6 +1558,35 @@ class TestParseSingleNetworkInterface:
             _parse_single_network_interface(
                 "eth0", "up", "10.0.0.5/99", "", "", {}, config
             )
+
+    def test_ip_outside_red_ip_raises_row_validation_error(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        with pytest.raises(RowValidationError, match="no pertenece a la 'Red IP'"):
+            _parse_single_network_interface(
+                "eth0", "up", "192.168.1.10", "10.0.0.0/8", "", {}, config
+            )
+
+    def test_network_derived_from_full_red_ip(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        parsed = _parse_single_network_interface(
+            "eth0", "up", "192.168.1.10", "192.168.1.0/24", "", {}, config
+        )
+        assert parsed["cidr"] == "192.168.1.10/24"
+        assert parsed["network"] == "192.168.1.0/24"
+
+    def test_network_derived_from_prefix_only(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        parsed = _parse_single_network_interface(
+            "eth0", "up", "192.168.1.10", "24", "", {}, config
+        )
+        assert parsed["network"] == "192.168.1.0/24"
+
+    def test_network_is_none_without_cidr(self, config: NetBoxMappingConfig) -> None:
+        parsed = _parse_single_network_interface("eth0", "up", "", "", "", {}, config)
+        assert parsed["network"] is None
 
 
 class TestSplitIpAndEmbeddedPrefix:
@@ -2946,6 +3053,75 @@ class TestSyncSingleInterface:
         assert "eth1" in returned_cache
         assert returned_cache["eth1"] == mock_iface
         assert any_changes is True
+
+
+class TestSyncSingleInterfacePrefix:
+    """Verifica que el Prefix se asegure antes de asignar la IP."""
+
+    @staticmethod
+    def _run(iface_data: dict[str, Any]) -> tuple[MagicMock, MagicMock, MagicMock]:
+        mock_endpoints = MagicMock(spec=NetBoxEndpoints)
+        mock_endpoints.ip_addresses = MagicMock()
+        mock_endpoints.mac_addresses = MagicMock()
+        mock_endpoints.prefixes = MagicMock()
+        parent = MagicMock()
+        with (
+            patch(
+                "export_to_netbox._upsert_interface_record",
+                return_value=(MagicMock(), False),
+            ),
+            patch(
+                "export_to_netbox.ensure_prefix", return_value=(MagicMock(), True)
+            ) as ensure_prefix,
+            patch(
+                "export_to_netbox._assign_ip", return_value=(MagicMock(), False)
+            ) as assign_ip,
+        ):
+            parent.attach_mock(ensure_prefix, "ensure_prefix")
+            parent.attach_mock(assign_ip, "assign_ip")
+            mock_endpoint = MagicMock(spec=Endpoint)
+            mock_endpoint.url = "http://localhost/api/dcim/interfaces/"
+            _sync_single_interface(
+                iface_data=cast(NetworkInterfaceData, iface_data),
+                obj_id=1,
+                iface_endpoint=mock_endpoint,
+                ifaces_cache={},
+                endpoints=mock_endpoints,
+                dry_run=False,
+            )
+        return parent, ensure_prefix, assign_ip
+
+    def test_prefix_ensured_before_ip(self) -> None:
+        parent, ensure_prefix, assign_ip = self._run(
+            {
+                "name": "eth0",
+                "enabled": True,
+                "cidr": "192.168.1.10/24",
+                "network": "192.168.1.0/24",
+                "mac": None,
+                "ip": "192.168.1.10",
+                "prefix": "192.168.1.0/24",
+            }
+        )
+        ensure_prefix.assert_called_once()
+        assert ensure_prefix.call_args.args[1] == "192.168.1.0/24"
+        assign_ip.assert_called_once()
+        assert [c[0] for c in parent.mock_calls[:2]] == ["ensure_prefix", "assign_ip"]
+
+    def test_no_prefix_without_cidr(self) -> None:
+        _, ensure_prefix, assign_ip = self._run(
+            {
+                "name": "eth0",
+                "enabled": True,
+                "cidr": None,
+                "network": None,
+                "mac": None,
+                "ip": None,
+                "prefix": None,
+            }
+        )
+        ensure_prefix.assert_not_called()
+        assign_ip.assert_not_called()
 
 
 class TestClassifyRows:

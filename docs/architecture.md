@@ -64,7 +64,7 @@ The exporter follows this logic for each row in the CSV:
 2. **Uniqueness validation**: If the match is only by name, verifies that the name is unique both in the CSV and in NetBox.
 3. **Payload construction**: Fields are mapped according to the contract defined in `netbox_mapping.yaml`, applying casts and transformations.
 4. **Change detection**: Compares the payload against the current state of the record. An update is only issued if there are actual differences.
-5. **Dependency synchronization**: Sites, Manufacturers, Device Types, Platforms, Roles, Clusters, Custom Fields, Interfaces, and IPs are created or resolved as prerequisites.
+5. **Dependency synchronization**: Sites, Manufacturers, Device Types, Platforms, Roles, Clusters, Custom Fields, Interfaces, Prefixes, and IPs are created or resolved as prerequisites.
 6. **Primary IP assignment**: If a Device or VM has exactly one valid IP, it is automatically assigned as the primary IPv4.
 
 ### Taxonomy Resolution & Slug Collisions (Fail-Fast vs. Fail-Safe)

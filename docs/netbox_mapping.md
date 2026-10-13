@@ -60,8 +60,8 @@ This table acts as a data dictionary of the fields the script expects to extract
 | `hypervisor_ver` | `Version SO Hipervisor` | Hypervisor OS build or version. | `7.0.3`, `8.1.1` |
 | `iface_names` | `Interfaces` | Comma-separated list of network interface names. | `eth0, eth1`, `vmnic0` |
 | `iface_status` | `Interfaces estado` | Comma-separated list of link statuses for each interface. | `up, down` |
-| `iface_ip` | `IP` | List of associated IP addresses (primary and secondaries). May include an embedded prefix (`10.0.0.5/24`); `Red IP` takes priority over it. An IP with neither `Red IP` nor embedded prefix is skipped with a warning. | `10.0.0.10, 192.168.1.5` |
-| `iface_pfx` | `Red IP` | List of CIDR prefixes or subnets associated with each IP. A `Red IP` without its `IP` is discarded with a warning (NetBox cannot assign a network without a host). | `192.168.1.0/26` |
+| `iface_ip` | `IP` | Comma-separated host IP addresses, one per interface (positional, see [Network columns](#network-columns-ip-and-red-ip)). | `10.0.0.10, 192.168.1.5` |
+| `iface_pfx` | `Red IP` | Comma-separated networks, one per interface, aligned by position with `IP`. | `10.0.0.0/24, 192.168.1.0/26` |
 | `iface_mac` | `MAC` | List of MAC addresses corresponding to the interfaces. | `aa:bb:cc:dd:ee:ff` |
 | `cpu_model` | `CPU Modelo` | Commercial name of the processor. | `Intel Xeon Gold 6230` |
 | `cores` | `Cores` | Number of physical (Device) or virtual (VM) cores. | `16`, `32` |
@@ -84,6 +84,37 @@ This table acts as a data dictionary of the fields the script expects to extract
 | `environment` | `Entorno` | Deployment environment (Production, QA, Development). | `Production`, `Development` |
 | `rundeck_node` | `Nodo Rundeck` | Indicates if the node was discovered via Rundeck (boolean). | `Yes`, `No` |
 | `notes` | `Notas` | Extensive notes or additional audit metadata (flexible placement). | `Replace disks in Q3` |
+
+### Network columns (`IP` and `Red IP`)
+
+`Interfaces`, `Interfaces estado`, `IP`, `Red IP` and `MAC` are **positional**: the Nth element of each column describes the Nth interface. Each column must have the same number of comma-separated elements as `Interfaces`, or be completely empty. `N/A` marks an interface without that value.
+
+| Column | Content | Accepted formats |
+| --- | --- | --- |
+| `IP` | Host address of the interface (no mask). | `192.168.1.10`, `2001:db8::1`. A CIDR (`192.168.1.10/24`) is also accepted; its prefix is used only when `Red IP` is empty. |
+| `Red IP` | Network the IP belongs to. | Full network `192.168.1.0/24` or `192.168.1.0/255.255.255.0` (recommended), prefix only `24`, or mask only `255.255.255.0`. |
+
+Example (3 interfaces):
+
+```text
+Interfaces = eth0, eth1, eth2
+IP         = 192.168.1.10, 10.0.0.5, N/A
+Red IP     = 192.168.1.0/24, 10.0.0.0/8, N/A
+```
+
+Rules applied per interface:
+
+| `IP` | `Red IP` | Result |
+| --- | --- | --- |
+| set | full network | The IP **must belong** to that network, otherwise the whole machine's interfaces are rejected (`RowValidationError`). A Prefix and the IP address are synchronized. |
+| set | prefix or mask only | The network is derived from IP + prefix; a Prefix and the IP address are synchronized. |
+| set | empty / `N/A` | The IP is skipped with a warning (no prefix is invented). |
+| empty / `N/A` | set | `Red IP` is discarded with a warning (NetBox requires a host). |
+| empty / `N/A` | empty / `N/A` | Nothing to sync for the network. |
+
+A prefix length of `/0` (e.g. `0.0.0.0/0`) is always rejected.
+
+**NetBox side:** for each interface with a valid IP/network, the pipeline (idempotently) creates the **Prefix** (`ipam.prefix`, status `active`) if it does not exist, and then creates/assigns the **IP Address** (`ipam.ip-address`) with the host CIDR (`192.168.1.10/24`) to the interface. NetBox links an IP to its Prefix by address containment, so the IP automatically falls inside the synchronized Prefix. Existing Prefixes are never modified. With `--dry-run`, Prefix creation is only simulated.
 
 ---
 
