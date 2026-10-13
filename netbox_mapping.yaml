@@ -320,7 +320,7 @@ node_types:
 
       - source: *col_pos_u
         target: "position"
-        cast: "int"
+        cast: "rack_position"
 
       - source: [*col_desc, *col_notes]
         target: "description"

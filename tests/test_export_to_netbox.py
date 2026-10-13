@@ -104,6 +104,7 @@ from export_to_netbox import (
     parse_float_to_int,
     parse_int,
     parse_int_gb_to_mb,
+    parse_rack_position,
     precompute_cluster_type_map,
     process_interfaces_and_ips,
     slugify,
@@ -301,6 +302,48 @@ class TestParseFloatToInt:
             parse_float_to_int(None)
 
 
+class TestParseRackPosition:
+    """Verifica las reglas de Device.position de NetBox (>= 1, múltiplos de 0.5)."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("12", 12.0),
+            ("12.5", 12.5),
+            ("12,5", 12.5),
+            ("  1  ", 1.0),
+            ("1.0", 1.0),
+            ("42.5", 42.5),
+        ],
+    )
+    def test_valid_positions(self, raw: str, expected: float) -> None:
+        """Enteros y medias unidades (con punto o coma) son válidos."""
+        assert parse_rack_position(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["12.25", "12.3", "1.75", "2.75"])
+    def test_non_half_unit_increments_rejected(self, raw: str) -> None:
+        """Valores que no son múltiplos de 0.5 se rechazan antes de llamar a la API."""
+        with pytest.raises(ValueError, match="múltiplo de 0.5"):
+            parse_rack_position(raw)
+
+    @pytest.mark.parametrize("raw", ["0", "0.5", "-1", "-2.5"])
+    def test_below_minimum_rejected(self, raw: str) -> None:
+        """Posiciones menores a 1 (incluidas 0.5 y negativas) se rechazan."""
+        with pytest.raises(ValueError, match="mayor o igual a 1"):
+            parse_rack_position(raw)
+
+    @pytest.mark.parametrize("raw", ["abc", "", "U12", "nan", "inf", "-inf"])
+    def test_non_numeric_or_non_finite_rejected(self, raw: str) -> None:
+        """Texto, vacío y valores no finitos lanzan ValueError."""
+        with pytest.raises(ValueError):
+            parse_rack_position(raw)
+
+    def test_none_rejected(self) -> None:
+        """None lanza ValueError con mensaje de posición numérica."""
+        with pytest.raises(ValueError, match="posición de rack numérica"):
+            parse_rack_position(None)
+
+
 class TestParseIntGbToMb:
     """Verifica la conversión de GB a MB (NetBox espera MB para RAM)."""
 
@@ -366,6 +409,14 @@ class TestApplyCast:
 
     def test_cast_int_gb_to_mb(self) -> None:
         assert apply_cast("8", CastType.INT_GB_TO_MB, "memory") == 8000
+
+    def test_cast_rack_position(self) -> None:
+        assert apply_cast("12,5", CastType.RACK_POSITION, "position") == 12.5
+
+    def test_invalid_rack_position_raises_row_validation_error(self) -> None:
+        """Una posición no múltiplo de 0.5 se reporta como error de fila con contexto."""
+        with pytest.raises(RowValidationError, match="Valor inválido.*position"):
+            apply_cast("12.25", CastType.RACK_POSITION, "position")
 
     def test_cast_bool_si_no(self) -> None:
         assert apply_cast("si", CastType.BOOL_SI_NO, "is_virtual") is True

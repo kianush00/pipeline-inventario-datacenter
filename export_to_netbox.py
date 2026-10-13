@@ -57,6 +57,7 @@ from enum import Enum
 from pathlib import Path
 from typing import (
     Any,
+    Final,
     Literal,
     NamedTuple,
     NoReturn,
@@ -156,9 +157,13 @@ class CastType(str, Enum):
     FLOAT = "float"
     FLOAT_TO_INT = "float_to_int"
     INT_GB_TO_MB = "int_gb_to_mb"
+    RACK_POSITION = "rack_position"
     BOOL_SI_NO = "bool_si_no"
     LOWER = "lower"
 
+
+# Posición mínima (U) que NetBox acepta en Device.position (MinValueValidator(1)).
+RACK_POSITION_MIN: Final = 1.0
 
 NetBoxObject: TypeAlias = Union[Record, "MockNetBoxRecord"]
 CsvRow: TypeAlias = dict[str, str]
@@ -944,6 +949,29 @@ def parse_int_gb_to_mb(value: Any) -> int:
         raise ValueError("No es un valor numérico válido.") from e
 
 
+def parse_rack_position(value: Any) -> float:
+    """
+    Convierte una posición de rack (U) a float válido para `Device.position`.
+
+    Decisiones de diseño:
+    - NetBox almacena `position` como Decimal (1 decimal) y su `clean()` exige
+      un mínimo de 1 e incrementos de 0.5. Se valida aquí para reportar un error
+      claro por fila en lugar de un HTTP 400 de la API.
+    - `value * 2` se compara contra un entero: los múltiplos de 0.5 son exactos
+      en coma flotante, por lo que no hay falsos negativos por redondeo.
+    """
+    try:
+        position = _to_float(value)
+    except (ValueError, TypeError) as e:
+        raise ValueError("No es una posición de rack numérica válida.") from e
+
+    if position < RACK_POSITION_MIN:
+        raise ValueError(f"La posición debe ser mayor o igual a {RACK_POSITION_MIN}.")
+    if not (position * 2).is_integer():
+        raise ValueError("La posición debe ser múltiplo de 0.5 unidades de rack.")
+    return position
+
+
 def parse_bool_si_no(value: Any) -> bool:
     """
     Convierte un valor a booleano según reglas específicas de 'si/no'.
@@ -969,6 +997,8 @@ def apply_cast(value: Any, cast_type: CastType, target: str) -> FieldValue:
                 return parse_float_to_int(value)
             case CastType.INT_GB_TO_MB:
                 return parse_int_gb_to_mb(value)
+            case CastType.RACK_POSITION:
+                return parse_rack_position(value)
             case CastType.BOOL_SI_NO:
                 return parse_bool_si_no(value)
             case CastType.LOWER:
@@ -1630,7 +1660,7 @@ def _attempt_get_or_create(
 
     try:
         return _execute_creation(endpoint, create_kwargs, name, use_fallback_slug)
-    # TODO: evaluar si aquí se puede o no reutilizar la función _create_record
+
     except RequestError as e:
         if not _is_name_collision(e) or attempt >= max_retries - 1:
             with netbox_error_wrap(

@@ -52,7 +52,7 @@ This table acts as a data dictionary of the fields the script expects to extract
 | `host_device` | `Dispositivo Host` | (For VMs) Name of the physical server running the VM. | `hyper-node-05` |
 | `rack` | `Rack` | Name of the physical rack where it is located. | `Rack-A1`, `Row-2-R4` |
 | `rack_location` | `Fila` | Name of the Location (row/corridor) where the rack is grouped. | `Row A`, `Row B` |
-| `pos_u` | `Posicion (U)` | Physical position or lowest bay number within the rack. | `12`, `25` |
+| `pos_u` | `Posicion (U)` | Physical position or lowest bay number within the rack. Must be `>= 1` and a multiple of `0.5` (NetBox `Device.position` constraint). | `12`, `25`, `12.5` |
 | `hei_u` | `Altura (U)` | Total U height the device occupies in the rack (usually 1, 2, or fractional). | `1.0`, `1.5`, `2.0` |
 | `os` | `SO Host` | Base operating system of the node. | `Ubuntu`, `Windows Server 2022` |
 | `os_ver` | `Version SO Host` | Specific OS version. | `22.04 LTS`, `2019 Standard` |
@@ -217,6 +217,7 @@ Defines how to **extract** data from the CSV and **map** it to fields in the Net
 | `int` | Converts to integer |
 | `float` | Converts to float (decimal) |
 | `float_to_int` | Converts decimal float strings to nearest integer (useful for disk gigabytes) |
+| `rack_position` | Converts to float and validates NetBox's rack position rules: value `>= 1` and a multiple of `0.5` (e.g. `12`, `12.5`; `12.25` and `0` are rejected) |
 | `int_gb_to_mb` | Converts GB (string) to MB (integer) using x1000 multiplier |
 | `bool_si_no` | Converts "Sí"/"No" to `true`/`false` |
 | `lower` | Converts to lowercase (used for UUID normalization) |
