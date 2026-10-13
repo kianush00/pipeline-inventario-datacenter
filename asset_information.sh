@@ -404,7 +404,10 @@ is_kvm_hypervisor() {
 
     # 4. Busqueda de procesos en crudo (2 subprocesos): atrapa KVMs sin libvirt.
     # shellcheck disable=SC2009
-    if ps -e -o comm= 2>/dev/null | grep -q '^qemu-system-'; then
+    # Se usa grep >/dev/null (no -q) para consumir toda la salida de ps: con pipefail,
+    # un grep -q que cierra el pipe antes de tiempo puede dar 141 (SIGPIPE) a ps y
+    # producir un falso negativo.
+    if ps -e -o comm= 2>/dev/null | grep '^qemu-system-' >/dev/null; then
         return 0
     fi
 
