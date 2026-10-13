@@ -3227,6 +3227,17 @@ def _validate_interface_ip(ip_raw: str, name: str) -> str:
         ) from e
 
 
+def _split_ip_and_embedded_prefix(ip_raw: str) -> tuple[str, str | None]:
+    """
+    Separa una IP de su prefijo embebido (notación CIDR, ej. '10.0.0.5/24').
+    Retorna (ip, prefijo) o (ip, None) si la IP no incluye prefijo.
+    """
+    address, separator, prefix = ip_raw.partition("/")
+    if not separator:
+        return address.strip(), None
+    return address.strip(), prefix.strip() or None
+
+
 def _build_interface_cidr(ip_val: str, pfx_val: str, name: str) -> str:
     """Valida IP y prefijo construyendo una dirección CIDR válida."""
     try:
@@ -3283,9 +3294,24 @@ def _parse_single_network_interface(
     cidr = None
     try:
         if ip_val:
+            # La columna "Red IP" tiene prioridad sobre un prefijo embebido en "IP".
+            ip_val, embedded_prefix = _split_ip_and_embedded_prefix(ip_val)
             ip_val = _validate_interface_ip(ip_val, name)
-            if pfx_val:
-                cidr = _build_interface_cidr(ip_val, pfx_val, name)
+            effective_prefix = pfx_val or embedded_prefix
+            if effective_prefix:
+                cidr = _build_interface_cidr(ip_val, effective_prefix, name)
+            else:
+                log.warning(
+                    "IP '%s' en interfaz '%s' sin 'Red IP' ni prefijo: no se asignará en NetBox.",
+                    ip_val,
+                    name,
+                )
+        elif pfx_val:
+            log.warning(
+                "'Red IP' '%s' en interfaz '%s' sin 'IP': se descarta (NetBox requiere host).",
+                pfx_val,
+                name,
+            )
 
         if mac_val:
             mac_val = _sanitize_mac_address(mac_val, name)
@@ -3914,8 +3940,8 @@ def _sync_interfaces_for_object(
 
     if args.prune_network_orphans and obj_id != 0:
         csv_names = {iface["name"] for iface in interfaces}
-        csv_ips = {iface["cidr"] for iface in interfaces if iface.get("cidr")}
-        csv_macs = {iface["mac"].upper() for iface in interfaces if iface.get("mac")}
+        csv_ips = {cidr for iface in interfaces if (cidr := iface["cidr"])}
+        csv_macs = {mac.upper() for iface in interfaces if (mac := iface["mac"])}
 
         metrics = _prune_network_orphans(
             endpoints,

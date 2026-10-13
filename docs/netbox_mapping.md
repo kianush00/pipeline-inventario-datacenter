@@ -60,8 +60,8 @@ This table acts as a data dictionary of the fields the script expects to extract
 | `hypervisor_ver` | `Version SO Hipervisor` | Hypervisor OS build or version. | `7.0.3`, `8.1.1` |
 | `iface_names` | `Interfaces` | Comma-separated list of network interface names. | `eth0, eth1`, `vmnic0` |
 | `iface_status` | `Interfaces estado` | Comma-separated list of link statuses for each interface. | `up, down` |
-| `iface_ip` | `IP` | List of associated IP addresses (primary and secondaries). | `10.0.0.10, 192.168.1.5` |
-| `iface_pfx` | `Red IP` | List of CIDR prefixes or subnets associated with each IP. | `192.168.1.0/26` |
+| `iface_ip` | `IP` | List of associated IP addresses (primary and secondaries). May include an embedded prefix (`10.0.0.5/24`); `Red IP` takes priority over it. An IP with neither `Red IP` nor embedded prefix is skipped with a warning. | `10.0.0.10, 192.168.1.5` |
+| `iface_pfx` | `Red IP` | List of CIDR prefixes or subnets associated with each IP. A `Red IP` without its `IP` is discarded with a warning (NetBox cannot assign a network without a host). | `192.168.1.0/26` |
 | `iface_mac` | `MAC` | List of MAC addresses corresponding to the interfaces. | `aa:bb:cc:dd:ee:ff` |
 | `cpu_model` | `CPU Modelo` | Commercial name of the processor. | `Intel Xeon Gold 6230` |
 | `cores` | `Cores` | Number of physical (Device) or virtual (VM) cores. | `16`, `32` |

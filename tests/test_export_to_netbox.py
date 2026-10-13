@@ -3,6 +3,7 @@ Pruebas unitarias para export_to_netbox.py
 """
 
 import hashlib
+import logging
 from collections import Counter
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
@@ -65,6 +66,7 @@ from export_to_netbox import (
     _resolve_netbox_status,
     _sanitize_mac_address,
     _search_in_netbox,
+    _split_ip_and_embedded_prefix,
     _sync_device_type_attributes,
     _sync_rack_location,
     _sync_row,
@@ -1408,6 +1410,93 @@ class TestParseSingleNetworkInterface:
             match="El nombre de una interfaz de red no puede estar vacío",
         ):
             _parse_single_network_interface("", "up", "1.1.1.1", "24", "", {}, config)
+
+    def test_prefix_without_ip_is_discarded_with_warning(
+        self, config: NetBoxMappingConfig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """'Red IP' sin 'IP': no hay CIDR y se advierte del descarte."""
+        with caplog.at_level(logging.WARNING):
+            parsed = _parse_single_network_interface(
+                "eth0", "up", "", "192.168.1.0/24", "", {}, config
+            )
+        assert parsed["cidr"] is None
+        assert parsed["ip"] is None
+        assert "sin 'IP'" in caplog.text
+
+    def test_prefix_without_ip_is_not_validated(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        """Una 'Red IP' basura sin 'IP' no debe romper la fila."""
+        parsed = _parse_single_network_interface(
+            "eth0", "up", "N/A", "basura", "", {}, config
+        )
+        assert parsed["cidr"] is None
+
+    def test_ip_without_prefix_warns_and_skips_cidr(
+        self, config: NetBoxMappingConfig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """IP pura sin 'Red IP': no se inventa prefijo y se advierte."""
+        with caplog.at_level(logging.WARNING):
+            parsed = _parse_single_network_interface(
+                "eth0", "up", "10.0.0.5", "N/A", "", {}, config
+            )
+        assert parsed["ip"] == "10.0.0.5"
+        assert parsed["cidr"] is None
+        assert "sin 'Red IP' ni prefijo" in caplog.text
+
+    def test_ip_with_embedded_prefix_builds_cidr(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        """IP en notación CIDR y sin 'Red IP': el prefijo embebido se usa."""
+        parsed = _parse_single_network_interface(
+            "eth0", "up", "10.0.0.5/24", "", "", {}, config
+        )
+        assert parsed["ip"] == "10.0.0.5"
+        assert parsed["cidr"] == "10.0.0.5/24"
+
+    def test_red_ip_has_priority_over_embedded_prefix(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        parsed = _parse_single_network_interface(
+            "eth0", "up", "10.0.0.5/24", "16", "", {}, config
+        )
+        assert parsed["cidr"] == "10.0.0.5/16"
+
+    def test_ip_with_empty_embedded_prefix_warns(
+        self, config: NetBoxMappingConfig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """'10.0.0.5/' no aporta prefijo: se trata como IP sin prefijo."""
+        with caplog.at_level(logging.WARNING):
+            parsed = _parse_single_network_interface(
+                "eth0", "up", "10.0.0.5/", "", "", {}, config
+            )
+        assert parsed["cidr"] is None
+        assert "sin 'Red IP' ni prefijo" in caplog.text
+
+    def test_ip_with_invalid_embedded_prefix_raises(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        with pytest.raises(RowValidationError, match="inválido"):
+            _parse_single_network_interface(
+                "eth0", "up", "10.0.0.5/99", "", "", {}, config
+            )
+
+
+class TestSplitIpAndEmbeddedPrefix:
+    """Verifica la separación de IP y prefijo embebido."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("10.0.0.5", ("10.0.0.5", None)),
+            ("10.0.0.5/24", ("10.0.0.5", "24")),
+            (" 10.0.0.5 / 24 ", ("10.0.0.5", "24")),
+            ("10.0.0.5/", ("10.0.0.5", None)),
+            ("2001:db8::1/64", ("2001:db8::1", "64")),
+        ],
+    )
+    def test_split(self, raw: str, expected: tuple[str, str | None]) -> None:
+        assert _split_ip_and_embedded_prefix(raw) == expected
 
 
 class TestParseNetworkInterfaces:
