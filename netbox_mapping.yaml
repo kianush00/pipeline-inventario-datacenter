@@ -218,6 +218,7 @@ custom_field_definitions:
   - name: &cf_inventory_uuid "inventory_uuid"
     label: "UUID de inventario"
     type: "text"
+    filter_logic: "exact"
     object_types:
       - "dcim.device"
       - "virtualization.virtualmachine"

@@ -20,6 +20,7 @@ from export_to_netbox import (
     ClusterTypeDefaultConfig,
     ConfigValidationError,
     CsvColumnDef,
+    CsvIdentityCounts,
     CustomFieldConfig,
     DeviceRoleConfig,
     Endpoint,
@@ -48,14 +49,16 @@ from export_to_netbox import (
     _classify_rows,
     _create_record,
     _create_with_fallback_slug,
+    _ensure_custom_field,
     _execute_sync,
     _extract_concat_dot_value,
     _extract_raw_source_value,
-    _find_existing_object,
+    _find_by_uuid,
     _is_collision_error,
     _is_custom_field_changed,
     _is_name_safely_unique,
     _is_relation_changed,
+    _is_uuid_safely_unique,
     _network_from_cidr,
     _parse_network_interfaces,
     _parse_single_network_interface,
@@ -64,6 +67,7 @@ from export_to_netbox import (
     _resolve_default_or_empty,
     _resolve_device_role,
     _resolve_device_type,
+    _resolve_existing_object,
     _resolve_field_value,
     _resolve_netbox_status,
     _sanitize_mac_address,
@@ -78,11 +82,13 @@ from export_to_netbox import (
     _validate_csv_headers,
     _validate_interface_ip,
     _validate_select_choice,
+    _validate_sync,
     apply_cast,
     apply_update,
     build_payload,
     check_record_changes,
     concat_dot,
+    count_inventory_uuids,
     count_machine_names,
     ensure_cluster,
     ensure_device_type,
@@ -660,6 +666,27 @@ class TestCountMachineNames:
         assert counts["   "] == 0
 
 
+class TestCountInventoryUuids:
+    """Verifica el contador de UUIDs de inventario."""
+
+    def test_counts_normalized_and_ignores_empty(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        col_uuid = config.csv_columns["inventory_uuid"].source
+        rows = [
+            {col_uuid: "ABC-1"},
+            {col_uuid: "abc-1"},
+            {col_uuid: "abc-2"},
+            {col_uuid: ""},
+            {col_uuid: "N/A"},
+            {},
+        ]
+        counts = count_inventory_uuids(rows, config)
+        assert counts["abc-1"] == 2
+        assert counts["abc-2"] == 1
+        assert sum(counts.values()) == 3
+
+
 class TestValidateCsvHeaders:
     """Verifica la validación de los encabezados del CSV."""
 
@@ -1069,100 +1096,352 @@ class TestResolveDeviceRole:
             _resolve_device_role(row, cache, config)
 
 
-class TestFindExistingObject:
-    """Verifica la lógica de búsqueda por UUID y Nombre."""
+def _counts(
+    names: dict[str, int] | None = None, uuids: dict[str, int] | None = None
+) -> CsvIdentityCounts:
+    """Construye los conteos globales del CSV para las pruebas de resolución."""
+    return CsvIdentityCounts(Counter(names or {}), Counter(uuids or {}))
 
-    def test_found_by_uuid(self, config: NetBoxMappingConfig) -> None:
+
+def _node(record_id: int, uuid: str = "", name: str = "SRV-01") -> MockNetBoxRecord:
+    """Construye un objeto NetBox simulado con su custom field `inventory_uuid`."""
+    return MockNetBoxRecord(
+        id=record_id, name=name, custom_fields={"inventory_uuid": uuid}
+    )
+
+
+class TestFindByUuid:
+    """Verifica la búsqueda por UUID con coincidencia exacta."""
+
+    def test_returns_exact_matches(self) -> None:
         endpoint = MagicMock()
-        mock_record = MockNetBoxRecord(id=5)
-        endpoint.filter.return_value = [mock_record]
+        record = _node(5, "uuid-123")
+        endpoint.filter.return_value = [record]
 
-        existing, by_uuid, by_name = _find_existing_object(
-            "uuid-123", "SRV-01", endpoint, config
-        )
-
-        assert existing == [mock_record]
-        assert by_uuid is True
-        assert by_name is False
+        assert _find_by_uuid(endpoint, "uuid-123") == [record]
         endpoint.filter.assert_called_once_with(cf_inventory_uuid="uuid-123")
 
-    def test_found_by_name_when_uuid_not_found(
+    def test_discards_partial_matches_from_loose_filter(self) -> None:
+        """NetBox filtra de forma parcial por defecto: 'abc' no debe resolver 'abc-extra'."""
+        endpoint = MagicMock()
+        endpoint.filter.return_value = [_node(1, "abc-extra"), _node(2, "abc")]
+
+        result = _find_by_uuid(endpoint, "abc")
+        assert [r.id for r in result] == [2]
+
+    def test_case_insensitive_match(self) -> None:
+        endpoint = MagicMock()
+        endpoint.filter.return_value = [_node(1, "UUID-ABC")]
+        assert len(_find_by_uuid(endpoint, "uuid-abc")) == 1
+
+
+class TestIsUuidSafelyUnique:
+    """Verifica la validación de unicidad de UUIDs."""
+
+    def test_unique_in_both(self) -> None:
+        endpoint = MagicMock()
+        endpoint.url = "http://test/api/dcim/devices/"
+        existing: list[Any] = [_node(1, "u1")]
+        assert _is_uuid_safely_unique(endpoint, existing, "u1", Counter({"u1": 1}))
+
+    def test_duplicate_in_netbox(self, caplog: pytest.LogCaptureFixture) -> None:
+        endpoint = MagicMock()
+        endpoint.url = "http://test/api/dcim/devices/"
+        existing: list[Any] = [_node(1, "u1"), _node(2, "u1")]
+        with caplog.at_level(logging.WARNING):
+            assert not _is_uuid_safely_unique(
+                endpoint, existing, "u1", Counter({"u1": 1})
+            )
+        assert "no es único" in caplog.text
+
+    def test_duplicate_in_csv(self) -> None:
+        endpoint = MagicMock()
+        endpoint.url = "http://test/api/dcim/devices/"
+        existing: list[Any] = [_node(1, "u1")]
+        assert not _is_uuid_safely_unique(endpoint, existing, "u1", Counter({"u1": 2}))
+
+    def test_not_in_netbox_is_not_a_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Un nodo nuevo (sin coincidencias en NetBox) no es una ambigüedad."""
+        endpoint = MagicMock()
+        endpoint.url = "http://test/api/dcim/devices/"
+        with caplog.at_level(logging.WARNING):
+            assert not _is_uuid_safely_unique(endpoint, [], "u1", Counter({"u1": 1}))
+        assert caplog.text == ""
+
+
+class TestResolveExistingObject:
+    """Verifica la resolución de identidad en dos etapas: UUID único y luego nombre único."""
+
+    def test_unique_uuid_resolves_without_name_lookup(
         self, config: NetBoxMappingConfig
     ) -> None:
         endpoint = MagicMock()
-        # Primer llamado (UUID) retorna vacío, segundo llamado (nombre) retorna registro
-        endpoint.filter.side_effect = [[], [MockNetBoxRecord(id=6)]]
+        record = _node(5, "uuid-123", name="OTRO-NOMBRE")
+        endpoint.filter.return_value = [record]
 
-        existing, by_uuid, by_name = _find_existing_object(
-            "uuid-123", "SRV-01", endpoint, config
+        result = _resolve_existing_object(
+            endpoint,
+            "SRV-01",
+            "uuid-123",
+            _counts({"SRV-01": 1}, {"uuid-123": 1}),
+            config,
         )
 
-        assert len(existing) == 1
-        assert existing[0].id == 6
-        assert by_uuid is False
-        assert by_name is True
-        assert endpoint.filter.call_count == 2
+        assert result == [record]
+        endpoint.filter.assert_called_once_with(cf_inventory_uuid="uuid-123")
 
-    def test_found_by_name_but_uuid_matches_case_insensitive(
+    def test_falls_back_to_name_when_uuid_not_found(
         self, config: NetBoxMappingConfig
     ) -> None:
         endpoint = MagicMock()
-        mock_record = MockNetBoxRecord(
-            id=7, custom_fields={"inventory_uuid": "UUID-123-ABC"}
+        by_name = _node(6, "")
+        endpoint.filter.side_effect = [[], [by_name]]
+
+        result = _resolve_existing_object(
+            endpoint,
+            "SRV-01",
+            "uuid-123",
+            _counts({"SRV-01": 1}, {"uuid-123": 1}),
+            config,
         )
 
-        # Primer llamado (UUID en minúsculas) retorna vacío
-        # Segundo llamado (nombre) retorna el registro
-        endpoint.filter.side_effect = [[], [mock_record]]
-
-        # Buscamos con el UUID en minúsculas
-        existing, by_uuid, by_name = _find_existing_object(
-            "uuid-123-abc", "SRV-01", endpoint, config
-        )
-
-        assert len(existing) == 1
-        assert existing[0].id == 7
-        assert by_uuid is True
-        assert by_name is False
+        assert result == [by_name]
         assert endpoint.filter.call_count == 2
 
-    def test_not_found(self, config: NetBoxMappingConfig) -> None:
+    def test_name_stage_accepts_uuid_with_different_case(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        endpoint = MagicMock()
+        record = _node(7, "UUID-123-ABC")
+        endpoint.filter.side_effect = [[], [record]]
+
+        result = _resolve_existing_object(
+            endpoint,
+            "SRV-01",
+            "uuid-123-abc",
+            _counts({"SRV-01": 1}, {"uuid-123-abc": 1}),
+            config,
+        )
+        assert result == [record]
+
+    def test_not_found_returns_empty_to_create(
+        self, config: NetBoxMappingConfig
+    ) -> None:
         endpoint = MagicMock()
         endpoint.filter.return_value = []
-        endpoint.name = "racks"
 
-        existing, by_uuid, by_name = _find_existing_object(
-            "uuid-123", "SRV-01", endpoint, config
+        result = _resolve_existing_object(
+            endpoint,
+            "SRV-01",
+            "uuid-123",
+            _counts({"SRV-01": 1}, {"uuid-123": 1}),
+            config,
         )
+        assert result == []
 
-        assert existing == []
-        assert by_uuid is False
-        assert by_name is False
-
-    def test_uuid_empty_searches_by_name(self, config: NetBoxMappingConfig) -> None:
+    def test_empty_uuid_searches_only_by_name(
+        self, config: NetBoxMappingConfig
+    ) -> None:
         endpoint = MagicMock()
-        endpoint.filter.return_value = [MockNetBoxRecord(id=7)]
+        record = _node(7, "")
+        endpoint.filter.return_value = [record]
 
-        existing, by_uuid, by_name = _find_existing_object(
-            "", "SRV-01", endpoint, config
+        result = _resolve_existing_object(
+            endpoint, "SRV-01", "", _counts({"SRV-01": 1}), config
         )
 
-        assert len(existing) == 1
-        assert existing[0].id == 7
-        assert by_uuid is False
-        assert by_name is True
+        assert result == [record]
         endpoint.filter.assert_called_once_with(name="SRV-01")
 
-    def test_multiple_matches_returns_first(self, config: NetBoxMappingConfig) -> None:
+    def test_duplicated_uuid_in_csv_falls_back_to_name(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        """Dos filas con el mismo UUID no se pisan: cada una se resuelve por su nombre."""
         endpoint = MagicMock()
-        endpoint.filter.return_value = [
-            MockNetBoxRecord(id=1, name="SRV"),
-            MockNetBoxRecord(id=2, name="SRV"),
+        # Etapa UUID: el nodo de la otra fila ya existe con ese UUID; etapa nombre: no existe.
+        endpoint.filter.side_effect = [[_node(1, "dup", name="SRV-A")], []]
+
+        result = _resolve_existing_object(
+            endpoint,
+            "SRV-B",
+            "dup",
+            _counts({"SRV-A": 1, "SRV-B": 1}, {"dup": 2}),
+            config,
+        )
+        assert result == []
+
+    def test_duplicated_uuid_in_netbox_resolves_by_name(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        endpoint = MagicMock()
+        mine = _node(2, "dup", name="SRV-B")
+        endpoint.filter.side_effect = [
+            [_node(1, "dup", name="SRV-A"), mine],
+            [mine],
         ]
 
-        result, _, _ = _find_existing_object("", "SRV", endpoint, config)
-        assert len(result) == 2
-        assert result[0].id == 1
+        result = _resolve_existing_object(
+            endpoint,
+            "SRV-B",
+            "dup",
+            _counts({"SRV-B": 1}, {"dup": 1}),
+            config,
+        )
+        assert result == [mine]
+
+    def test_ambiguous_name_after_uuid_failure_skips(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        endpoint = MagicMock()
+        endpoint.name = "devices"
+        endpoint.filter.side_effect = [
+            [],
+            [_node(1, "", name="SRV"), _node(2, "", name="SRV")],
+        ]
+
+        with pytest.raises(RowSkipCondition):
+            _resolve_existing_object(
+                endpoint, "SRV", "uuid-1", _counts({"SRV": 1}, {"uuid-1": 1}), config
+            )
+
+    def test_duplicated_name_in_csv_skips(self, config: NetBoxMappingConfig) -> None:
+        endpoint = MagicMock()
+        endpoint.name = "devices"
+        endpoint.filter.return_value = [_node(1, "")]
+
+        with pytest.raises(RowSkipCondition):
+            _resolve_existing_object(
+                endpoint, "SRV-01", "", _counts({"SRV-01": 2}), config
+            )
+
+    def test_name_match_with_different_uuid_skips(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        """No se suplanta la identidad de un nodo que ya tiene otro UUID."""
+        endpoint = MagicMock()
+        endpoint.name = "devices"
+        endpoint.filter.side_effect = [[], [_node(1, "otro-uuid")]]
+
+        with pytest.raises(RowSkipCondition, match="distinto UUID"):
+            _resolve_existing_object(
+                endpoint,
+                "SRV-01",
+                "uuid-123",
+                _counts({"SRV-01": 1}, {"uuid-123": 1}),
+                config,
+            )
+
+    def test_name_match_with_empty_uuid_is_adopted(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        endpoint = MagicMock()
+        record = _node(1, "")
+        endpoint.filter.side_effect = [[], [record]]
+
+        result = _resolve_existing_object(
+            endpoint,
+            "SRV-01",
+            "uuid-123",
+            _counts({"SRV-01": 1}, {"uuid-123": 1}),
+            config,
+        )
+        assert result == [record]
+
+
+class _FakeNodeEndpoint:
+    """Endpoint en memoria con estado, para validar el flujo completo de identidad."""
+
+    name = "devices"
+    url = "http://test/api/dcim/devices/"
+
+    def __init__(self) -> None:
+        self.records: list[MockNetBoxRecord] = []
+
+    def filter(self, **kwargs: str) -> list[MockNetBoxRecord]:
+        if "cf_inventory_uuid" in kwargs:
+            wanted = kwargs["cf_inventory_uuid"]
+            return [r for r in self.records if _uuid_of(r) == wanted]
+        return [r for r in self.records if r.name == kwargs["name"]]
+
+    def create(self, **payload: Any) -> MockNetBoxRecord:
+        record = MockNetBoxRecord(id=len(self.records) + 1, **payload)
+        self.records.append(record)
+        return record
+
+
+def _uuid_of(record: MockNetBoxRecord) -> str:
+    return str(getattr(record, "custom_fields", {}).get("inventory_uuid", ""))
+
+
+class TestValidateSyncDuplicatedUuid:
+    """Escenario end-to-end: dos filas del CSV con el mismo UUID y nombres distintos."""
+
+    @staticmethod
+    def _payload(name: str, uuid: str) -> dict[str, Any]:
+        return {"name": name, "custom_fields": {"inventory_uuid": uuid}}
+
+    def test_rows_do_not_overwrite_each_other_across_runs(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        endpoint = _FakeNodeEndpoint()
+        counts = _counts({"SRV-A": 1, "SRV-B": 1}, {"dup": 2})
+        rows = [("SRV-A", "dup"), ("SRV-B", "dup")]
+
+        for run in range(2):
+            statuses = [
+                _validate_sync(
+                    cast(Endpoint, endpoint),
+                    self._payload(name, uuid),
+                    name,
+                    uuid,
+                    counts,
+                    config,
+                    dry_run=False,
+                ).status
+                for name, uuid in rows
+            ]
+            expected = (
+                [SyncStatus.CREATED] * 2 if run == 0 else [SyncStatus.UNCHANGED] * 2
+            )
+            assert statuses == expected
+
+        assert sorted(r.name for r in endpoint.records) == ["SRV-A", "SRV-B"]
+
+
+class TestEnsureCustomFieldFilterLogic:
+    """Verifica que `filter_logic` del YAML se envíe a NetBox al crear el Custom Field."""
+
+    @pytest.mark.parametrize(
+        ("filter_logic", "expected_in_payload"), [("exact", True), (None, False)]
+    )
+    def test_filter_logic_in_create_payload(
+        self, filter_logic: str | None, expected_in_payload: bool
+    ) -> None:
+        endpoint = MagicMock()
+        endpoint.filter.return_value = []
+        cf_def = CustomFieldConfig.model_validate(
+            {
+                "name": "inventory_uuid",
+                "label": "UUID",
+                "type": "text",
+                "filter_logic": filter_logic,
+            }
+        )
+
+        _ensure_custom_field(endpoint, {}, cf_def, ["dcim.device"], None, False)
+
+        create_kwargs = endpoint.create.call_args.kwargs
+        assert ("filter_logic" in create_kwargs) is expected_in_payload
+        if expected_in_payload:
+            assert create_kwargs["filter_logic"] == "exact"
+
+    def test_inventory_uuid_uses_exact_filter_in_yaml(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        defs = {cf.name: cf for cf in config.get_all_custom_field_defs()}
+        assert defs["inventory_uuid"].filter_logic == "exact"
 
 
 class TestIsNameSafelyUnique:
@@ -2540,7 +2819,7 @@ class TestSyncSkips:
                 cluster_type_map={},
                 fallback_cluster_type=MagicMock(),
                 caches=MagicMock(),
-                csv_name_counts=Counter(),
+                csv_counts=_counts(),
                 dry_run=False,
             )
 
@@ -2566,7 +2845,7 @@ class TestSyncSkips:
                 cluster_type_map={},
                 fallback_cluster_type=MagicMock(),
                 caches=MagicMock(),
-                csv_name_counts=Counter(),
+                csv_counts=_counts(),
                 dry_run=False,
             )
 
@@ -2607,7 +2886,7 @@ class TestSyncSkips:
                 cluster_type_map={},
                 fallback_cluster_type=MagicMock(),
                 caches=MagicMock(),
-                csv_name_counts=Counter(),
+                csv_counts=_counts(),
                 dry_run=False,
             )
 
@@ -2660,7 +2939,7 @@ class TestSyncDevice:
             cluster_type_map={},
             fallback_cluster_type=MagicMock(),
             caches=mock_caches,
-            csv_name_counts=Counter(),
+            csv_counts=_counts(),
             dry_run=False,
         )
 
@@ -3123,7 +3402,7 @@ class TestSyncVM:
             cluster_type_map={},
             fallback_cluster_type=MagicMock(),
             caches=mock_caches,
-            csv_name_counts=Counter(),
+            csv_counts=_counts(),
             dry_run=False,
         )
 
@@ -3569,7 +3848,7 @@ class TestSyncRowEdgeCases:
             cluster_type_map={},
             fallback_cluster_type=MagicMock(),
             caches=MagicMock(),
-            csv_name_counts=Counter(),
+            csv_counts=_counts(),
             counts=counts,
             args=MagicMock(dry_run=False, prune_network_orphans=False),
         )
@@ -3621,7 +3900,7 @@ class TestSyncRowEdgeCases:
             cluster_type_map={},
             fallback_cluster_type=MagicMock(),
             caches=MagicMock(),
-            csv_name_counts=Counter(),
+            csv_counts=_counts(),
             counts=counts,
             args=MagicMock(dry_run=False, prune_network_orphans=False),
         )

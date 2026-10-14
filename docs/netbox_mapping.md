@@ -77,7 +77,7 @@ This table acts as a data dictionary of the fields the script expects to extract
 | `part_number` | `P/N` | Part Number (P/N) or SKU of the hardware. | `123-456-789` |
 | `service_tag` | `Service Tag` | Conventionally reserved for the Service Tag of Dell equipment. Coalesced into native Serial. | `ST-442-XY` |
 | `asset_tag` | `Nro Inventario` | Internal inventory plate or number. | `INV-9876` |
-| `inventory_uuid` | `UUID` | Unique and deterministic identifier of the node (ideally extracted from DMI or virtual system). | `564d...e2f1` |
+| `inventory_uuid` | `UUID` | Unique and deterministic identifier of the node (ideally extracted from DMI or virtual system). Uniqueness is enforced at export time: a UUID repeated in the CSV or in NetBox is not used to identify the node and the row falls back to name resolution (see [architecture](architecture.md#netbox-synchronization-flow)). | `564d...e2f1` |
 | `bios_ver` | `Version BIOS` | Current BIOS/UEFI firmware version. | `2.14.0` |
 | `bios_date` | `Fecha BIOS` | Release or update date of the BIOS. | `2023-01-15` |
 | `status` | `Estado` | Lifecycle status (active, offline, decommissioning). | `Active`, `Offline`, `Decommissioning` |
@@ -173,6 +173,7 @@ This section **defines the structure** of the Custom Fields in the NetBox databa
 | `object_types` | Yes | List of NetBox models it applies to (e.g., `dcim.device`) |
 | `default` | No | Default value at the database level |
 | `choice_set` | No | Valid values. Mandatory if `type` is `select` or `multiselect` |
+| `filter_logic` | No | NetBox filter behavior: `loose` (NetBox default, partial match), `exact` or `disabled`. Applied only when the Custom Field is created; `inventory_uuid` uses `exact` |
 
 ### Supported Custom Field Types (NetBox 4.6+)
 

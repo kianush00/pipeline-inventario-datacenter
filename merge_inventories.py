@@ -606,7 +606,7 @@ def main() -> None:
                 # ------------------------------------------------
                 if key not in parsed_data:
                     print(
-                        f"[WARNING] Línea {line_number} del inventario maestro: "
+                        f"[INFO] Línea {line_number} del inventario maestro: "
                         f"la clave '{key}' no existe en el inventario "
                         "parseado. La fila se conservará sin fusionar.",
                         file=sys.stderr,

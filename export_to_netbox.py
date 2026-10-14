@@ -179,6 +179,18 @@ ManufModelCache: TypeAlias = dict[tuple[str, str], NetBoxObject]
 HostDeviceCache: TypeAlias = dict[tuple[int, str], int | None]
 
 
+class CsvIdentityCounts(NamedTuple):
+    """
+    Conteo global de identidades en el CSV, calculado una sola vez por ejecución.
+
+    Se usa para validar la unicidad (por UUID y por nombre) antes de permitir que
+    una fila actualice un objeto existente en NetBox.
+    """
+
+    names: Counter[str]
+    uuids: Counter[str]
+
+
 class SyncResult(NamedTuple):
     """
     Resultado de la sincronización de un Device o VM.
@@ -209,6 +221,8 @@ class Ipv4Candidate(NamedTuple):
 
 
 class PrunedNetworkMetrics(NamedTuple):
+    """Métricas del procesamiento de redes huérfanas."""
+
     pruned_interfaces: int
     pruned_ips: int
     pruned_macs: int
@@ -432,6 +446,7 @@ class CustomFieldConfig(BaseModel):
     object_types: list[str] = Field(default_factory=list)
     choice_set: ChoiceSetConfig | None = None
     default: FieldValue = None
+    filter_logic: Literal["loose", "exact", "disabled"] | None = None
 
     @field_validator("object_types")
     @classmethod
@@ -1067,16 +1082,22 @@ def extract_csv_value(
     Extrae el valor del CSV y aplica la función de mapeo (map_value)
     si existe en la configuración.
     """
+
+    def _fallback_value(raw_val: str = "") -> Any:
+        if fallback is not None:
+            return fallback
+        return raw_val
+
     raw_val = _extract_raw_csv_value(row, col_alias, config, strict_extract)
     if not raw_val:
-        return fallback if fallback is not None else raw_val
+        return _fallback_value(raw_val)
 
     col_def = config.csv_columns.get(col_alias)
     if col_def and col_def.map:
         mapped_val = config.map_value(col_alias, raw_val, strict=strict_map)
         if mapped_val is not None:
             return mapped_val
-        return fallback if fallback is not None else raw_val
+        return _fallback_value(raw_val)
     return raw_val
 
 
@@ -1131,6 +1152,19 @@ def count_machine_names(
             name = val.strip()
             if name:
                 counts[name] += 1
+    return counts
+
+
+def count_inventory_uuids(
+    rows: list[CsvRow], config: NetBoxMappingConfig
+) -> Counter[str]:
+    """Genera un conteo de las ocurrencias de UUIDs en el CSV, normalizados a
+    minúsculas (ignorando vacíos)."""
+    counts = Counter[str]()
+    for row in rows:
+        uuid = extract_csv_value(row, "inventory_uuid", config).lower()
+        if not config.is_empty(uuid):
+            counts[uuid] += 1
     return counts
 
 
@@ -1861,6 +1895,11 @@ def _ensure_custom_field(
     default_value: FieldValue = cf_def.default
     if default_value is not None:
         create_kwargs["default"] = default_value
+
+    # NetBox filtra por defecto de forma parcial (loose); los campos usados como
+    # identificadores (ej. inventory_uuid) requieren coincidencia exacta.
+    if cf_def.filter_logic is not None:
+        create_kwargs["filter_logic"] = cf_def.filter_logic
 
     try:
         return get_or_create_cached(
@@ -2915,46 +2954,53 @@ def _resolve_base_node(
     }, caches
 
 
-def _find_existing_object(
-    uuid: str,
-    machine_name: str,
+def _extract_object_uuid(obj: NetBoxObject) -> str:
+    """Obtiene el `inventory_uuid` normalizado de un objeto NetBox ("" si no tiene)."""
+    custom_fields: dict[str, Any] = getattr(obj, "custom_fields", {}) or {}
+    return str(custom_fields.get("inventory_uuid") or "").strip().lower()
+
+
+def _find_by_uuid(endpoint: Endpoint, uuid: str) -> list[Record]:
+    """
+    Busca objetos por `inventory_uuid` con coincidencia exacta.
+
+    El filtro de Custom Fields de NetBox es parcial (`loose`) por defecto, por lo que
+    el resultado se vuelve a filtrar localmente para descartar UUIDs que solo
+    contienen el valor buscado.
+    """
+    candidates: list[Record] = list(endpoint.filter(cf_inventory_uuid=uuid))
+    return [obj for obj in candidates if _extract_object_uuid(obj) == uuid]
+
+
+def _is_uuid_safely_unique(
     endpoint: Endpoint,
-    config: NetBoxMappingConfig,
-) -> tuple[list[Record], bool, bool]:
+    existing: list[Record],
+    uuid: str,
+    csv_uuid_counts: Counter[str],
+) -> bool:
     """
-    Busca un objeto primero por UUID y luego por nombre.
+    Valida que un UUID identifique exactamente un nodo tanto en NetBox como en el CSV,
+    condición necesaria para actualizar por UUID sin pisar a otro nodo.
 
-    Retorna:
-        (objetos_encontrados, encontrado_por_uuid, encontrado_por_nombre)
-
-    Política:
-    - UUID presente + encontrado por UUID -> usar resultado UUID.
-    - UUID presente + no encontrado por UUID -> buscar por nombre.
-    - UUID vacío -> buscar directamente por nombre.
+    Retorna True si el UUID aparece una sola vez en ambos sistemas. Solo advierte si
+    hay ambigüedad real (no cuando el nodo simplemente aún no existe en NetBox).
     """
-    has_uuid = not config.is_empty(uuid)
-
-    # 1. Búsqueda por API directa con UUID
-    if has_uuid:
-        existing_by_uuid: list[Record] = list(endpoint.filter(cf_inventory_uuid=uuid))
-        if existing_by_uuid:
-            return existing_by_uuid, True, False
-
-    # 2. Búsqueda por Nombre (Fallback)
-    existing_by_name: list[Record] = list(endpoint.filter(name=machine_name))
-    if not existing_by_name:
-        return [], False, False
-
-    # 3. Inspección local de UUID en los resultados por nombre
-    if has_uuid:
-        for obj in existing_by_name:
-            cf: dict[str, Any] = getattr(obj, "custom_fields", {}) or {}
-            obj_uuid = str(cf.get("inventory_uuid") or "").strip().lower()
-            if obj_uuid == uuid:
-                return [obj], True, False
-
-    # 4. Encontrado únicamente por nombre
-    return existing_by_name, False, True
+    # TODO: encapsular comportamiento de ambas funciones safely_unique en una funcion centralizadora (que ambas funciones implemente llamen a la funcion centralizadora)
+    node_type = get_node_type_from_object(endpoint)
+    nb_count = len(existing)
+    csv_count = csv_uuid_counts.get(uuid, 0)
+    if nb_count == 1 and csv_count == 1:
+        return True
+    if nb_count > 1 or csv_count > 1:
+        log.warning(
+            "UUID '%s' de %s no es único (NetBox=%d, CSV=%d). "
+            "Se intentará resolver por nombre.",
+            uuid,
+            node_type,
+            nb_count,
+            csv_count,
+        )
+    return False
 
 
 def _is_name_safely_unique(
@@ -2977,13 +3023,101 @@ def _is_name_safely_unique(
         return True
     log.warning(
         "SKIP %s '%s': coincidencia por nombre, pero no es único "
-        "(NetBox=%d, CSV=%d). Se requiere UUID para sincronizar.",
+        "(NetBox=%d, CSV=%d). Se requiere UUID único para sincronizar.",
         node_type,
         machine_name,
         nb_count,
         csv_count,
     )
     return False
+
+
+def _resolve_by_uuid(
+    endpoint: Endpoint,
+    uuid: str,
+    csv_uuid_counts: Counter[str],
+    config: NetBoxMappingConfig,
+) -> list[Record]:
+    """
+    Etapa 1 de la resolución de identidad: búsqueda por UUID con validación de unicidad.
+
+    Retorna el objeto (en lista de un elemento) si el UUID es único en NetBox y en el
+    CSV; lista vacía si no se pudo resolver por esta vía.
+    """
+    if config.is_empty(uuid):
+        return []
+
+    existing = _find_by_uuid(endpoint, uuid)
+    if _is_uuid_safely_unique(endpoint, existing, uuid, csv_uuid_counts):
+        return existing
+    return []
+
+
+def _resolve_by_name(
+    endpoint: Endpoint,
+    machine_name: str,
+    uuid: str,
+    csv_name_counts: Counter[str],
+    config: NetBoxMappingConfig,
+) -> list[Record]:
+    """
+    Etapa 2 de la resolución de identidad: búsqueda por nombre con validación de unicidad.
+
+    Decisiones de diseño:
+    - Un objeto hallado por nombre cuyo UUID coincide (sin distinguir mayúsculas) se
+      acepta: cubre UUIDs almacenados con otra capitalización y UUIDs duplicados cuyas
+      filas ya se separaron por nombre en una ejecución previa.
+    - Un objeto con un UUID distinto y no vacío no se actualiza: sobrescribirlo
+      suplantaría la identidad de otro nodo y exige revisión humana.
+
+    Retorna lista vacía si no existe (se debe crear) o el objeto a actualizar.
+    Lanza RowSkipCondition si no se puede garantizar una coincidencia segura.
+    """
+    existing: list[Record] = list(endpoint.filter(name=machine_name))
+    if not existing:
+        return []
+
+    has_uuid = not config.is_empty(uuid)
+    if has_uuid:
+        uuid_matches = [obj for obj in existing if _extract_object_uuid(obj) == uuid]
+        if len(uuid_matches) == 1:
+            return uuid_matches
+
+    if not _is_name_safely_unique(endpoint, existing, machine_name, csv_name_counts):
+        raise RowSkipCondition("No se puede asegurar unicidad por nombre.")
+
+    existing_uuid = _extract_object_uuid(existing[0])
+    if has_uuid and existing_uuid and existing_uuid != uuid:
+        log.warning(
+            "SKIP '%s': existe por nombre pero con otro UUID (NetBox=%s, CSV=%s).",
+            machine_name,
+            existing_uuid,
+            uuid,
+        )
+        raise RowSkipCondition("El nombre pertenece a un nodo con distinto UUID.")
+
+    return existing
+
+
+def _resolve_existing_object(
+    endpoint: Endpoint,
+    machine_name: str,
+    uuid: str,
+    csv_counts: CsvIdentityCounts,
+    config: NetBoxMappingConfig,
+) -> list[Record]:
+    """
+    Resuelve el objeto existente en NetBox en dos etapas: UUID único y, si no se
+    resuelve, nombre único.
+
+    Retorna lista vacía si el nodo debe crearse, o el objeto a actualizar.
+    Lanza RowSkipCondition si ninguna etapa puede garantizar unicidad.
+    """
+    by_uuid = _resolve_by_uuid(endpoint, uuid, csv_counts.uuids, config)
+    if by_uuid:
+        return by_uuid
+
+    return _resolve_by_name(endpoint, machine_name, uuid, csv_counts.names, config)
 
 
 def _execute_sync(
@@ -3057,36 +3191,26 @@ def _validate_sync(
     payload: NetBoxPayload,
     machine_name: str,
     uuid: str,
-    csv_name_counts: Counter[str],
+    csv_counts: CsvIdentityCounts,
     config: NetBoxMappingConfig,
     dry_run: bool,
 ) -> SyncResult:
     """
-    Coordina la búsqueda, validación de seguridad y ejecución de sincronización.
+    Coordina la resolución de identidad, la validación de seguridad y la sincronización.
 
     Decisiones de diseño:
-    - Protección contra colisiones: Si un nodo no se encuentra por su UUID único,
-      se hace un fallback por 'nombre'. Sin embargo, si existen múltiples nodos
-      con el mismo nombre en NetBox o en el CSV, actualizar basándose solo en
-      el nombre provocaría corrupción de datos cruzada.
+    - Identidad en dos etapas: primero UUID (único en NetBox y CSV); si no resuelve,
+      nombre (único en NetBox y CSV). Actualizar a ciegas ante un identificador
+      ambiguo provocaría corrupción de datos cruzada entre nodos.
     - Fail-Fast: Se aborta tempranamente lanzando `RowSkipCondition` si no se puede
       garantizar la unicidad absoluta.
 
     Retorna:
         SyncResult: El resultado final de la operación.
     """
-    existing, found_by_uuid, found_by_name = _find_existing_object(
-        uuid,
-        machine_name,
-        endpoint,
-        config,
+    existing = _resolve_existing_object(
+        endpoint, machine_name, uuid, csv_counts, config
     )
-
-    matched_by_name_only = found_by_name and not found_by_uuid
-    if matched_by_name_only and not _is_name_safely_unique(
-        endpoint, existing, machine_name, csv_name_counts
-    ):
-        raise RowSkipCondition("No se puede asegurar unicidad por nombre.")
 
     return _execute_sync(
         endpoint,
@@ -3106,7 +3230,7 @@ def sync_device(
     cluster_type_map: dict[str, str],
     fallback_cluster_type: NetBoxObject,
     caches: CacheStore,
-    csv_name_counts: Counter[str],
+    csv_counts: CsvIdentityCounts,
     dry_run: bool,
 ) -> tuple[SyncResult, CacheStore]:
     """
@@ -3214,7 +3338,7 @@ def sync_device(
         payload,
         machine_name,
         uuid,
-        csv_name_counts,
+        csv_counts,
         config,
         dry_run,
     )
@@ -3229,7 +3353,7 @@ def sync_vm(
     cluster_type_map: dict[str, str],
     fallback_cluster_type: NetBoxObject,
     caches: CacheStore,
-    csv_name_counts: Counter[str],
+    csv_counts: CsvIdentityCounts,
     dry_run: bool,
 ) -> tuple[SyncResult, CacheStore]:
     """
@@ -3303,7 +3427,7 @@ def sync_vm(
         payload,
         machine_name,
         uuid,
-        csv_name_counts,
+        csv_counts,
         config,
         dry_run,
     )
@@ -4271,7 +4395,7 @@ def _process_node_sync(
     cluster_type_map: dict[str, str],
     fallback_cluster_type: NetBoxObject,
     caches: CacheStore,
-    csv_name_counts: Counter[str],
+    csv_counts: CsvIdentityCounts,
     dry_run: bool,
 ) -> tuple[SyncResult, CacheStore]:
     """
@@ -4297,7 +4421,7 @@ def _process_node_sync(
             cluster_type_map,
             fallback_cluster_type,
             caches,
-            csv_name_counts,
+            csv_counts,
             dry_run,
         )
         site_id = get_netbox_object_id(site)
@@ -4312,7 +4436,7 @@ def _process_node_sync(
             cluster_type_map,
             fallback_cluster_type,
             caches,
-            csv_name_counts,
+            csv_counts,
             dry_run,
         )
         return sync_res, caches
@@ -4328,7 +4452,7 @@ def _sync_row(
     cluster_type_map: dict[str, str],
     fallback_cluster_type: NetBoxObject,
     caches: CacheStore,
-    csv_name_counts: Counter[str],
+    csv_counts: CsvIdentityCounts,
     counts: SyncCounts,
     args: argparse.Namespace,
 ) -> tuple[SyncCounts, CacheStore]:
@@ -4360,7 +4484,7 @@ def _sync_row(
             cluster_type_map,
             fallback_cluster_type,
             caches,
-            csv_name_counts,
+            csv_counts,
             args.dry_run,
         )
         result, obj_id, main_obj = sync_res
@@ -4517,10 +4641,13 @@ def main() -> None:
     # ── Leer y Validar CSV (Fail-Fast) ───────────────────────
     rows = read_and_validate_csv(args.csv, config)
 
-    # ── Conteo global de nombres de máquina ───────────────
+    # ── Conteo global de identidades (nombre y UUID) ─────────
     # Usado para validar unicidad antes de permitir
-    # actualizaciones por nombre (sin UUID).
-    csv_name_counts: Counter[str] = count_machine_names(rows, config)
+    # actualizaciones sobre objetos existentes.
+    csv_counts = CsvIdentityCounts(
+        names=count_machine_names(rows, config),
+        uuids=count_inventory_uuids(rows, config),
+    )
 
     # ── Cargar credenciales ──────────────────────────────────
     url, token, verify_ssl = load_env()
@@ -4582,7 +4709,7 @@ def main() -> None:
             cluster_type_map,
             fallback_cluster_type,
             caches,
-            csv_name_counts,
+            csv_counts,
             counts,
             args,
         )
@@ -4600,7 +4727,7 @@ def main() -> None:
             cluster_type_map,
             fallback_cluster_type,
             caches,
-            csv_name_counts,
+            csv_counts,
             counts,
             args,
         )
