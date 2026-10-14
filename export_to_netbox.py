@@ -2972,6 +2972,38 @@ def _find_by_uuid(endpoint: Endpoint, uuid: str) -> list[Record]:
     return [obj for obj in candidates if _extract_object_uuid(obj) == uuid]
 
 
+def _is_identifier_unique(
+    identifier_label: str,
+    identifier: str,
+    node_type: NodeType,
+    nb_count: int,
+    csv_count: int,
+    warn_when_absent: bool,
+    consequence: str,
+) -> bool:
+    """
+    Regla común de unicidad de un identificador (UUID o nombre) de nodo: debe
+    aparecer exactamente una vez en NetBox y una vez en el CSV.
+
+    `warn_when_absent` distingue si la ausencia en NetBox es esperable (UUID de un
+    nodo nuevo: no se advierte) o ya constituye un fallo (coincidencia por nombre).
+    `consequence` describe qué ocurrirá con la fila al no ser único.
+    """
+    if nb_count == 1 and csv_count == 1:
+        return True
+    if warn_when_absent or nb_count > 1 or csv_count > 1:
+        log.warning(
+            "%s '%s' de %s no es único (NetBox=%d, CSV=%d). %s",
+            identifier_label,
+            identifier,
+            node_type,
+            nb_count,
+            csv_count,
+            consequence,
+        )
+    return False
+
+
 def _is_uuid_safely_unique(
     endpoint: Endpoint,
     existing: list[Record],
@@ -2985,22 +3017,15 @@ def _is_uuid_safely_unique(
     Retorna True si el UUID aparece una sola vez en ambos sistemas. Solo advierte si
     hay ambigüedad real (no cuando el nodo simplemente aún no existe en NetBox).
     """
-    # TODO: encapsular comportamiento de ambas funciones safely_unique en una funcion centralizadora (que ambas funciones implemente llamen a la funcion centralizadora)
-    node_type = get_node_type_from_object(endpoint)
-    nb_count = len(existing)
-    csv_count = csv_uuid_counts.get(uuid, 0)
-    if nb_count == 1 and csv_count == 1:
-        return True
-    if nb_count > 1 or csv_count > 1:
-        log.warning(
-            "UUID '%s' de %s no es único (NetBox=%d, CSV=%d). "
-            "Se intentará resolver por nombre.",
-            uuid,
-            node_type,
-            nb_count,
-            csv_count,
-        )
-    return False
+    return _is_identifier_unique(
+        "UUID",
+        uuid,
+        get_node_type_from_object(endpoint),
+        len(existing),
+        csv_uuid_counts.get(uuid, 0),
+        warn_when_absent=False,
+        consequence="Se intentará resolver por nombre.",
+    )
 
 
 def _is_name_safely_unique(
@@ -3016,20 +3041,15 @@ def _is_name_safely_unique(
 
     Retorna True si el nombre es único en ambos sistemas.
     """
-    node_type = get_node_type_from_object(endpoint)
-    nb_count = len(existing)
-    csv_count = csv_name_counts.get(machine_name, 0)
-    if nb_count == 1 and csv_count == 1:
-        return True
-    log.warning(
-        "SKIP %s '%s': coincidencia por nombre, pero no es único "
-        "(NetBox=%d, CSV=%d). Se requiere UUID único para sincronizar.",
-        node_type,
+    return _is_identifier_unique(
+        "Nombre",
         machine_name,
-        nb_count,
-        csv_count,
+        get_node_type_from_object(endpoint),
+        len(existing),
+        csv_name_counts.get(machine_name, 0),
+        warn_when_absent=True,
+        consequence="SKIP: se requiere UUID único para sincronizar.",
     )
-    return False
 
 
 def _resolve_by_uuid(
