@@ -5,8 +5,8 @@ import pytest
 from merge_inventories import (
     build_parsed_data,
     find_master_duplicated_keys,
+    is_identity_duplicate,
     is_invalid_key,
-    is_replica,
     resolve_key_column,
     resolve_positions,
     validate_rows,
@@ -30,8 +30,8 @@ class TestIsInvalidKey:
         assert is_invalid_key(value) is expected
 
 
-class TestIsReplica:
-    """Valida la detección de réplicas en filas con el mismo UUID."""
+class TestIsIdentityDuplicate:
+    """Valida la detección de duplicados de identidad en filas con el mismo UUID."""
 
     @pytest.fixture
     def base_positions(self) -> dict[str, int]:
@@ -44,32 +44,36 @@ class TestIsReplica:
             "Other": 5,
         }
 
-    def test_exact_replica(self, base_positions: dict[str, int]) -> None:
+    def test_identity_duplicate(self, base_positions: dict[str, int]) -> None:
         row_a = ["uuid1", "host1", "aa:bb", "10.0.0.1", "SN1", "info_A"]
         row_b = ["uuid1", "host1", "aa:bb", "10.0.0.1", "SN1", "info_B"]
-        assert is_replica(row_a, row_b, base_positions) is True
+        assert is_identity_duplicate(row_a, row_b, base_positions) is True
 
-    def test_replica_case_and_whitespace_tolerance(
+    def test_identity_duplicate_case_and_whitespace_tolerance(
         self, base_positions: dict[str, int]
     ) -> None:
         row_a = ["uuid1", " host1 ", "AA:BB", "10.0.0.1", "sn1", ""]
         row_b = ["uuid1", "host1", "aa:bb", "10.0.0.1", "SN1", ""]
-        assert is_replica(row_a, row_b, base_positions) is True
+        assert is_identity_duplicate(row_a, row_b, base_positions) is True
 
-    def test_replica_differs_in_mac(self, base_positions: dict[str, int]) -> None:
+    def test_identity_duplicate_differs_in_mac(
+        self, base_positions: dict[str, int]
+    ) -> None:
         row_a = ["uuid1", "host1", "aa:bb", "10.0.0.1", "SN1", ""]
         row_b = ["uuid1", "host1", "cc:dd", "10.0.0.1", "SN1", ""]
-        assert is_replica(row_a, row_b, base_positions) is False
+        assert is_identity_duplicate(row_a, row_b, base_positions) is False
 
-    def test_replica_out_of_bounds(self, base_positions: dict[str, int]) -> None:
+    def test_identity_duplicate_out_of_bounds(
+        self, base_positions: dict[str, int]
+    ) -> None:
         row_a = ["uuid1", "host1", "aa:bb", "10.0.0.1", "SN1", ""]
         row_b = ["uuid1", "host1", "aa:bb", "10.0.0.1"]
-        assert is_replica(row_a, row_b, base_positions) is True
+        assert is_identity_duplicate(row_a, row_b, base_positions) is True
 
-    def test_replica_missing_positions(self) -> None:
+    def test_identity_duplicate_missing_positions(self) -> None:
         row_a = ["uuid1", "host1"]
         row_b = ["uuid1", "host2"]
-        assert is_replica(row_a, row_b, {}) is True
+        assert is_identity_duplicate(row_a, row_b, {}) is True
 
 
 class TestBuildParsedData:
@@ -88,10 +92,10 @@ class TestBuildParsedData:
         assert "uuid1" in parsed
         assert "uuid2" in parsed
 
-    def test_build_parsed_data_with_replicas(self) -> None:
+    def test_build_parsed_data_with_identity_duplicates(self) -> None:
         rows = [
             ["uuid1", "host1", "mac1", "ip1", "sn1"],
-            ["uuid1", "host1", "mac1", "ip1", "sn1"],  # Perfect replica
+            ["uuid1", "host1", "mac1", "ip1", "sn1"],  # Duplicado de identidad
         ]
         positions = {
             "Nombre maquina": 1,
@@ -133,7 +137,7 @@ class TestFindMasterDuplicatedKeys:
         )
         assert len(dups) == 0
 
-    def test_find_master_with_replicas(self) -> None:
+    def test_find_master_with_identity_duplicates(self) -> None:
         rows = [
             ["uuid1", "host1", "mac1"],
             ["uuid1", "host1", "mac1"],

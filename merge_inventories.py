@@ -113,10 +113,13 @@ def is_invalid_key(value: str) -> bool:
     return is_empty_or_na(value)
 
 
-def is_replica(row_a: list[str], row_b: list[str], positions: dict[str, int]) -> bool:
+def is_identity_duplicate(
+    row_a: list[str], row_b: list[str], positions: dict[str, int]
+) -> bool:
     """
-    Comprueba si dos filas con la misma clave son réplicas exactas basándose
-    en campos fundamentales de identificación.
+    Comprueba si dos filas con la misma clave son el mismo registro de nodo
+    repetido, comparando solo los campos de identidad (nombre, MAC, IP y serial,
+    sin distinguir mayúsculas ni espacios). Los demás campos no se evalúan.
     """
     fields_to_check = ["Nombre maquina", "MAC", "IP", "Serial Number"]
     for field in fields_to_check:
@@ -287,7 +290,7 @@ def build_parsed_data(
         clave -> fila
 
     Las claves duplicadas se registran y quedan excluidas del
-    mapa para impedir cualquier fusión posterior, a menos que sean réplicas.
+    mapa para impedir cualquier fusión posterior, a menos que sean duplicados de identidad.
     """
     parsed_data: dict[str, list[str]] = {}
     duplicated_keys: set[str] = set()
@@ -302,9 +305,9 @@ def build_parsed_data(
             continue
 
         if key in parsed_data:
-            if is_replica(parsed_data[key], fields, positions):
+            if is_identity_duplicate(parsed_data[key], fields, positions):
                 print(
-                    f"[INFO] Réplica detectada en el inventario parseado para la clave "
+                    f"[WARNING] Duplicado de identidad detectado en el inventario parseado para la clave "
                     f"'{key}'. Omitiendo duplicado.",
                     file=sys.stderr,
                 )
@@ -338,7 +341,7 @@ def find_master_duplicated_keys(
     """
     Detecta claves duplicadas en el inventario maestro.
 
-    Retorna el conjunto de claves duplicadas (aquellas que no son réplicas exactas).
+    Retorna el conjunto de claves duplicadas (aquellas que no son duplicados de identidad).
     """
     seen_keys: dict[str, list[str]] = {}
     duplicated_keys: set[str] = set()
@@ -353,9 +356,9 @@ def find_master_duplicated_keys(
             continue
 
         if key in seen_keys:
-            if is_replica(seen_keys[key], fields, positions):
+            if is_identity_duplicate(seen_keys[key], fields, positions):
                 print(
-                    f"[INFO] Réplica detectada en el inventario maestro para la clave "
+                    f"[WARNING] Duplicado de identidad detectado en el inventario maestro para la clave "
                     f"'{key}'. Omitiendo duplicado.",
                     file=sys.stderr,
                 )
