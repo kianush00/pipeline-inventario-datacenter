@@ -1,13 +1,22 @@
+import os
+import sys
 from pathlib import Path
 
 import pytest
 
+import merge_inventories
 from merge_inventories import (
+    CliPaths,
+    MergePlan,
+    build_merge_pairs,
     build_parsed_data,
     find_master_duplicated_keys,
     is_identity_duplicate,
     is_invalid_key,
+    merge_row,
+    parse_cli_paths,
     resolve_key_column,
+    resolve_output_row,
     resolve_positions,
     validate_rows,
 )
@@ -225,3 +234,227 @@ class TestValidateRows:
         valid = validate_rows(rows, 3, Path("dummy.csv"))
         assert len(valid) == 1
         assert valid[0] == ["a", "b", "c"]
+
+
+HEADER_LIST = "UUID|2\nNombre maquina|0\nMAC|1\nIP|1\nSerial Number|0\n"
+CSV_HEADER = "UUID,Nombre maquina,MAC,IP,Serial Number,Extra"
+
+
+class TestMainEndToEnd:
+    """Caracteriza el flujo completo de main(): validaciones, fusión y escritura atómica."""
+
+    @pytest.fixture
+    def workdir(self, tmp_path: Path) -> Path:
+        (tmp_path / "header.txt").write_text(HEADER_LIST, encoding="utf-8")
+        return tmp_path
+
+    @staticmethod
+    def _write(path: Path, rows: list[str], header: str = CSV_HEADER) -> Path:
+        path.write_text("\n".join([header, *rows]) + "\n", encoding="utf-8")
+        return path
+
+    @staticmethod
+    def _run(monkeypatch: pytest.MonkeyPatch, *args: Path | str) -> None:
+        monkeypatch.setattr(sys, "argv", ["merge_inventories.py", *map(str, args)])
+        merge_inventories.main()
+
+    def _paths(self, workdir: Path) -> tuple[Path, Path, Path, Path]:
+        return (
+            workdir / "parsed.csv",
+            workdir / "master.csv",
+            workdir / "out.csv",
+            workdir / "header.txt",
+        )
+
+    def test_merge_semantics(
+        self, workdir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        parsed, master, out, header = self._paths(workdir)
+        # El parseado solo trae las 5 columnas definidas (sin Extra)
+        parsed.write_text(
+            "UUID,Nombre maquina,MAC,IP,Serial Number\n"
+            "u1,h1,NEW-MAC,N/A,SN-PARSED\n"
+            "u2,h2,mac2,ip2,SN2\n",
+            encoding="utf-8",
+        )
+        self._write(
+            master,
+            [
+                "u1,host-master,old-mac,old-ip,SN-MASTER,x1",  # fusiona MAC; IP N/A se conserva
+                "u3,h3,m3,i3,SN3,x3",  # no existe en parseado: sin fusionar
+                "N/A,h4,m4,i4,SN4,x4",  # clave inválida: sin fusionar
+                "dup,h5,m5,i5,SN5,x5",  # clave duplicada en maestro
+                "dup,h6,m6,i6,SN6,x6",
+            ],
+        )
+
+        self._run(monkeypatch, parsed, master, out, header)
+
+        assert out.read_text(encoding="utf-8").splitlines() == [
+            CSV_HEADER,
+            "u1,host-master,NEW-MAC,old-ip,SN-MASTER,x1",
+            "u3,h3,m3,i3,SN3,x3",
+            "N/A,h4,m4,i4,SN4,x4",
+            "dup,h5,m5,i5,SN5,x5",
+            "dup,h6,m6,i6,SN6,x6",
+        ]
+        assert not list(workdir.glob(".*.tmp"))
+
+    def test_duplicated_key_in_parsed_is_not_merged(
+        self, workdir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        parsed, master, out, header = self._paths(workdir)
+        parsed.write_text(
+            "UUID,Nombre maquina,MAC,IP,Serial Number\n"
+            "u1,h1,mac-a,ip,SN\n"
+            "u1,h1,mac-b,ip,SN\n",
+            encoding="utf-8",
+        )
+        self._write(master, ["u1,h1,old,old-ip,SN,x"])
+
+        self._run(monkeypatch, parsed, master, out, header)
+
+        assert (
+            out.read_text(encoding="utf-8").splitlines()[1] == "u1,h1,old,old-ip,SN,x"
+        )
+
+    def test_wrong_argument_count_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        with pytest.raises(SystemExit):
+            self._run(monkeypatch, "only-one.csv")
+        with pytest.raises(SystemExit):
+            self._run(monkeypatch, *["a"] * 5)
+
+    def test_missing_input_file_exits(
+        self, workdir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        parsed, master, out, header = self._paths(workdir)
+        self._write(master, [])
+        with pytest.raises(SystemExit):
+            self._run(monkeypatch, parsed, master, out, header)
+
+    @pytest.mark.parametrize("clobbered", ["parsed", "master"])
+    def test_output_cannot_overwrite_inputs(
+        self, workdir: Path, monkeypatch: pytest.MonkeyPatch, clobbered: str
+    ) -> None:
+        parsed, master, _, header = self._paths(workdir)
+        parsed.write_text(
+            "UUID,Nombre maquina,MAC,IP,Serial Number\n", encoding="utf-8"
+        )
+        self._write(master, [])
+        output = parsed if clobbered == "parsed" else master
+        with pytest.raises(SystemExit):
+            self._run(monkeypatch, parsed, master, output, header)
+
+    def test_temporary_file_removed_when_replace_fails(
+        self, workdir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        parsed, master, out, header = self._paths(workdir)
+        parsed.write_text(
+            "UUID,Nombre maquina,MAC,IP,Serial Number\n", encoding="utf-8"
+        )
+        self._write(master, ["u1,h1,m,i,SN,x"])
+
+        def failing_replace(
+            src: str | os.PathLike[str], dst: str | os.PathLike[str]
+        ) -> None:
+            raise OSError("fallo simulado")
+
+        monkeypatch.setattr(merge_inventories.os, "replace", failing_replace)
+
+        with pytest.raises(OSError):
+            self._run(monkeypatch, parsed, master, out, header)
+
+        assert not out.exists()
+        assert not list(workdir.glob(".*.tmp"))
+
+    def test_row_with_wrong_column_count_is_discarded(
+        self, workdir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        parsed, master, out, header = self._paths(workdir)
+        parsed.write_text(
+            "UUID,Nombre maquina,MAC,IP,Serial Number\n", encoding="utf-8"
+        )
+        self._write(master, ["u1,h1,m,i,SN,x", "truncada,h2"])
+
+        self._run(monkeypatch, parsed, master, out, header)
+
+        assert out.read_text(encoding="utf-8").splitlines() == [
+            CSV_HEADER,
+            "u1,h1,m,i,SN,x",
+        ]
+
+
+class TestParseCliPaths:
+    """Valida el parseo de argumentos y sus valores por defecto."""
+
+    def test_defaults_point_to_script_directory(self) -> None:
+        paths = parse_cli_paths(["prog", "parsed.csv", "master.csv"])
+        script_dir = Path(merge_inventories.__file__).resolve().parent
+        assert paths == CliPaths(
+            Path("parsed.csv"),
+            Path("master.csv"),
+            script_dir / "merged_inventory.csv",
+            script_dir / "rundeck_header_list.txt",
+        )
+
+    def test_explicit_output_and_header_list(self) -> None:
+        paths = parse_cli_paths(["prog", "p.csv", "m.csv", "o.csv", "h.txt"])
+        assert paths.output == Path("o.csv")
+        assert paths.rundeck_header_list == Path("h.txt")
+
+    @pytest.mark.parametrize("argv", [["prog"], ["prog", "a"], ["prog", *"abcde"]])
+    def test_invalid_argument_count_exits(self, argv: list[str]) -> None:
+        with pytest.raises(SystemExit):
+            parse_cli_paths(argv)
+
+
+class TestBuildMergePairs:
+    """Valida que solo las columnas con flag 1 sean fusionables."""
+
+    def test_only_flag_one_columns_are_paired(self) -> None:
+        header_list = [("K", 2), ("A", 0), ("B", 1), ("C", 1)]
+        master = {"K": 0, "A": 1, "B": 2, "C": 5}
+        parsed = {"K": 3, "A": 0, "B": 1, "C": 2}
+        assert build_merge_pairs(header_list, master, parsed) == [(2, 1), (5, 2)]
+
+
+class TestMergeRow:
+    """Valida la fusión pura de una fila."""
+
+    def test_overrides_only_non_empty_and_does_not_mutate(self) -> None:
+        master = ["k", "old1", "old2"]
+        parsed = ["k", "new1", "N/A"]
+        merged = merge_row(master, parsed, [(1, 1), (2, 2)])
+        assert merged == ["k", "new1", "old2"]
+        assert master == ["k", "old1", "old2"]
+
+    @pytest.mark.parametrize("empty", ["", "  ", "N/A"])
+    def test_empty_parsed_values_keep_master(self, empty: str) -> None:
+        assert merge_row(["k", "old"], ["k", empty], [(1, 1)]) == ["k", "old"]
+
+
+class TestResolveOutputRow:
+    """Valida el destino de cada fila del maestro (LEFT JOIN)."""
+
+    @pytest.fixture
+    def plan(self) -> MergePlan:
+        return MergePlan(
+            key_master_idx=0,
+            parsed_data={"u1": ["u1", "new"]},
+            master_duplicated_keys={"dup"},
+            merge_pairs=[(1, 1)],
+        )
+
+    def test_merges_when_key_is_valid_and_unique(self, plan: MergePlan) -> None:
+        assert resolve_output_row(2, ["U1", "old"], plan) == ["U1", "new"]
+
+    @pytest.mark.parametrize("key", ["", "N/A", "dup", "missing"])
+    def test_keeps_row_unmerged(self, plan: MergePlan, key: str) -> None:
+        row = [key, "old"]
+        assert resolve_output_row(2, row, plan) == [key, "old"]
+
+    def test_missing_key_logs_info_with_line_number(
+        self, plan: MergePlan, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        resolve_output_row(7, ["missing", "old"], plan)
+        assert "Línea 7" in capsys.readouterr().err

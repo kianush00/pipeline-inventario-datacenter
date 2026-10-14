@@ -60,6 +60,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 
 from base_inventory import (
     error,
@@ -343,6 +344,7 @@ def find_master_duplicated_keys(
 
     Retorna el conjunto de claves duplicadas (aquellas que no son duplicados de identidad).
     """
+    # TODO: función con caracteristicas muy similares a build_parsed_data. revisar si es factible encapsular comportamiento repetitivo en una nueva función que centralice ambas funciones.
     seen_keys: dict[str, list[str]] = {}
     duplicated_keys: set[str] = set()
 
@@ -380,169 +382,173 @@ def find_master_duplicated_keys(
 
 
 # ============================================================
-# MAIN
+# ESTRUCTURAS DE DATOS DEL FLUJO PRINCIPAL
+# ============================================================
+
+USAGE_SYNOPSIS = (
+    "parsed_job_output.csv "
+    "prepared_master_inventory.csv "
+    "[merged_inventory.csv] "
+    "[rundeck_header_list.txt]"
+)
+
+
+class CliPaths(NamedTuple):
+    """Rutas resueltas a partir de los argumentos de línea de comandos."""
+
+    parsed: Path
+    master: Path
+    output: Path
+    rundeck_header_list: Path
+
+
+class LoadedInventory(NamedTuple):
+    """Inventario CSV ya leído, con sus posiciones de columna y filas válidas."""
+
+    header_line: str
+    header_fields: list[str]
+    positions: dict[str, int]
+    rows: list[list[str]]
+
+
+class MergePlan(NamedTuple):
+    """Datos de solo lectura necesarios para decidir el destino de cada fila del maestro."""
+
+    key_master_idx: int
+    parsed_data: dict[str, list[str]]
+    master_duplicated_keys: set[str]
+    merge_pairs: list[tuple[int, int]]
+
+
+# ============================================================
+# ARGUMENTOS Y VALIDACIÓN DE RUTAS
 # ============================================================
 
 
-def main() -> None:
-    if len(sys.argv) < 3:
-        usage(
-            f"Uso: {sys.argv[0]} "
-            "parsed_job_output.csv "
-            "prepared_master_inventory.csv "
-            "[merged_inventory.csv] "
-            "[rundeck_header_list.txt]"
-        )
+def parse_cli_paths(argv: list[str]) -> CliPaths:
+    """
+    Interpreta los argumentos de línea de comandos y aplica los valores por defecto
+    de la ruta de salida y del rundeck_header_list (directorio de este script).
 
-    if len(sys.argv) > 5:
-        usage(
-            f"Cantidad de argumentos inválida.\n"
-            f"Uso: {sys.argv[0]} "
-            "parsed_job_output.csv "
-            "prepared_master_inventory.csv "
-            "[merged_inventory.csv] "
-            "[rundeck_header_list.txt]"
-        )
+    Termina el proceso con un mensaje de uso si la cantidad de argumentos es inválida.
+    """
+    program = argv[0]
+    if len(argv) < 3:
+        usage(f"Uso: {program} {USAGE_SYNOPSIS}")
 
-    input_parsed_path = Path(sys.argv[1])
-    input_master_path = Path(sys.argv[2])
-    output_path = (
-        Path(sys.argv[3])
-        if len(sys.argv) >= 4
-        else Path(__file__).resolve().parent / "merged_inventory.csv"
-    )
-    rundeck_header_list_path = (
-        Path(sys.argv[4])
-        if len(sys.argv) >= 5
-        else Path(__file__).resolve().parent / "rundeck_header_list.txt"
+    if len(argv) > 5:
+        usage(f"Cantidad de argumentos inválida.\nUso: {program} {USAGE_SYNOPSIS}")
+
+    script_dir = Path(__file__).resolve().parent
+    return CliPaths(
+        parsed=Path(argv[1]),
+        master=Path(argv[2]),
+        output=Path(argv[3]) if len(argv) >= 4 else script_dir / "merged_inventory.csv",
+        rundeck_header_list=(
+            Path(argv[4]) if len(argv) >= 5 else script_dir / "rundeck_header_list.txt"
+        ),
     )
 
-    for path, label in (
-        (input_parsed_path, "inventario parseado"),
-        (input_master_path, "inventario maestro"),
-    ):
+
+def validate_paths(paths: CliPaths) -> None:
+    """
+    Verifica que existan los inventarios de entrada y que la salida no los pise.
+
+    Termina el proceso con error si alguna validación falla.
+    """
+    labeled_inputs = (
+        (paths.parsed, "inventario parseado"),
+        (paths.master, "inventario maestro"),
+    )
+    ensure_inputs_exist(labeled_inputs)
+    ensure_output_does_not_overwrite(paths.output, labeled_inputs)
+
+
+def ensure_inputs_exist(labeled_inputs: tuple[tuple[Path, str], ...]) -> None:
+    """Termina el proceso con error si algún inventario de entrada no existe."""
+    for path, label in labeled_inputs:
         if not path.is_file():
             error(f"No se encontró el {label}: {path}")
 
-    # --------------------------------------------------------
-    # Validar colisiones entre archivos de entrada y salida.
-    # --------------------------------------------------------
+
+def ensure_output_does_not_overwrite(
+    output_path: Path, labeled_inputs: tuple[tuple[Path, str], ...]
+) -> None:
+    """Termina el proceso con error si la salida coincide con algún inventario de entrada."""
     resolved_output = output_path.resolve()
-    resolved_parsed = input_parsed_path.resolve()
-    resolved_master = input_master_path.resolve()
+    for path, label in labeled_inputs:
+        if resolved_output == path.resolve():
+            error(
+                f"El archivo de salida no puede ser el mismo archivo "
+                f"que el {label}:\n"
+                f"  {output_path}"
+            )
 
-    if resolved_output == resolved_parsed:
-        error(
-            "El archivo de salida no puede ser el mismo archivo "
-            "que el inventario parseado:\n"
-            f"  {output_path}"
-        )
 
-    if resolved_output == resolved_master:
-        error(
-            "El archivo de salida no puede ser el mismo archivo "
-            "que el inventario maestro:\n"
-            f"  {output_path}"
-        )
+# ============================================================
+# CARGA DE INVENTARIOS
+# ============================================================
 
-    # --------------------------------------------------------
-    # Cargar rundeck_header_list.
-    # --------------------------------------------------------
-    rundeck_header_list = load_rundeck_header_list(rundeck_header_list_path)
-    defined_fields = len(rundeck_header_list)
 
-    # --------------------------------------------------------
-    # Determinar la columna de unión a partir del flag 2.
-    # --------------------------------------------------------
-    key_name = resolve_key_column(rundeck_header_list)
+def load_inventory(
+    csv_path: Path,
+    rundeck_header_list: list[tuple[str, int]],
+    restrict_to_defined_columns: bool,
+) -> LoadedInventory:
+    """
+    Lee un inventario CSV, resuelve las posiciones de sus columnas y descarta las
+    filas con cantidad de campos inválida.
 
-    # --------------------------------------------------------
-    # Leer completamente el inventario parseado.
-    # --------------------------------------------------------
-    (
-        _parsed_header_line,
-        parsed_header_fields,
-        parsed_rows,
-    ) = load_csv_data(input_parsed_path)
-
-    parsed_positions = resolve_positions(
-        rundeck_header_list,
-        parsed_header_fields,
-        input_parsed_path,
+    Decisiones de diseño:
+    - El inventario parseado solo contiene las columnas definidas en
+      rundeck_header_list (`restrict_to_defined_columns=True`); el maestro puede
+      traer columnas adicionales, por lo que se valida contra su propio header.
+    """
+    header_line, header_fields, rows = load_csv_data(csv_path)
+    positions = resolve_positions(rundeck_header_list, header_fields, csv_path)
+    expected_columns = (
+        len(rundeck_header_list) if restrict_to_defined_columns else len(header_fields)
+    )
+    return LoadedInventory(
+        header_line,
+        header_fields,
+        positions,
+        validate_rows(rows, expected_columns, csv_path),
     )
 
-    key_parsed_idx = parsed_positions[key_name]
 
-    parsed_rows = validate_rows(
-        parsed_rows,
-        defined_fields,
-        input_parsed_path,
-    )
+def build_merge_pairs(
+    rundeck_header_list: list[tuple[str, int]],
+    master_positions: dict[str, int],
+    parsed_positions: dict[str, int],
+) -> list[tuple[int, int]]:
+    """
+    Construye los pares (índice_maestro, índice_parseado) de las columnas fusionables.
 
-    # --------------------------------------------------------
-    # Leer completamente el inventario maestro.
-    # --------------------------------------------------------
-    (
-        master_header_line,
-        master_header_fields,
-        master_rows,
-    ) = load_csv_data(input_master_path)
+    Solo las columnas con flag 1 se fusionan:
+        flag 0 -> nunca se fusiona.
+        flag 1 -> puede actualizarse desde el parseado.
+        flag 2 -> clave de unión; nunca se sobrescribe.
+    """
+    return [
+        (master_positions[name], parsed_positions[name])
+        for name, flag in rundeck_header_list
+        if flag == 1
+    ]
 
-    master_positions = resolve_positions(
-        rundeck_header_list,
-        master_header_fields,
-        input_master_path,
-    )
 
-    key_master_idx = master_positions[key_name]
-    master_total_columns = len(master_header_fields)
+def print_summary(
+    defined_fields: int,
+    master: LoadedInventory,
+    key_name: str,
+    key_parsed_idx: int,
+    plan: MergePlan,
+    parsed_duplicated_keys: set[str],
+) -> None:
+    """Imprime el resumen informativo previo a la fusión."""
+    master_total_columns = len(master.header_fields)
     extra_columns = master_total_columns - defined_fields
 
-    master_rows = validate_rows(
-        master_rows,
-        master_total_columns,
-        input_master_path,
-    )
-
-    # --------------------------------------------------------
-    # Construir mapa de fusión.
-    #
-    # Solo flag 1.
-    #
-    # flag 0 -> nunca se fusiona.
-    # flag 1 -> puede actualizarse desde el parseado.
-    # flag 2 -> clave de unión; nunca se sobrescribe.
-    # --------------------------------------------------------
-    merge_pairs: list[tuple[int, int]] = []
-
-    for name, flag in rundeck_header_list:
-        if flag != 1:
-            continue
-
-        master_idx = master_positions[name]
-        parsed_idx = parsed_positions[name]
-
-        merge_pairs.append((master_idx, parsed_idx))
-
-    # --------------------------------------------------------
-    # Validar unicidad de claves usando las filas ya cargadas
-    # en memoria.
-    # --------------------------------------------------------
-    parsed_data, parsed_duplicated_keys = build_parsed_data(
-        parsed_rows,
-        key_parsed_idx,
-        parsed_positions,
-    )
-
-    master_duplicated_keys = find_master_duplicated_keys(
-        master_rows,
-        key_master_idx,
-        master_positions,
-    )
-
-    # --------------------------------------------------------
-    # Resumen informativo.
-    # --------------------------------------------------------
     print(f"Columnas definidas en rundeck_header_list : {defined_fields}")
     print(f"Columnas totales en el maestro    : {master_total_columns}")
 
@@ -550,17 +556,86 @@ def main() -> None:
         print(f"Columnas adicionales del maestro  : {extra_columns}")
 
     print(f"Clave de unión                    : {key_name}")
-    print(f"Posición de clave en el maestro   : {key_master_idx + 1}")
+    print(f"Posición de clave en el maestro   : {plan.key_master_idx + 1}")
     print(f"Posición de clave en el parseado  : {key_parsed_idx + 1}")
-    print(f"Claves válidas en el parseado     : {len(parsed_data)}")
+    print(f"Claves válidas en el parseado     : {len(plan.parsed_data)}")
     print(f"Claves duplicadas en el parseado  : {len(parsed_duplicated_keys)}")
-    print(f"Claves duplicadas en el maestro   : {len(master_duplicated_keys)}")
+    print(f"Claves duplicadas en el maestro   : {len(plan.master_duplicated_keys)}")
 
-    # --------------------------------------------------------
-    # Crear archivo temporal en el mismo directorio que la
-    # salida para permitir un reemplazo atómico mediante
-    # os.replace().
-    # --------------------------------------------------------
+
+# ============================================================
+# FUSIÓN DE FILAS
+# ============================================================
+
+
+def merge_row(
+    master_fields: list[str],
+    parsed_fields: list[str],
+    merge_pairs: list[tuple[int, int]],
+) -> list[str]:
+    """
+    Retorna una copia de la fila del maestro con las columnas fusionables
+    sobrescritas por el valor parseado, salvo que este sea vacío o "N/A".
+    """
+    merged = list(master_fields)
+    for master_idx, parsed_idx in merge_pairs:
+        parsed_value = parsed_fields[parsed_idx]
+        if is_empty_or_na(parsed_value):
+            continue
+        merged[master_idx] = parsed_value
+    return merged
+
+
+def resolve_output_row(
+    line_number: int,
+    master_fields: list[str],
+    plan: MergePlan,
+) -> list[str]:
+    """
+    Decide la fila de salida para una fila del maestro (comportamiento LEFT JOIN).
+
+    La fila se conserva sin fusionar si su clave es inválida, está duplicada en el
+    maestro o no existe en el parseado; solo se fusiona si la clave es válida y
+    única en ambos inventarios.
+    """
+    key = strip_quotes(master_fields[plan.key_master_idx]).lower()
+
+    if is_invalid_key(key) or key in plan.master_duplicated_keys:
+        return master_fields
+
+    parsed_fields = plan.parsed_data.get(key)
+    if parsed_fields is None:
+        print(
+            f"[INFO] Línea {line_number} del inventario maestro: "
+            f"la clave '{key}' no existe en el inventario "
+            "parseado. La fila se conservará sin fusionar.",
+            file=sys.stderr,
+        )
+        return master_fields
+
+    return merge_row(master_fields, parsed_fields, plan.merge_pairs)
+
+
+# ============================================================
+# ESCRITURA ATÓMICA
+# ============================================================
+
+
+def write_merged_inventory(
+    output_path: Path,
+    master: LoadedInventory,
+    plan: MergePlan,
+) -> None:
+    """
+    Escribe el inventario fusionado de forma atómica.
+
+    Decisiones de diseño:
+    - Se escribe en un archivo temporal del mismo directorio que la salida para que
+      `os.replace()` sea atómico; la salida definitiva solo se reemplaza si todo el
+      procesamiento terminó correctamente.
+    - Si el proceso falla antes del reemplazo, el temporal se elimina para no dejar
+      residuos.
+    """
     temporary_output_path: Path | None = None
 
     try:
@@ -574,91 +649,74 @@ def main() -> None:
             delete=False,
         ) as out_f:
             temporary_output_path = Path(out_f.name)
+            out_f.write(master.header_line + "\n")
 
-            # ------------------------------------------------
-            # Escribir header del maestro sin modificar.
-            # ------------------------------------------------
-            out_f.write(master_header_line + "\n")
+            for line_number, fields in enumerate(master.rows, start=2):
+                output_row = resolve_output_row(line_number, fields, plan)
+                out_f.write(",".join(output_row) + "\n")
 
-            # ------------------------------------------------
-            # Procesar todas las filas del maestro ya cargadas
-            # en memoria.
-            # ------------------------------------------------
-            for line_number, fields in enumerate(master_rows, start=2):
-                key = strip_quotes(fields[key_master_idx]).lower()
-
-                # ------------------------------------------------
-                # Clave inválida:
-                # conservar la fila del maestro sin fusionar.
-                # ------------------------------------------------
-                if is_invalid_key(key):
-                    out_f.write(",".join(fields) + "\n")
-                    continue
-
-                # ------------------------------------------------
-                # Clave duplicada en el maestro:
-                # conservar la fila sin fusionar.
-                # ------------------------------------------------
-                if key in master_duplicated_keys:
-                    out_f.write(",".join(fields) + "\n")
-                    continue
-
-                # ------------------------------------------------
-                # La clave no existe en el parseado:
-                # LEFT JOIN -> conservar la fila del maestro.
-                # ------------------------------------------------
-                if key not in parsed_data:
-                    print(
-                        f"[INFO] Línea {line_number} del inventario maestro: "
-                        f"la clave '{key}' no existe en el inventario "
-                        "parseado. La fila se conservará sin fusionar.",
-                        file=sys.stderr,
-                    )
-                    out_f.write(",".join(fields) + "\n")
-                    continue
-
-                # ------------------------------------------------
-                # La clave existe y es única en ambos inventarios.
-                # Fusionar solamente las columnas con flag 1.
-                # ------------------------------------------------
-                parsed_fields = parsed_data[key]
-
-                for master_idx, parsed_idx in merge_pairs:
-                    parsed_value = parsed_fields[parsed_idx]
-
-                    if is_empty_or_na(parsed_value):
-                        continue
-
-                    fields[master_idx] = parsed_value
-
-                out_f.write(",".join(fields) + "\n")
-
-        # --------------------------------------------------------
-        # El archivo temporal solo reemplaza la salida definitiva
-        # si todo el procesamiento anterior terminó correctamente.
-        # --------------------------------------------------------
         os.replace(temporary_output_path, output_path)
         temporary_output_path = None
 
     finally:
-        # --------------------------------------------------------
-        # Si el proceso falló antes del reemplazo, eliminar el
-        # archivo temporal para no dejar residuos.
-        # --------------------------------------------------------
         if temporary_output_path is not None:
             try:
                 temporary_output_path.unlink()
             except FileNotFoundError:
                 pass
 
-    # --------------------------------------------------------
-    # Resultado.
-    # --------------------------------------------------------
+
+# ============================================================
+# MAIN
+# ============================================================
+
+
+def main() -> None:
+    paths = parse_cli_paths(sys.argv)
+    validate_paths(paths)
+
+    rundeck_header_list = load_rundeck_header_list(paths.rundeck_header_list)
+    key_name = resolve_key_column(rundeck_header_list)
+
+    parsed = load_inventory(
+        paths.parsed, rundeck_header_list, restrict_to_defined_columns=True
+    )
+    master = load_inventory(
+        paths.master, rundeck_header_list, restrict_to_defined_columns=False
+    )
+
+    key_parsed_idx = parsed.positions[key_name]
+    parsed_data, parsed_duplicated_keys = build_parsed_data(
+        parsed.rows, key_parsed_idx, parsed.positions
+    )
+    key_master_idx = master.positions[key_name]
+    plan = MergePlan(
+        key_master_idx=key_master_idx,
+        parsed_data=parsed_data,
+        master_duplicated_keys=find_master_duplicated_keys(
+            master.rows, key_master_idx, master.positions
+        ),
+        merge_pairs=build_merge_pairs(
+            rundeck_header_list, master.positions, parsed.positions
+        ),
+    )
+
+    print_summary(
+        len(rundeck_header_list),
+        master,
+        key_name,
+        key_parsed_idx,
+        plan,
+        parsed_duplicated_keys,
+    )
+
+    write_merged_inventory(paths.output, master, plan)
+
     print()
     print("[OK] Inventarios fusionados correctamente.")
-    print(f"Inventario parseado : {input_parsed_path}")
-    print(f"Inventario maestro  : {input_master_path}")
-    print(f"Inventario salida   : {output_path}")
+    print(f"Inventario parseado : {paths.parsed}")
+    print(f"Inventario maestro  : {paths.master}")
+    print(f"Inventario salida   : {paths.output}")
 
 
 if __name__ == "__main__":
