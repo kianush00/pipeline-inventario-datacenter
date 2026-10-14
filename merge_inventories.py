@@ -72,6 +72,52 @@ from base_inventory import (
 )
 
 # ============================================================
+# ESTRUCTURAS DE DATOS DEL FLUJO PRINCIPAL
+# ============================================================
+
+USAGE_SYNOPSIS = (
+    "parsed_job_output.csv "
+    "prepared_master_inventory.csv "
+    "[merged_inventory.csv] "
+    "[rundeck_header_list.txt]"
+)
+
+
+class KeyedRows(NamedTuple):
+    """Filas de un inventario indexadas por clave de unión."""
+
+    rows_by_key: dict[str, list[str]]
+    duplicated_keys: set[str]
+
+
+class CliPaths(NamedTuple):
+    """Rutas resueltas a partir de los argumentos de línea de comandos."""
+
+    parsed: Path
+    master: Path
+    output: Path
+    rundeck_header_list: Path
+
+
+class LoadedInventory(NamedTuple):
+    """Inventario CSV ya leído, con sus posiciones de columna y filas válidas."""
+
+    header_line: str
+    header_fields: list[str]
+    positions: dict[str, int]
+    rows: list[list[str]]
+
+
+class MergePlan(NamedTuple):
+    """Datos de solo lectura necesarios para decidir el destino de cada fila del maestro."""
+
+    key_master_idx: int
+    parsed_data: dict[str, list[str]]
+    master_duplicated_keys: set[str]
+    merge_pairs: list[tuple[int, int]]
+
+
+# ============================================================
 # VALIDAR Y RESOLVER CLAVE DE UNIÓN
 # ============================================================
 
@@ -81,7 +127,6 @@ def resolve_key_column(
 ) -> str:
     """
     Determina la columna utilizada como clave de unión.
-
     Debe existir exactamente una entrada con FLAG 2.
 
     Retorna:
@@ -108,7 +153,6 @@ def is_invalid_key(value: str) -> bool:
     """
     Retorna True si el valor no puede utilizarse como clave
     de unión.
-
     Una clave es inválida solamente si está vacía o es "N/A".
     """
     return is_empty_or_na(value)
@@ -280,11 +324,65 @@ def validate_rows(
 # ============================================================
 
 
+def index_rows_by_unique_key(
+    rows: list[list[str]],
+    key_idx: int,
+    positions: dict[str, int],
+    inventory_label: str,
+) -> KeyedRows:
+    """
+    Indexa las filas por clave de unión separando las claves únicas de las duplicadas.
+
+    Decisiones de diseño:
+    - Lógica común al inventario parseado y al maestro (`inventory_label` solo
+      contextualiza los logs), para que ambos apliquen exactamente la misma regla.
+    - Las filas con clave inválida se ignoran. Si una clave se repite y las filas
+      son duplicados de identidad, se conserva la primera y se omite el resto; si
+      difieren, la clave se marca como duplicada y se excluye del índice para
+      impedir cualquier fusión posterior.
+
+    Retorna:
+        KeyedRows: (clave -> fila única, claves duplicadas)
+    """
+    unique_rows: dict[str, list[str]] = {}
+    duplicated_keys: set[str] = set()
+
+    for fields in rows:
+        key = strip_quotes(fields[key_idx]).lower()
+
+        if is_invalid_key(key) or key in duplicated_keys:
+            continue
+
+        if key not in unique_rows:
+            unique_rows[key] = fields
+            continue
+
+        if is_identity_duplicate(unique_rows[key], fields, positions):
+            print(
+                f"[WARNING] Duplicado de identidad detectado en el inventario "
+                f"{inventory_label} para la clave '{key}'. Omitiendo duplicado.",
+                file=sys.stderr,
+            )
+            continue
+
+        del unique_rows[key]
+        duplicated_keys.add(key)
+
+    for key in sorted(duplicated_keys):
+        print(
+            f"[WARNING] Clave duplicada en el inventario {inventory_label}: "
+            f"'{key}'. Las filas con esta clave difieren y no serán fusionadas.",
+            file=sys.stderr,
+        )
+
+    return KeyedRows(unique_rows, duplicated_keys)
+
+
 def build_parsed_data(
     rows: list[list[str]],
     key_idx: int,
     positions: dict[str, int],
-) -> tuple[dict[str, list[str]], set[str]]:
+) -> KeyedRows:
     """
     Construye un mapa:
 
@@ -293,40 +391,7 @@ def build_parsed_data(
     Las claves duplicadas se registran y quedan excluidas del
     mapa para impedir cualquier fusión posterior, a menos que sean duplicados de identidad.
     """
-    parsed_data: dict[str, list[str]] = {}
-    duplicated_keys: set[str] = set()
-
-    for fields in rows:
-        key = strip_quotes(fields[key_idx]).lower()
-
-        if is_invalid_key(key):
-            continue
-
-        if key in duplicated_keys:
-            continue
-
-        if key in parsed_data:
-            if is_identity_duplicate(parsed_data[key], fields, positions):
-                print(
-                    f"[WARNING] Duplicado de identidad detectado en el inventario parseado para la clave "
-                    f"'{key}'. Omitiendo duplicado.",
-                    file=sys.stderr,
-                )
-                continue
-
-            print(
-                f"[WARNING] Clave duplicada en el inventario "
-                f"parseado: '{key}'. Las filas con esta clave "
-                "difieren y no serán fusionadas.",
-                file=sys.stderr,
-            )
-            del parsed_data[key]
-            duplicated_keys.add(key)
-            continue
-
-        parsed_data[key] = fields
-
-    return parsed_data, duplicated_keys
+    return index_rows_by_unique_key(rows, key_idx, positions, "parseado")
 
 
 # ============================================================
@@ -344,80 +409,7 @@ def find_master_duplicated_keys(
 
     Retorna el conjunto de claves duplicadas (aquellas que no son duplicados de identidad).
     """
-    # TODO: función con caracteristicas muy similares a build_parsed_data. revisar si es factible encapsular comportamiento repetitivo en una nueva función que centralice ambas funciones.
-    seen_keys: dict[str, list[str]] = {}
-    duplicated_keys: set[str] = set()
-
-    for fields in rows:
-        key = strip_quotes(fields[key_idx]).lower()
-
-        if is_invalid_key(key):
-            continue
-
-        if key in duplicated_keys:
-            continue
-
-        if key in seen_keys:
-            if is_identity_duplicate(seen_keys[key], fields, positions):
-                print(
-                    f"[WARNING] Duplicado de identidad detectado en el inventario maestro para la clave "
-                    f"'{key}'. Omitiendo duplicado.",
-                    file=sys.stderr,
-                )
-                continue
-
-            duplicated_keys.add(key)
-            del seen_keys[key]
-        else:
-            seen_keys[key] = fields
-
-    for key in sorted(duplicated_keys):
-        print(
-            f"[WARNING] Clave duplicada en el inventario maestro: "
-            f"'{key}'. Las filas con esta clave difieren y no serán fusionadas.",
-            file=sys.stderr,
-        )
-
-    return duplicated_keys
-
-
-# ============================================================
-# ESTRUCTURAS DE DATOS DEL FLUJO PRINCIPAL
-# ============================================================
-
-USAGE_SYNOPSIS = (
-    "parsed_job_output.csv "
-    "prepared_master_inventory.csv "
-    "[merged_inventory.csv] "
-    "[rundeck_header_list.txt]"
-)
-
-
-class CliPaths(NamedTuple):
-    """Rutas resueltas a partir de los argumentos de línea de comandos."""
-
-    parsed: Path
-    master: Path
-    output: Path
-    rundeck_header_list: Path
-
-
-class LoadedInventory(NamedTuple):
-    """Inventario CSV ya leído, con sus posiciones de columna y filas válidas."""
-
-    header_line: str
-    header_fields: list[str]
-    positions: dict[str, int]
-    rows: list[list[str]]
-
-
-class MergePlan(NamedTuple):
-    """Datos de solo lectura necesarios para decidir el destino de cada fila del maestro."""
-
-    key_master_idx: int
-    parsed_data: dict[str, list[str]]
-    master_duplicated_keys: set[str]
-    merge_pairs: list[tuple[int, int]]
+    return index_rows_by_unique_key(rows, key_idx, positions, "maestro").duplicated_keys
 
 
 # ============================================================

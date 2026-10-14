@@ -1,6 +1,7 @@
 import os
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -11,6 +12,7 @@ from merge_inventories import (
     build_merge_pairs,
     build_parsed_data,
     find_master_duplicated_keys,
+    index_rows_by_unique_key,
     is_identity_duplicate,
     is_invalid_key,
     merge_row,
@@ -164,6 +166,50 @@ class TestFindMasterDuplicatedKeys:
         dups = find_master_duplicated_keys(rows, key_idx=0, positions=positions)
         assert "uuid1" in dups
         assert len(dups) == 1
+
+
+class TestIndexRowsByUniqueKey:
+    """Valida la regla común de unicidad compartida por parseado y maestro."""
+
+    POSITIONS: ClassVar[dict[str, int]] = {"Nombre maquina": 1, "MAC": 2}
+
+    def test_first_row_kept_for_identity_duplicates_and_invalid_keys_ignored(
+        self,
+    ) -> None:
+        rows = [
+            ["u1", "h1", "m1", "extra-A"],
+            ["u1", "h1", "m1", "extra-B"],
+            ["N/A", "h2", "m2", "x"],
+            ["", "h3", "m3", "x"],
+        ]
+        unique, dups = index_rows_by_unique_key(rows, 0, self.POSITIONS, "parseado")
+        assert unique == {"u1": rows[0]}
+        assert dups == set()
+
+    def test_clashing_key_stays_excluded_even_with_further_rows(self) -> None:
+        rows = [
+            ["u1", "h1", "m1"],
+            ["u1", "h2", "m1"],
+            ["u1", "h1", "m1"],  # tercera fila: no debe reintroducir la clave
+        ]
+        unique, dups = index_rows_by_unique_key(rows, 0, self.POSITIONS, "maestro")
+        assert unique == {}
+        assert dups == {"u1"}
+
+    def test_keys_are_normalized_to_lowercase(self) -> None:
+        rows = [["UUID-1", "h1", "m1"], ["uuid-1", "h2", "m1"]]
+        _, dups = index_rows_by_unique_key(rows, 0, self.POSITIONS, "maestro")
+        assert dups == {"uuid-1"}
+
+    @pytest.mark.parametrize("label", ["parseado", "maestro"])
+    def test_logs_identify_the_inventory(
+        self, label: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rows = [["u1", "h1", "m1"], ["u1", "h2", "m1"]]
+        index_rows_by_unique_key(rows, 0, self.POSITIONS, label)
+        assert (
+            f"Clave duplicada en el inventario {label}: 'u1'" in capsys.readouterr().err
+        )
 
 
 class TestResolvePositions:
