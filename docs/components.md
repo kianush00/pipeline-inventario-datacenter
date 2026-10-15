@@ -83,11 +83,13 @@ Overlays the parsed inventory onto the prepared master using the column marked w
 
 | Aspect | Detail |
 | --------- | --------- |
-| **Inputs** | `parsed_job_output.csv` + `prepared_master_inventory.csv` |
-| **Output** | `merged_inventory.csv` |
+| **Inputs** | `--parsed`/`-p parsed_job_output.csv` + `--master`/`-m prepared_master_inventory.csv` (required named options) |
+| **Output** | `--output`/`-o merged_inventory.csv` (optional; defaults to `merged_inventory.csv` next to the script) |
+| **Column schema** | `--header-list`/`-l rundeck_header_list.txt` (optional; defaults to the file next to the script) |
 | **Preservation** | Keeps all extra rows and columns from the master |
 | **Update** | Only updates fields with flag `1` |
 | **Security** | Never overwrites the merge key. Excludes rows with invalid or duplicate keys |
+| **Argument-order checks** | The inventories are named options (not positional) so swapping the files cannot silently invert the merge. Additionally, aborts if the parsed inventory has columns beyond `rundeck_header_list` (it is likely the master, i.e. swapped arguments); warns if no master key matches the parsed inventory |
 
 ---
 

@@ -47,18 +47,26 @@ La unión se comporta como un LEFT JOIN:
 
 Uso:
     python3 merge_inventories.py \
-        parsed_job_output.csv \
-        prepared_master_inventory.csv \
-        [merged_inventory.csv] \
-        [rundeck_header_list.txt]
+        --parsed parsed_job_output.csv \
+        --master prepared_master_inventory.csv \
+        [--output merged_inventory.csv] \
+        [--header-list rundeck_header_list.txt]
 
-Si no se indica la ruta de rundeck_header_list.txt, se busca un archivo
-llamado "rundeck_header_list.txt" en el mismo directorio que este script.
+Cada opción tiene una forma corta: -p, -m, -o y -l respectivamente.
+
+Los inventarios se indican con opciones nombradas (y no por posición) para que
+un orden accidental de los archivos no invierta silenciosamente la fusión.
+
+Si no se indica --header-list, se busca un archivo llamado
+"rundeck_header_list.txt" en el mismo directorio que este script. Si no se
+indica --output, se escribe "merged_inventory.csv" en ese mismo directorio.
 """
 
+import argparse
 import os
 import sys
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -68,19 +76,11 @@ from base_inventory import (
     load_rundeck_header_list,
     split_quoted_csv_line,
     strip_quotes,
-    usage,
 )
 
 # ============================================================
 # ESTRUCTURAS DE DATOS DEL FLUJO PRINCIPAL
 # ============================================================
-
-USAGE_SYNOPSIS = (
-    "parsed_job_output.csv "
-    "prepared_master_inventory.csv "
-    "[merged_inventory.csv] "
-    "[rundeck_header_list.txt]"
-)
 
 
 class KeyedRows(NamedTuple):
@@ -156,6 +156,11 @@ def is_invalid_key(value: str) -> bool:
     Una clave es inválida solamente si está vacía o es "N/A".
     """
     return is_empty_or_na(value)
+
+
+def extract_key(fields: list[str], key_idx: int) -> str:
+    """Retorna la clave de unión de una fila, sin comillas y en minúsculas."""
+    return strip_quotes(fields[key_idx]).lower()
 
 
 def is_identity_duplicate(
@@ -348,7 +353,7 @@ def index_rows_by_unique_key(
     duplicated_keys: set[str] = set()
 
     for fields in rows:
-        key = strip_quotes(fields[key_idx]).lower()
+        key = extract_key(fields, key_idx)
 
         if is_invalid_key(key) or key in duplicated_keys:
             continue
@@ -417,28 +422,49 @@ def find_master_duplicated_keys(
 # ============================================================
 
 
-def parse_cli_paths(argv: list[str]) -> CliPaths:
+def parse_cli_paths(argv: Sequence[str]) -> CliPaths:
     """
-    Interpreta los argumentos de línea de comandos y aplica los valores por defecto
-    de la ruta de salida y del rundeck_header_list (directorio de este script).
+    Interpreta los argumentos de línea de comandos (sin el nombre del programa).
 
-    Termina el proceso con un mensaje de uso si la cantidad de argumentos es inválida.
+    Decisiones de diseño:
+    - Los inventarios son opciones nombradas obligatorias (`--parsed`, `--master`):
+      con argumentos posicionales, intercambiar los archivos no produce ningún
+      error y la fusión se ejecuta al revés sin avisar.
+    - La salida y el rundeck_header_list son opcionales y, por defecto, se resuelven
+      en el directorio de este script.
+
+    argparse termina el proceso con un mensaje de uso si falta una opción obligatoria.
     """
-    program = argv[0]
-    if len(argv) < 3:
-        usage(f"Uso: {program} {USAGE_SYNOPSIS}")
-
-    if len(argv) > 5:
-        usage(f"Cantidad de argumentos inválida.\nUso: {program} {USAGE_SYNOPSIS}")
-
     script_dir = Path(__file__).resolve().parent
+    parser = argparse.ArgumentParser(
+        description="Fusiona un inventario parseado sobre el inventario maestro."
+    )
+    parser.add_argument(
+        "-p", "--parsed", type=Path, required=True, help="CSV del inventario parseado."
+    )
+    parser.add_argument(
+        "-m", "--master", type=Path, required=True, help="CSV del inventario maestro."
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=script_dir / "merged_inventory.csv",
+        help="CSV de salida (por defecto merged_inventory.csv junto al script).",
+    )
+    parser.add_argument(
+        "-l",
+        "--header-list",
+        type=Path,
+        default=script_dir / "rundeck_header_list.txt",
+        help="Ruta de rundeck_header_list.txt (por defecto junto al script).",
+    )
+    args = parser.parse_args(argv)
     return CliPaths(
-        parsed=Path(argv[1]),
-        master=Path(argv[2]),
-        output=Path(argv[3]) if len(argv) >= 4 else script_dir / "merged_inventory.csv",
-        rundeck_header_list=(
-            Path(argv[4]) if len(argv) >= 5 else script_dir / "rundeck_header_list.txt"
-        ),
+        parsed=args.parsed,
+        master=args.master,
+        output=args.output,
+        rundeck_header_list=args.header_list,
     )
 
 
@@ -495,9 +521,19 @@ def load_inventory(
     - El inventario parseado solo contiene las columnas definidas en
       rundeck_header_list (`restrict_to_defined_columns=True`); el maestro puede
       traer columnas adicionales, por lo que se valida contra su propio header.
+    - Un parseado con columnas adicionales casi seguro es el maestro pasado en el
+      lugar equivocado: se aborta en lugar de descartar todas sus filas en silencio.
     """
     header_line, header_fields, rows = load_csv_data(csv_path)
     positions = resolve_positions(rundeck_header_list, header_fields, csv_path)
+    if restrict_to_defined_columns and len(header_fields) != len(rundeck_header_list):
+        error(
+            f"El inventario parseado tiene {len(header_fields)} columnas pero "
+            f"rundeck_header_list define {len(rundeck_header_list)}. "
+            "Un inventario con columnas adicionales corresponde al maestro: "
+            "verifique que los argumentos no estén invertidos.\n"
+            f"  {csv_path}"
+        )
     expected_columns = (
         len(rundeck_header_list) if restrict_to_defined_columns else len(header_fields)
     )
@@ -555,6 +591,30 @@ def print_summary(
     print(f"Claves duplicadas en el maestro   : {len(plan.master_duplicated_keys)}")
 
 
+def warn_if_no_keys_match(master: LoadedInventory, plan: MergePlan) -> None:
+    """
+    Advierte si ninguna clave del maestro existe en el parseado.
+
+    Decisiones de diseño:
+    - No es un error (un maestro nuevo o sin colisiones es legítimo), pero es la
+      señal visible de argumentos invertidos o de archivos que no corresponden.
+    """
+    if not master.rows:
+        return
+
+    has_match = any(
+        extract_key(fields, plan.key_master_idx) in plan.parsed_data
+        for fields in master.rows
+    )
+    if not has_match:
+        print(
+            "[WARNING] Ninguna clave del inventario maestro coincide con el "
+            "inventario parseado. No se fusionará ninguna fila; verifique que los "
+            "argumentos no estén invertidos.",
+            file=sys.stderr,
+        )
+
+
 # ============================================================
 # FUSIÓN DE FILAS
 # ============================================================
@@ -590,7 +650,7 @@ def resolve_output_row(
     maestro o no existe en el parseado; solo se fusiona si la clave es válida y
     única en ambos inventarios.
     """
-    key = strip_quotes(master_fields[plan.key_master_idx]).lower()
+    key = extract_key(master_fields, plan.key_master_idx)
 
     if is_invalid_key(key) or key in plan.master_duplicated_keys:
         return master_fields
@@ -664,7 +724,7 @@ def write_merged_inventory(
 
 
 def main() -> None:
-    paths = parse_cli_paths(sys.argv)
+    paths = parse_cli_paths(sys.argv[1:])
     validate_paths(paths)
 
     rundeck_header_list = load_rundeck_header_list(paths.rundeck_header_list)
@@ -701,6 +761,8 @@ def main() -> None:
         plan,
         parsed_duplicated_keys,
     )
+
+    warn_if_no_keys_match(master, plan)
 
     write_merged_inventory(paths.output, master, plan)
 

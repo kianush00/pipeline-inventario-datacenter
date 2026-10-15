@@ -8,9 +8,11 @@ import pytest
 import merge_inventories
 from merge_inventories import (
     CliPaths,
+    LoadedInventory,
     MergePlan,
     build_merge_pairs,
     build_parsed_data,
+    extract_key,
     find_master_duplicated_keys,
     index_rows_by_unique_key,
     is_identity_duplicate,
@@ -21,6 +23,7 @@ from merge_inventories import (
     resolve_output_row,
     resolve_positions,
     validate_rows,
+    warn_if_no_keys_match,
 )
 
 
@@ -300,9 +303,30 @@ class TestMainEndToEnd:
         return path
 
     @staticmethod
-    def _run(monkeypatch: pytest.MonkeyPatch, *args: Path | str) -> None:
+    def _run_raw(monkeypatch: pytest.MonkeyPatch, *args: Path | str) -> None:
         monkeypatch.setattr(sys, "argv", ["merge_inventories.py", *map(str, args)])
         merge_inventories.main()
+
+    @classmethod
+    def _run(
+        cls,
+        monkeypatch: pytest.MonkeyPatch,
+        parsed: Path,
+        master: Path,
+        output: Path,
+        header_list: Path,
+    ) -> None:
+        cls._run_raw(
+            monkeypatch,
+            "--parsed",
+            parsed,
+            "--master",
+            master,
+            "--output",
+            output,
+            "--header-list",
+            header_list,
+        )
 
     def _paths(self, workdir: Path) -> tuple[Path, Path, Path, Path]:
         return (
@@ -364,11 +388,45 @@ class TestMainEndToEnd:
             out.read_text(encoding="utf-8").splitlines()[1] == "u1,h1,old,old-ip,SN,x"
         )
 
-    def test_wrong_argument_count_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.parametrize(
+        "args",
+        [
+            [],
+            ["--parsed", "p.csv"],
+            ["--master", "m.csv"],
+            ["p.csv", "m.csv"],  # el formato posicional antiguo ya no es válido
+        ],
+    )
+    def test_missing_required_options_exit(
+        self, monkeypatch: pytest.MonkeyPatch, args: list[str]
+    ) -> None:
         with pytest.raises(SystemExit):
-            self._run(monkeypatch, "only-one.csv")
-        with pytest.raises(SystemExit):
-            self._run(monkeypatch, *["a"] * 5)
+            self._run_raw(monkeypatch, *args)
+
+    def test_option_order_does_not_change_roles(
+        self, workdir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Con opciones nombradas, el orden en la línea de comandos es irrelevante."""
+        parsed, master, out, header = self._paths(workdir)
+        parsed.write_text(
+            "UUID,Nombre maquina,MAC,IP,Serial Number\nu1,h1,NEW,ip,SN\n",
+            encoding="utf-8",
+        )
+        self._write(master, ["u1,h1,old,old-ip,SN,x"])
+
+        self._run_raw(
+            monkeypatch,
+            "--master",
+            master,
+            "--header-list",
+            header,
+            "--output",
+            out,
+            "--parsed",
+            parsed,
+        )
+
+        assert out.read_text(encoding="utf-8").splitlines()[1] == "u1,h1,NEW,ip,SN,x"
 
     def test_missing_input_file_exits(
         self, workdir: Path, monkeypatch: pytest.MonkeyPatch
@@ -413,6 +471,41 @@ class TestMainEndToEnd:
         assert not out.exists()
         assert not list(workdir.glob(".*.tmp"))
 
+    def test_swapped_arguments_abort_when_master_has_extra_columns(
+        self, workdir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        parsed, master, out, header = self._paths(workdir)
+        parsed.write_text(
+            "UUID,Nombre maquina,MAC,IP,Serial Number\nu1,h1,m,i,SN\n",
+            encoding="utf-8",
+        )
+        self._write(master, ["u1,h1,m,i,SN,x"])
+
+        with pytest.raises(SystemExit):
+            self._run(monkeypatch, master, parsed, out, header)
+
+        assert not out.exists()
+
+    def test_no_matching_keys_emits_warning_but_still_writes(
+        self,
+        workdir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        parsed, master, out, header = self._paths(workdir)
+        parsed.write_text(
+            "UUID,Nombre maquina,MAC,IP,Serial Number\nz9,hz,m,i,SN\n",
+            encoding="utf-8",
+        )
+        self._write(master, ["u1,h1,m,i,SN,x"])
+
+        self._run(monkeypatch, parsed, master, out, header)
+
+        assert (
+            "Ninguna clave del inventario maestro coincide" in capsys.readouterr().err
+        )
+        assert out.read_text(encoding="utf-8").splitlines()[1] == "u1,h1,m,i,SN,x"
+
     def test_row_with_wrong_column_count_is_discarded(
         self, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -431,10 +524,10 @@ class TestMainEndToEnd:
 
 
 class TestParseCliPaths:
-    """Valida el parseo de argumentos y sus valores por defecto."""
+    """Valida el parseo de argumentos nombrados y sus valores por defecto."""
 
     def test_defaults_point_to_script_directory(self) -> None:
-        paths = parse_cli_paths(["prog", "parsed.csv", "master.csv"])
+        paths = parse_cli_paths(["--parsed", "parsed.csv", "--master", "master.csv"])
         script_dir = Path(merge_inventories.__file__).resolve().parent
         assert paths == CliPaths(
             Path("parsed.csv"),
@@ -444,14 +537,50 @@ class TestParseCliPaths:
         )
 
     def test_explicit_output_and_header_list(self) -> None:
-        paths = parse_cli_paths(["prog", "p.csv", "m.csv", "o.csv", "h.txt"])
+        paths = parse_cli_paths(
+            [
+                "--parsed",
+                "p.csv",
+                "--master",
+                "m.csv",
+                "--output",
+                "o.csv",
+                "--header-list",
+                "h.txt",
+            ]
+        )
         assert paths.output == Path("o.csv")
         assert paths.rundeck_header_list == Path("h.txt")
 
-    @pytest.mark.parametrize("argv", [["prog"], ["prog", "a"], ["prog", *"abcde"]])
-    def test_invalid_argument_count_exits(self, argv: list[str]) -> None:
+    @pytest.mark.parametrize(
+        "argv",
+        [[], ["--parsed", "p.csv"], ["--master", "m.csv"], ["p.csv", "m.csv"]],
+    )
+    def test_missing_required_options_exit(self, argv: list[str]) -> None:
         with pytest.raises(SystemExit):
             parse_cli_paths(argv)
+
+    def test_short_options_are_equivalent_to_long_ones(self) -> None:
+        short = parse_cli_paths(
+            ["-p", "p.csv", "-m", "m.csv", "-o", "o.csv", "-l", "h.txt"]
+        )
+        long = parse_cli_paths(
+            [
+                "--parsed",
+                "p.csv",
+                "--master",
+                "m.csv",
+                "--output",
+                "o.csv",
+                "--header-list",
+                "h.txt",
+            ]
+        )
+        assert short == long
+
+    def test_unknown_option_exits(self) -> None:
+        with pytest.raises(SystemExit):
+            parse_cli_paths(["--parsed", "p", "--master", "m", "--otra", "x"])
 
 
 class TestBuildMergePairs:
@@ -504,3 +633,40 @@ class TestResolveOutputRow:
     ) -> None:
         resolve_output_row(7, ["missing", "old"], plan)
         assert "Línea 7" in capsys.readouterr().err
+
+
+class TestExtractKey:
+    """Valida la normalización de la clave de unión."""
+
+    def test_strips_quotes_and_lowercases(self) -> None:
+        assert extract_key(["x", '"UUID-1"'], 1) == "uuid-1"
+
+
+class TestWarnIfNoKeysMatch:
+    """Valida la advertencia de claves sin coincidencias."""
+
+    @staticmethod
+    def _master(rows: list[list[str]]) -> LoadedInventory:
+        return LoadedInventory("", [], {}, rows)
+
+    @staticmethod
+    def _plan(parsed_keys: set[str]) -> MergePlan:
+        return MergePlan(0, {k: [k] for k in parsed_keys}, set(), [])
+
+    def test_warns_when_no_master_key_is_in_parsed(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        warn_if_no_keys_match(self._master([["u1"], ["u2"]]), self._plan({"z"}))
+        assert "[WARNING]" in capsys.readouterr().err
+
+    def test_no_warning_with_at_least_one_match(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        warn_if_no_keys_match(self._master([["u1"], ["U2"]]), self._plan({"u2"}))
+        assert capsys.readouterr().err == ""
+
+    def test_no_warning_when_master_is_empty(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        warn_if_no_keys_match(self._master([]), self._plan(set()))
+        assert capsys.readouterr().err == ""

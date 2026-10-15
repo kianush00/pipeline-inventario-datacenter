@@ -78,7 +78,7 @@ python3 parse_job_output.py job_output.log [parsed_job_output.csv]
 python3 prepare_master_inventory.py master_inventory.ods [prepared_master_inventory.csv]
 
 # 3. Consolidate the parsed inventory with the master
-python3 merge_inventories.py parsed_job_output.csv prepared_master_inventory.csv [merged_inventory.csv]
+python3 merge_inventories.py -p parsed_job_output.csv -m prepared_master_inventory.csv [-o merged_inventory.csv]
 
 # 4. (Optional) Update a copy of the master sheet
 python3 update_master_inventory.py merged_inventory.csv master_inventory.ods [master_inventory_updated.ods]
@@ -89,6 +89,17 @@ python3 export_to_netbox.py merged_inventory.csv --dry-run
 # 6. Apply the synchronization to NetBox
 python3 export_to_netbox.py merged_inventory.csv
 ```
+
+### Merge Options
+
+`merge_inventories.py` takes its inventories as **named options** instead of positional arguments, so an accidental swap of the parsed and master files cannot silently invert the merge:
+
+| Option | Required | Description |
+| ------ | -------- | ----------- |
+| `-p`, `--parsed` | Yes | Parsed inventory CSV (`parsed_job_output.csv`) |
+| `-m`, `--master` | Yes | Prepared master inventory CSV (`prepared_master_inventory.csv`) |
+| `-o`, `--output` | No | Output CSV. Defaults to `merged_inventory.csv` next to the script |
+| `-l`, `--header-list` | No | Path to `rundeck_header_list.txt`. Defaults to the file next to the script |
 
 ### Additional Exporter Options
 
