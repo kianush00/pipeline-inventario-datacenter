@@ -101,8 +101,8 @@ Writes the consolidated values back to a copy of the original master spreadsheet
 
 | Aspect | Detail |
 | --------- | --------- |
-| **Input** | `merged_inventory.csv` + original master spreadsheet |
-| **Output** | Updated copy of the master spreadsheet (same extension) |
+| **Input** | `--merged`/`-i merged_inventory.csv` + `--master`/`-m` original master spreadsheet (required named options) |
+| **Output** | `--output`/`-o` updated copy of the master spreadsheet (same extension; defaults to `<master>_updated.<ext>`) |
 | **Security** | The original master spreadsheet is **never** modified |
 | **Dependency** | LibreOffice (for ODS files) |
 

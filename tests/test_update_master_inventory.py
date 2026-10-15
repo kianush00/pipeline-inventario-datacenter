@@ -10,6 +10,7 @@ from openpyxl.cell.cell import Cell, MergedCell
 from openpyxl.worksheet.worksheet import Worksheet
 
 from update_master_inventory import (
+    CliArguments,
     coerce_for_cell,
     column_letter,
     count_master_data_rows,
@@ -18,8 +19,47 @@ from update_master_inventory import (
     get_cell,
     main,
     normalize_value,
+    parse_cli_arguments,
     update_xlsx,
 )
+
+
+def _argv(merged: Path, master: Path, output: Path | None = None) -> list[str]:
+    """Construye el argv con opciones nombradas para invocar main()."""
+    argv = ["script.py", "--merged", str(merged), "--master", str(master)]
+    if output is not None:
+        argv += ["--output", str(output)]
+    return argv
+
+
+class TestParseCliArguments:
+    """Valida el parseo de opciones nombradas."""
+
+    def test_long_options_and_default_output(self) -> None:
+        cli = parse_cli_arguments(["--merged", "m.csv", "--master", "x.xlsx"])
+        assert cli == CliArguments(Path("m.csv"), Path("x.xlsx"), None)
+
+    def test_short_options_are_equivalent_to_long_ones(self) -> None:
+        short = parse_cli_arguments(["-i", "m.csv", "-m", "x.xlsx", "-o", "o.xlsx"])
+        long = parse_cli_arguments(
+            ["--merged", "m.csv", "--master", "x.xlsx", "--output", "o.xlsx"]
+        )
+        assert (
+            short == long == CliArguments(Path("m.csv"), Path("x.xlsx"), Path("o.xlsx"))
+        )
+
+    def test_option_order_does_not_change_roles(self) -> None:
+        cli = parse_cli_arguments(["--master", "x.xlsx", "--merged", "m.csv"])
+        assert cli.merged == Path("m.csv")
+        assert cli.master == Path("x.xlsx")
+
+    @pytest.mark.parametrize(
+        "argv",
+        [[], ["--merged", "m.csv"], ["--master", "x.xlsx"], ["m.csv", "x.xlsx"]],
+    )
+    def test_missing_required_options_exit(self, argv: list[str]) -> None:
+        with pytest.raises(SystemExit):
+            parse_cli_arguments(argv)
 
 
 class TestNormalization:
@@ -222,7 +262,7 @@ class TestMainUpdateMasterInventory:
         with patch.object(
             sys,
             "argv",
-            ["script.py", str(merged_csv), str(master_xlsx), str(output_xlsx)],
+            _argv(merged_csv, master_xlsx, output_xlsx),
         ):
             main()
 
@@ -240,7 +280,7 @@ class TestMainUpdateMasterInventory:
             patch.object(
                 sys,
                 "argv",
-                ["script.py", str(merged_csv), str(master_xlsx), str(output_xlsx)],
+                _argv(merged_csv, master_xlsx, output_xlsx),
             ),
             pytest.raises(SystemExit),
         ):
@@ -255,7 +295,7 @@ class TestMainUpdateMasterInventory:
         master_txt.touch()
 
         with (
-            patch.object(sys, "argv", ["script.py", str(merged_csv), str(master_txt)]),
+            patch.object(sys, "argv", _argv(merged_csv, master_txt)),
             pytest.raises(SystemExit),
         ):
             main()
@@ -271,7 +311,7 @@ class TestMainUpdateMasterInventory:
             patch.object(
                 sys,
                 "argv",
-                ["script.py", str(merged_csv), str(master_xlsx), str(output_ods)],
+                _argv(merged_csv, master_xlsx, output_ods),
             ),
             pytest.raises(SystemExit),
         ):
@@ -286,7 +326,7 @@ class TestMainUpdateMasterInventory:
             patch.object(
                 sys,
                 "argv",
-                ["script.py", str(merged_csv), str(master_xlsx), str(master_xlsx)],
+                _argv(merged_csv, master_xlsx, master_xlsx),
             ),
             pytest.raises(SystemExit),
         ):
@@ -313,7 +353,7 @@ class TestMainUpdateMasterInventory:
             patch.object(
                 sys,
                 "argv",
-                ["script.py", str(merged_csv), str(master_xlsx), str(output_xlsx)],
+                _argv(merged_csv, master_xlsx, output_xlsx),
             ),
             pytest.raises(SystemExit),
         ):

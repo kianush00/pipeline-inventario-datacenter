@@ -42,24 +42,31 @@ errores.
 
 Uso:
     python3 update_master_inventory.py \
-        merged_inventory.csv \
-        master_inventory.(ods|xlsx) \
-        [master_inventory_updated.(ods|xlsx)]
+        --merged merged_inventory.csv \
+        --master master_inventory.(ods|xlsx) \
+        [--output master_inventory_updated.(ods|xlsx)]
+
+Formas cortas: -i (--merged), -m (--master) y -o (--output). Los archivos se
+indican con opciones nombradas (y no por posición) para que un orden accidental
+no escriba el CSV fusionado donde se espera el spreadsheet maestro.
 """
 
+import argparse
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
+from typing import NamedTuple
 
 import openpyxl
 from openpyxl.cell.cell import Cell, MergedCell
 from openpyxl.workbook.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
-from base_inventory import error, strip_quotes, usage
+from base_inventory import error, strip_quotes
 from merge_inventories import load_csv_data, validate_rows
 from prepare_master_inventory import find_libreoffice
 
@@ -336,26 +343,59 @@ def print_change_report(
 # ============================================================
 
 
+class CliArguments(NamedTuple):
+    """Argumentos de línea de comandos; `output` es None si no se indicó."""
+
+    merged: Path
+    master: Path
+    output: Path | None
+
+
+def parse_cli_arguments(argv: Sequence[str]) -> CliArguments:
+    """
+    Interpreta los argumentos de línea de comandos (sin el nombre del programa).
+
+    Decisiones de diseño:
+    - Los archivos son opciones nombradas: con argumentos posicionales, intercambiar
+      el CSV fusionado y el spreadsheet maestro solo se detectaría más tarde y con
+      mensajes confusos.
+    - La salida es opcional; su valor por defecto depende de la extensión del
+      maestro, por lo que se resuelve en `main`.
+
+    argparse termina el proceso con un mensaje de uso si falta una opción obligatoria.
+    """
+    parser = argparse.ArgumentParser(
+        description="Deposita el inventario fusionado sobre una copia del maestro."
+    )
+    parser.add_argument(
+        "-i",
+        "--merged",
+        type=Path,
+        required=True,
+        help="CSV del inventario fusionado (merged_inventory.csv).",
+    )
+    parser.add_argument(
+        "-m",
+        "--master",
+        type=Path,
+        required=True,
+        help="Spreadsheet maestro original (.ods o .xlsx).",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        help="Copia actualizada del maestro (por defecto <maestro>_updated.<ext>).",
+    )
+    args = parser.parse_args(argv)
+    return CliArguments(merged=args.merged, master=args.master, output=args.output)
+
+
 def main() -> None:
-    if len(sys.argv) < 3:
-        usage(
-            f"Uso: {sys.argv[0]} "
-            "merged_inventory.csv "
-            "master_inventory.(ods|xlsx) "
-            "[master_inventory_updated.(ods|xlsx)]"
-        )
-
-    if len(sys.argv) > 4:
-        usage(
-            f"Cantidad de argumentos inválida.\n"
-            f"Uso: {sys.argv[0]} "
-            "merged_inventory.csv "
-            "master_inventory.(ods|xlsx) "
-            "[master_inventory_updated.(ods|xlsx)]"
-        )
-
-    merged_csv_path = Path(sys.argv[1])
-    master_path = Path(sys.argv[2])
+    cli = parse_cli_arguments(sys.argv[1:])
+    merged_csv_path = cli.merged
+    master_path = cli.master
 
     for path, label in (
         (merged_csv_path, "inventario fusionado"),
@@ -373,8 +413,8 @@ def main() -> None:
         )
 
     output_path = (
-        Path(sys.argv[3])
-        if len(sys.argv) >= 4
+        cli.output
+        if cli.output is not None
         else master_path.parent / f"{master_path.stem}_updated{master_path.suffix}"
     )
 

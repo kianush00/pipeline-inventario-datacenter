@@ -78,10 +78,10 @@ python3 parse_job_output.py job_output.log [parsed_job_output.csv]
 python3 prepare_master_inventory.py master_inventory.ods [prepared_master_inventory.csv]
 
 # 3. Consolidate the parsed inventory with the master
-python3 merge_inventories.py -p parsed_job_output.csv -m prepared_master_inventory.csv [-o merged_inventory.csv]
+python3 merge_inventories.py --parsed parsed_job_output.csv --master prepared_master_inventory.csv [--output merged_inventory.csv]
 
 # 4. (Optional) Update a copy of the master sheet
-python3 update_master_inventory.py merged_inventory.csv master_inventory.ods [master_inventory_updated.ods]
+python3 update_master_inventory.py --merged merged_inventory.csv --master master_inventory.ods [--output master_inventory_updated.ods]
 
 # 5. Preview the synchronization with NetBox
 python3 export_to_netbox.py merged_inventory.csv --dry-run
@@ -100,6 +100,16 @@ python3 export_to_netbox.py merged_inventory.csv
 | `-m`, `--master` | Yes | Prepared master inventory CSV (`prepared_master_inventory.csv`) |
 | `-o`, `--output` | No | Output CSV. Defaults to `merged_inventory.csv` next to the script |
 | `-l`, `--header-list` | No | Path to `rundeck_header_list.txt`. Defaults to the file next to the script |
+
+### Master Update Options
+
+`update_master_inventory.py` also uses **named options**, so the merged CSV and the master spreadsheet cannot be swapped by position:
+
+| Option | Required | Description |
+| ------ | -------- | ----------- |
+| `-i`, `--merged` | Yes | Merged inventory CSV (`merged_inventory.csv`) |
+| `-m`, `--master` | Yes | Original master spreadsheet (`.ods` or `.xlsx`) |
+| `-o`, `--output` | No | Updated copy of the master. Defaults to `<master>_updated.<ext>` next to the master |
 
 ### Additional Exporter Options
 
