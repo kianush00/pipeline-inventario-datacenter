@@ -38,9 +38,9 @@ python3 parse_job_output.py job_output.log [parsed_job_output.csv]
 # Prepare master inventory
 python3 prepare_master_inventory.py master_inventory.ods [prepared_master_inventory.csv]
 # Merge inventories
-python3 merge_inventories.py -p parsed_job_output.csv -m prepared_master_inventory.csv [-o merged_inventory.csv]
+python3 merge_inventories.py --parsed parsed_job_output.csv --master prepared_master_inventory.csv [--output merged_inventory.csv]
 # Update master inventory
-python3 update_master_inventory.py -i merged_inventory.csv -m master_inventory.ods [-o master_inventory_updated.ods]
+python3 update_master_inventory.py --merged merged_inventory.csv --master master_inventory.ods [--output master_inventory_updated.ods]
 # Export to NetBox
 python3 export_to_netbox.py merged_inventory.csv --dry-run --prune-network-orphans
 python3 export_to_netbox.py merged_inventory.csv --prune-network-orphans
