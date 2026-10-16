@@ -115,6 +115,15 @@ class RowSkipCondition(Exception):
     de una fila de forma silenciosa (SKIP)."""
 
 
+class ResourceAssignedElsewhere(Exception):
+    """Excepción lanzada cuando un recurso que debe ser único (ej. una IP) ya está
+    asignado a otra interfaz; `record` es el registro de NetBox que lo ocupa."""
+
+    def __init__(self, record: "NetBoxObject") -> None:
+        super().__init__("El recurso ya está asignado a otra interfaz.")
+        self.record = record
+
+
 class NetBoxApiError(Exception):
     """Excepción lanzada cuando ocurre un error de API persistente
     al interactuar con Pynetbox (RequestError)."""
@@ -3737,6 +3746,35 @@ def _get_assigned_object_type(node_type: NodeType) -> str:
     )
 
 
+def _find_foreign_assignment(records: list[Record]) -> Record | None:
+    """Retorna el primer registro asignado a alguna interfaz, o None si no hay."""
+    return next(
+        (r for r in records if getattr(r, "assigned_object_id", None) is not None),
+        None,
+    )
+
+
+def _describe_assignment(record: NetBoxObject) -> str:
+    """
+    Describe a qué interfaz y nodo está asignado un registro (para logs).
+
+    Usa el objeto anidado `assigned_object` que NetBox incluye en IPs y MACs; si falta
+    algún dato, degrada al ID para no perder trazabilidad.
+    """
+    assigned_object = getattr(record, "assigned_object", None)
+    iface_name = getattr(assigned_object, "name", None)
+    if iface_name is None:
+        return f"objeto ID={getattr(record, 'assigned_object_id', '?')}"
+
+    parent = getattr(assigned_object, "device", None) or getattr(
+        assigned_object, "virtual_machine", None
+    )
+    parent_name = getattr(parent, "name", None)
+    if parent_name is None:
+        return f"interfaz '{iface_name}'"
+    return f"interfaz '{iface_name}' del nodo '{parent_name}'"
+
+
 def _assign_network_resource(
     endpoint: Endpoint,
     resource_name: str,
@@ -3745,6 +3783,7 @@ def _assign_network_resource(
     value_str: str,
     iface_obj: NetBoxObject,
     dry_run: bool,
+    unique_resource: bool = False,
 ) -> tuple[NetBoxObject, bool]:
     """
     Centraliza la asignación polimórfica de recursos de red (IP o MAC) a una interfaz.
@@ -3755,9 +3794,16 @@ def _assign_network_resource(
     - Reciclaje (Evitar Duplicidad Global): Antes de crear un nuevo recurso, se verifica
       si ya existe uno libre (huérfano) con el mismo valor, y se reasigna a la interfaz.
       Esto previene colisiones y uso excesivo de espacio en el IPAM de NetBox.
+    - Recursos únicos (`unique_resource=True`, IPs): NetBox rechaza (HTTP 400) crear un
+      duplicado de una IP ya asignada a otra interfaz, por lo que se detecta con los
+      registros ya consultados y se lanza `ResourceAssignedElsewhere` en lugar de crear.
+      Las MAC pueden compartirse legítimamente y no usan esta regla.
 
     Retorna:
         tuple[NetBoxObject, bool]: El objeto (IP/MAC) NetBox y un booleano indicando si hubo cambios.
+
+    Lanza:
+        ResourceAssignedElsewhere: si `unique_resource` y el recurso ocupa otra interfaz.
     """
     node_type = get_node_type_from_object(iface_obj)
     assigned_type = _get_assigned_object_type(node_type)
@@ -3800,7 +3846,13 @@ def _assign_network_resource(
             log.info("UPDATED %s libre reasignada: %s", resource_name, value_str)
             return unassigned, True
 
-    # 3. Crear nuevo recurso
+    # 3. Un recurso único asignado a otra interfaz no puede duplicarse
+    if unique_resource:
+        foreign_record = _find_foreign_assignment(existing_records)
+        if foreign_record is not None:
+            raise ResourceAssignedElsewhere(foreign_record)
+
+    # 4. Crear nuevo recurso
     if dry_run:
         log.info(
             "[DRY-RUN] WOULD CREATE nuevo %s %s (asignada a objeto %s)",
@@ -3834,17 +3886,40 @@ def _assign_ip(
     cidr: str,
     iface_obj: NetBoxObject,
     dry_run: bool,
-) -> tuple[NetBoxObject, bool]:
-    """Crea o actualiza una IP address en NetBox y la asigna a la interfaz."""
-    return _assign_network_resource(
-        endpoint=ip_addresses_endpoint,
-        resource_name="IP",
-        search_kwargs={"address": cidr},
-        create_kwargs={"address": cidr, "status": "active"},
-        value_str=cidr,
-        iface_obj=iface_obj,
-        dry_run=dry_run,
-    )
+) -> tuple[NetBoxObject | None, bool]:
+    """
+    Crea o actualiza una IP address en NetBox y la asigna a la interfaz.
+
+    Decisiones de diseño:
+    - NetBox (ENFORCE_GLOBAL_UNIQUE) no admite la misma IP en dos interfaces, sin
+      importar su estado up/down (ej. un nodo y su réplica). En ese caso la IP se
+      omite con un WARNING que identifica al dueño y gana el primer nodo procesado;
+      no es un error de sincronización.
+
+    Retorna:
+        tuple[NetBoxObject | None, bool]: La IP y si hubo cambios; (None, False) si
+        la IP pertenece a otra interfaz y se omitió.
+    """
+    try:
+        return _assign_network_resource(
+            endpoint=ip_addresses_endpoint,
+            resource_name="IP",
+            search_kwargs={"address": cidr},
+            create_kwargs={"address": cidr, "status": "active"},
+            value_str=cidr,
+            iface_obj=iface_obj,
+            dry_run=dry_run,
+            unique_resource=True,
+        )
+    except ResourceAssignedElsewhere as e:
+        log.warning(
+            "IP %s ya está asignada a %s; se omite en la interfaz '%s' "
+            "(NetBox no permite repetir una IP).",
+            cidr,
+            _describe_assignment(e.record),
+            getattr(iface_obj, "name", "?"),
+        )
+        return None, False
 
 
 def _assign_mac(

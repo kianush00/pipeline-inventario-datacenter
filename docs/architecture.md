@@ -67,7 +67,8 @@ The exporter follows this logic for each row in the CSV:
 3. **Payload construction**: Fields are mapped according to the contract defined in `netbox_mapping.yaml`, applying casts and transformations.
 4. **Change detection**: Compares the payload against the current state of the record. An update is only issued if there are actual differences.
 5. **Dependency synchronization**: Sites, Manufacturers, Device Types, Platforms, Roles, Clusters, Custom Fields, Interfaces, Prefixes, and IPs are created or resolved as prerequisites.
-6. **Primary IP assignment**: If a Device or VM has exactly one valid IP, it is automatically assigned as the primary IPv4.
+6. **Shared IP handling**: NetBox does not allow the same IP on two interfaces (e.g. a node and its replica). An IP already assigned to another interface is skipped with a `WARNING` naming its owner, not counted as an error. The first node processed keeps the IP.
+7. **Primary IP assignment**: If a Device or VM has exactly one valid IP, it is automatically assigned as the primary IPv4.
 
 ### Taxonomy Resolution & Slug Collisions (Fail-Fast vs. Fail-Safe)
 

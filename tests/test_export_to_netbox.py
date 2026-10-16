@@ -5,6 +5,7 @@ Pruebas unitarias para export_to_netbox.py
 import hashlib
 import logging
 from collections import Counter
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
@@ -44,11 +45,14 @@ from export_to_netbox import (
     SyncResult,
     SyncStatus,
     ValidationError,
+    _assign_ip,
+    _assign_mac,
     _assign_primary_ipv4,
     _build_interface_cidr,
     _classify_rows,
     _create_record,
     _create_with_fallback_slug,
+    _describe_assignment,
     _ensure_custom_field,
     _execute_sync,
     _extract_concat_dot_value,
@@ -3444,6 +3448,124 @@ class TestProcessInterfacesAndIps:
         mock_assign_mac.assert_called_once()
 
 
+def _ip_record(
+    assigned_object_id: int | None,
+    iface_name: str = "eth0",
+    parent_name: str = "SRV-A",
+) -> MockNetBoxRecord:
+    """Construye un registro IP simulado de NetBox, asignado o libre."""
+    data: dict[str, Any] = {
+        "id": 1,
+        "address": "10.0.0.5/26",
+        "assigned_object_id": assigned_object_id,
+    }
+    if assigned_object_id is not None:
+        data["assigned_object_type"] = "dcim.interface"
+        data["assigned_object"] = SimpleNamespace(
+            id=assigned_object_id,
+            name=iface_name,
+            device=SimpleNamespace(id=7, name=parent_name),
+        )
+    return MockNetBoxRecord.model_validate(data)
+
+
+class TestDescribeAssignment:
+    """Verifica la descripción (para logs) del dueño de un recurso asignado."""
+
+    def test_full_description(self) -> None:
+        assert (
+            _describe_assignment(_ip_record(99)) == "interfaz 'eth0' del nodo 'SRV-A'"
+        )
+
+    def test_without_parent(self) -> None:
+        record = MockNetBoxRecord.model_validate(
+            {
+                "id": 1,
+                "assigned_object_id": 5,
+                "assigned_object": SimpleNamespace(name="eth0"),
+            }
+        )
+        assert _describe_assignment(record) == "interfaz 'eth0'"
+
+    def test_without_nested_object_falls_back_to_id(self) -> None:
+        record = MockNetBoxRecord(id=1, assigned_object_id=5)
+        assert _describe_assignment(record) == "objeto ID=5"
+
+
+class TestAssignIpAssignedElsewhere:
+    """Una IP ya asignada a otra interfaz se omite con WARNING en lugar de fallar con HTTP 400."""
+
+    IFACE = MockNetBoxRecord(id=10, name="eth0")
+
+    def test_ip_owned_by_other_interface_is_skipped(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        endpoint = MagicMock()
+        endpoint.filter.return_value = [_ip_record(99)]
+
+        with caplog.at_level(logging.WARNING):
+            result = _assign_ip(endpoint, "10.0.0.5/26", self.IFACE, dry_run=False)
+
+        assert result == (None, False)
+        endpoint.create.assert_not_called()
+        assert "interfaz 'eth0' del nodo 'SRV-A'" in caplog.text
+        assert "se omite" in caplog.text
+
+    def test_dry_run_also_skips_without_writing(self) -> None:
+        endpoint = MagicMock()
+        endpoint.filter.return_value = [_ip_record(99)]
+
+        assert _assign_ip(endpoint, "10.0.0.5/26", self.IFACE, dry_run=True) == (
+            None,
+            False,
+        )
+        endpoint.create.assert_not_called()
+
+    def test_ip_already_on_own_interface_is_unchanged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        endpoint = MagicMock()
+        own = _ip_record(10)
+        endpoint.filter.return_value = [own]
+
+        with caplog.at_level(logging.WARNING):
+            result = _assign_ip(endpoint, "10.0.0.5/26", self.IFACE, dry_run=False)
+
+        assert result == (own, False)
+        assert caplog.text == ""
+
+    def test_free_record_takes_priority_over_foreign_one(self) -> None:
+        endpoint = MagicMock()
+        free = MagicMock(assigned_object_id=None)
+        endpoint.filter.return_value = [_ip_record(99), free]
+
+        obj, changed = _assign_ip(endpoint, "10.0.0.5/26", self.IFACE, dry_run=False)
+
+        assert obj is free
+        assert changed is True
+        free.update.assert_called_once()
+        endpoint.create.assert_not_called()
+
+    def test_new_ip_is_created(self) -> None:
+        endpoint = MagicMock()
+        endpoint.filter.return_value = []
+
+        obj, changed = _assign_ip(endpoint, "10.0.0.5/26", self.IFACE, dry_run=False)
+
+        assert obj is endpoint.create.return_value
+        assert changed is True
+
+    def test_mac_shared_between_interfaces_is_still_created(self) -> None:
+        """Las MAC no son únicas en NetBox: no se aplica la regla de IPs."""
+        endpoint = MagicMock()
+        endpoint.filter.return_value = [_ip_record(99)]
+
+        obj, changed = _assign_mac(endpoint, "AA:BB:CC:DD:EE:FF", self.IFACE, False)
+
+        assert obj is endpoint.create.return_value
+        assert changed is True
+
+
 class TestSyncSingleInterface:
     @patch("export_to_netbox._upsert_interface_record")
     @patch("export_to_netbox._assign_ip")
@@ -3496,6 +3618,47 @@ class TestSyncSingleInterface:
         assert "eth1" in returned_cache
         assert returned_cache["eth1"] == mock_iface
         assert any_changes is True
+
+
+class TestSyncSingleInterfaceSkippedIp:
+    @patch("export_to_netbox._upsert_interface_record")
+    @patch("export_to_netbox._assign_ip", return_value=(None, False))
+    @patch("export_to_netbox._assign_mac")
+    def test_skipped_ip_does_not_block_mac_nor_count_as_error(
+        self,
+        mock_assign_mac: MagicMock,
+        mock_assign_ip: MagicMock,
+        mock_upsert: MagicMock,
+    ) -> None:
+        mock_upsert.return_value = (MagicMock(), False)
+        mock_assign_mac.return_value = (MagicMock(), False)
+        endpoint = MagicMock(spec=Endpoint)
+        endpoint.url = "http://localhost/api/dcim/interfaces/"
+        endpoints = MagicMock(spec=NetBoxEndpoints)
+        endpoints.ip_addresses = MagicMock()
+        endpoints.mac_addresses = MagicMock()
+        iface_data = cast(
+            NetworkInterfaceData,
+            {
+                "name": "eth0",
+                "enabled": True,
+                "cidr": "10.0.0.5/26",
+                "mac": "aa:bb:cc:dd:ee:ff",
+                "ip": "10.0.0.5",
+                "prefix": "26",
+                "network": None,
+            },
+        )
+
+        (_, ip_obj, mac_obj, changed), _ = _sync_single_interface(
+            iface_data, 1, endpoint, {}, endpoints, False
+        )
+
+        mock_assign_ip.assert_called_once()
+        mock_assign_mac.assert_called_once()
+        assert ip_obj is None
+        assert mac_obj is not None
+        assert changed is False
 
 
 class TestSyncSingleInterfacePrefix:

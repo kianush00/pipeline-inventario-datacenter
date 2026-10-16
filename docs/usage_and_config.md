@@ -111,6 +111,14 @@ python3 export_to_netbox.py merged_inventory.csv
 | `-m`, `--master` | Yes | Original master spreadsheet (`.ods` or `.xlsx`) |
 | `-o`, `--output` | No | Updated copy of the master. Defaults to `<master>_updated.<ext>` next to the master |
 
+### Shared IP Addresses (Node and Replica)
+
+NetBox rejects an IP address that already exists on another interface (`Duplicate IP address found in global table`) when `ENFORCE_GLOBAL_UNIQUE` is enabled, which is its default. The check ignores the status of the IP or of the interface, so a powered-off original and its replica cannot both hold the same IP.
+
+When the exporter finds an IP already assigned to another interface it **skips that IP and logs a `WARNING`** naming the owning interface and node. The first node processed in the CSV keeps the IP. This is not counted as a synchronization error.
+
+To model nodes that genuinely share an IP, a NetBox administrator must change NetBox itself (set `ENFORCE_GLOBAL_UNIQUE = False`, give the addresses a `vip`/`anycast` role, or place them in different VRFs); the exporter does not do this.
+
 ### Additional Exporter Options
 
 Each script supports optional paths for its input and output files as described in its help text. The mapping path is optional; by default, `export_to_netbox.py` loads `netbox_mapping.yaml` from the script's directory. A custom mapping can be provided as the second positional argument:
