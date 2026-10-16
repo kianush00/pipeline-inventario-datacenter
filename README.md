@@ -54,6 +54,7 @@ python3 export_to_netbox.py merged_inventory.csv --prune-network-orphans
 | ---------- | ------------- |
 | [Architecture](docs/architecture.md) | Data flow, merge model, UUID normalization, and idempotency design |
 | [Components](docs/components.md) | Technical reference for each pipeline script |
+| [Asset Collection](docs/asset_collection.md) | Rundeck collection script (`asset_information.sh`): collected data and compatibility notes |
 | [NetBox Mapping](docs/netbox_mapping.md) | Full specification of `netbox_mapping.yaml` (DDL, DML, casts, transforms) |
 | [Usage & Configuration](docs/usage_and_config.md) | Environment setup, NetBox credentials, and pipeline execution |
 | [Development](docs/development.md) | Testing, linting, code conventions, and security guidelines |
@@ -74,12 +75,24 @@ python3 export_to_netbox.py merged_inventory.csv --prune-network-orphans
 ├── netbox_mapping.yaml           # NetBox mapping contract
 ├── rundeck_header_list.txt       # Column schema and merge flags
 ├── requirements.txt
+├── .env.example                  # NetBox credentials template
+├── pyrightconfig.json            # Pyright (static typing) configuration
+├── .pyrefly.toml                 # Pyrefly (static typing) configuration
 ├── conftest.py
 ├── .agents/skills/               # AI agent specialized skills
+│   ├── code-reviewer/SKILL.md
+│   └── qa-tester/SKILL.md
 ├── tests/                        # Unit test suite (pytest)
+│   ├── conftest.py
+│   ├── test_parse_job_output.py
+│   ├── test_prepare_master_inventory.py
+│   ├── test_merge_inventories.py
+│   ├── test_update_master_inventory.py
+│   └── test_export_to_netbox.py
 ├── docs/                         # Project documentation
 │   ├── architecture.md
 │   ├── components.md
+│   ├── asset_collection.md
 │   ├── netbox_mapping.md
 │   ├── usage_and_config.md
 │   ├── development.md
@@ -88,6 +101,8 @@ python3 export_to_netbox.py merged_inventory.csv --prune-network-orphans
 │       └── inventory_pipeline.png
 ├── GEMINI.md                     # AI agent rules (Antigravity)
 ├── CLAUDE.md                     # AI agent rules (Claude)
+├── .antigravityignore            # Antigravity ignore rules
+├── .gitignore
 └── LICENSE
 ```
 
