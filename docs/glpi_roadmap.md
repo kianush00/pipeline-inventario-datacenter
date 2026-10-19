@@ -140,7 +140,7 @@ As in the NetBox exporter, only optional network pruning exists (`--prune-networ
 | `Cluster` + `SO Hipervisor` + `Version SO Hipervisor` | `Cluster` (`ClusterType`, `version`) + `Item_Cluster` (hypervisors) | 8 |
 | `Dispositivo Host` + `Cores` + `RAM (GB)` | `ItemVirtualMachine` on the host (`vcpu`, `ram` in MiB, `uuid`) | 8 |
 | `Fecha Inicio` + `Fecha Vencimiento` | `Infocom` (`warranty_date`, `warranty_duration` in months) | 9 |
-| `CPU Modelo`, `Cores`, `Threads`, `Sockets`, `RAM (GB)`, `Capacidad visible (GB)` | `Item_DeviceProcessor`, `Item_DeviceMemory`, `Item_Disk` | 10 |
+| `CPU Modelo`, `Cores (por socket)`, `Threads (por socket)`, `Sockets`, `RAM (GB)`, `Capacidad visible (GB)` | `Item_DeviceProcessor`, `Item_DeviceMemory`, `Item_Disk` | 10 |
 | `Rol`, `Entorno`, `Nodo Rundeck`, `Version BIOS`, `Fecha BIOS`, `RAID`, `Discos`, etc. | Fields plugin container | 11 |
 
 ---

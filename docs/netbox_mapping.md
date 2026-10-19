@@ -64,8 +64,8 @@ This table acts as a data dictionary of the fields the script expects to extract
 | `iface_pfx` | `Red IP` | Comma-separated networks, one per interface, aligned by position with `IP`. | `10.0.0.0/24, 192.168.1.0/26` |
 | `iface_mac` | `MAC` | List of MAC addresses corresponding to the interfaces. | `aa:bb:cc:dd:ee:ff` |
 | `cpu_model` | `CPU Modelo` | Commercial name of the processor. | `Intel Xeon Gold 6230` |
-| `cores` | `Cores` | Number of physical (Device) or virtual (VM) cores. | `16`, `32` |
-| `threads` | `Threads` | Total number of threads of the physical CPU. | `32`, `64` |
+| `cores` | `Cores (por socket)` | Number of physical (Device) or virtual (VM) cores. | `16`, `32` |
+| `threads` | `Threads (por socket)` | Total number of threads of the physical CPU. | `32`, `64` |
 | `sockets` | `Sockets` | Number of sockets or physical CPUs mounted on the motherboard. | `2`, `4` |
 | `ram_gb` | `RAM (GB)` | Total RAM memory expressed in Gigabytes. | `128`, `256` |
 | `disks` | `Discos` | Raw breakdown of the disk configuration. | `2x SSD 512GB, 4x HDD 4TB` |

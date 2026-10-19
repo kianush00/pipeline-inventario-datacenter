@@ -47,8 +47,6 @@ csv_columns:
   cluster_name:
     source: "Cluster"
     required: true
-  cores:
-    source: &col_cpu_cores "Cores"
   inventory_uuid:
     source: &col_inventory_uuid "UUID"
     required: true
@@ -82,8 +80,10 @@ csv_columns:
     source: &col_service_tag "Service Tag"
   cpu_model:
     source: &col_cpu_model "CPU Modelo"
+  cores:
+    source: &col_cpu_cores "Cores (por socket)"
   threads:
-    source: &col_cpu_threads "Threads"
+    source: &col_cpu_threads "Threads (por socket)"
   sockets:
     source: &col_cpu_sockets "Sockets"
   disks:

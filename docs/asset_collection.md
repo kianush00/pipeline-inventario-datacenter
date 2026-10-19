@@ -37,8 +37,8 @@ The information gathered by the script is categorized into the following areas:
 - BIOS Version
 - BIOS Release Date
 - CPU Model
-- CPU Cores
-- CPU Threads
+- CPU Cores (per socket)
+- CPU Threads (per socket)
 - CPU Sockets
 - RAM (GB)
 - Visible Storage Capacity (GB)

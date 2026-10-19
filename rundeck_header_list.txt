@@ -12,8 +12,8 @@ IP|1
 Red IP|1
 MAC|1
 CPU Modelo|1
-Cores|1
-Threads|1
+Cores (por socket)|1
+Threads (por socket)|1
 Sockets|1
 RAM (GB)|1
 Discos|1
