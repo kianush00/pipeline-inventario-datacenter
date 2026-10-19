@@ -56,6 +56,7 @@ python3 export_to_netbox.py merged_inventory.csv --prune-network-orphans
 | [Components](docs/components.md) | Technical reference for each pipeline script |
 | [Asset Collection](docs/asset_collection.md) | Rundeck collection script (`asset_information.sh`): collected data and compatibility notes |
 | [NetBox Mapping](docs/netbox_mapping.md) | Full specification of `netbox_mapping.yaml` (DDL, DML, casts, transforms) |
+| [GLPI Roadmap](docs/glpi_roadmap.md) | Phased plan for the GLPI 11 export stage (`export_to_glpi.py`): decisions, data model, requirements |
 | [Usage & Configuration](docs/usage_and_config.md) | Environment setup, NetBox credentials, and pipeline execution |
 | [Development](docs/development.md) | Testing, linting, code conventions, and security guidelines |
 
@@ -94,6 +95,7 @@ python3 export_to_netbox.py merged_inventory.csv --prune-network-orphans
 │   ├── components.md
 │   ├── asset_collection.md
 │   ├── netbox_mapping.md
+│   ├── glpi_roadmap.md
 │   ├── usage_and_config.md
 │   ├── development.md
 │   └── assets/
