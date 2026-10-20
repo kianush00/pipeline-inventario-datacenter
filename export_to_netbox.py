@@ -200,6 +200,16 @@ class CsvIdentityCounts(NamedTuple):
     uuids: Counter[str]
 
 
+class CsvData(NamedTuple):
+    """
+    Filas del CSV de entrada junto con la línea física del archivo donde empieza
+    cada una (paralelas: `line_numbers[i]` corresponde a `rows[i]`).
+    """
+
+    rows: list[CsvRow]
+    line_numbers: list[int]
+
+
 class SyncResult(NamedTuple):
     """
     Resultado de la sincronización de un Device o VM.
@@ -1373,24 +1383,40 @@ def build_netbox_endpoints(nb: Api) -> NetBoxEndpoints:
 # ============================================================
 
 
-def _read_csv(path: Path) -> tuple[list[str], list[CsvRow]]:
+def _record_start_line(reader_line_num: int, row: CsvRow) -> int:
+    """
+    Calcula la línea física donde empieza un registro CSV.
+
+    `csv.reader.line_num` indica la línea donde *termina* el registro; los saltos de
+    línea embebidos en celdas entre comillas hacen que un registro ocupe varias líneas,
+    por lo que se restan para obtener la primera.
+    """
+    embedded_newlines = sum(v.count("\n") for v in row.values() if isinstance(v, str))
+    return reader_line_num - embedded_newlines
+
+
+def _read_csv(path: Path) -> tuple[list[str], CsvData]:
     """
     Lee merged_inventory.csv.
-    Retorna una tupla: (cabeceras, filas), donde cada fila es
-    un diccionario {cabecera: valor}.
+    Retorna una tupla: (cabeceras, CsvData), donde cada fila es un diccionario
+    {cabecera: valor} y `line_numbers` indica su línea real en el archivo (útil para
+    reportar errores aunque haya celdas multilínea o líneas en blanco).
     """
     if not path.is_file():
         raise ConfigValidationError(f"No se encontró el CSV de entrada: {path}")
 
     rows: list[CsvRow] = []
+    line_numbers: list[int] = []
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         headers = reader.fieldnames or []
         for row in reader:
-            rows.append(dict(row))
+            record = dict(row)
+            rows.append(record)
+            line_numbers.append(_record_start_line(reader.line_num, record))
 
     log.info("CSV leído: %d filas, %d columnas", len(rows), len(headers))
-    return list(headers), rows
+    return list(headers), CsvData(rows, line_numbers)
 
 
 def _validate_csv_headers(
@@ -1436,14 +1462,14 @@ def _validate_csv_headers(
 def read_and_validate_csv(
     csv_path: Path,
     config: NetBoxMappingConfig,
-) -> list[CsvRow]:
+) -> CsvData:
     """
     Orquesta la lectura del archivo CSV y la validación de sus cabeceras.
-    Retorna únicamente las filas parseadas (diccionarios), listas para ser procesadas.
+    Retorna las filas parseadas (diccionarios) y su línea de origen, listas para ser procesadas.
     """
-    headers, rows = _read_csv(csv_path)
+    headers, data = _read_csv(csv_path)
     _validate_csv_headers(headers, config)
-    return rows
+    return data
 
 
 # ============================================================
@@ -4441,6 +4467,7 @@ def process_interfaces_and_ips(
 
 def _classify_rows(
     rows: list[CsvRow],
+    line_numbers: list[int],
     config: NetBoxMappingConfig,
     counts: SyncCounts,
 ) -> tuple[ClassifiedRows, SyncCounts]:
@@ -4455,6 +4482,10 @@ def _classify_rows(
       se sincronice estrictamente en una fase anterior a las VMs.
     - Tolerancia a Fallos: Atrapa errores de validación (ej. falta de OS)
       al vuelo, logueando el error y escalando el contador sin quebrar el pipeline.
+    - Las filas descartadas no se devuelven: no participan de las fases de
+      sincronización ni, en `main`, del conteo de unicidad de identidades.
+    - `line_numbers` trae la línea física de cada fila en el archivo (no su índice),
+      para que los logs apunten al lugar correcto aun con celdas multilínea.
 
     Retorna:
         tuple[ClassifiedRows, SyncCounts]: Las filas separadas y los contadores mutados.
@@ -4462,7 +4493,7 @@ def _classify_rows(
     device_rows: list[tuple[int, CsvRow]] = []
     vm_rows: list[tuple[int, CsvRow]] = []
 
-    for row_num, row in enumerate(rows, start=2):
+    for row_num, row in zip(line_numbers, rows, strict=True):
         try:
             node_type = get_node_type_from_row(row, config)
             if node_type == NodeType.DEVICE:
@@ -4471,9 +4502,9 @@ def _classify_rows(
                 vm_rows.append((row_num, row))
         except RowValidationError as e:
             machine_name = (
-                extract_csv_value(row, "machine_name", config) or f"fila {row_num}"
+                extract_csv_value(row, "machine_name", config) or f"línea {row_num}"
             )
-            log.error("ERROR fila %d ('%s'): %s", row_num, machine_name, e)
+            log.error("ERROR línea %d ('%s'): %s", row_num, machine_name, e)
             counts[SyncStatus.ERROR] += 1
 
     log.info(
@@ -4564,6 +4595,7 @@ def _sync_row(
     - Tolerancia a Fallos (Fault Tolerance): Captura proactivamente todas las excepciones
       de dominio (Skip, Error de API, Validación) garantizando que un nodo corrupto no
       quiebre todo el pipeline ETL, permitiendo que el resto de filas se procesen.
+    - `row_num` es la línea real del CSV donde empieza la fila.
     - Escalada de Estado: Si el objeto padre (Device/VM) no sufrió cambios (UNCHANGED),
       pero alguna de sus interfaces hijas sí fue creada o actualizada, se escala el
       estado final del nodo a UPDATED para que los reportes de ejecución reflejen
@@ -4572,7 +4604,7 @@ def _sync_row(
     Retorna:
         tuple[SyncCounts, CacheStore]: El acumulador de métricas mutado y la caché propagada.
     """
-    machine_name = extract_csv_value(row, "machine_name", config) or f"fila {row_num}"
+    machine_name = extract_csv_value(row, "machine_name", config) or f"línea {row_num}"
 
     try:
         sync_res, caches = _process_node_sync(
@@ -4591,19 +4623,19 @@ def _sync_row(
         result, obj_id, main_obj = sync_res
     except ConfigValidationError as e:
         raise ConfigValidationError(
-            f"Error de configuración en fila {row_num}: {e}"
+            f"Error de configuración en línea {row_num}: {e}"
         ) from e
     except RowSkipCondition as e:
-        log.warning("SKIP fila %d: %s", row_num, e)
+        log.warning("SKIP línea %d: %s", row_num, e)
         counts[SyncStatus.SKIPPED] += 1
         return counts, caches
     except (NetBoxApiError, RowValidationError, RequestError) as e:
-        log.error("ERROR de API o validación en fila %d: %s", row_num, e)
+        log.error("ERROR de API o validación en línea %d: %s", row_num, e)
         counts[SyncStatus.ERROR] += 1
         return counts, caches
     except Exception:
         log.exception(
-            "ERROR inesperado al procesar fila %d ('%s')",
+            "ERROR inesperado al procesar línea %d ('%s')",
             row_num,
             machine_name,
         )
@@ -4740,15 +4772,7 @@ def main() -> None:
     config: NetBoxMappingConfig = load_config(mapping_path)
 
     # ── Leer y Validar CSV (Fail-Fast) ───────────────────────
-    rows = read_and_validate_csv(args.csv, config)
-
-    # ── Conteo global de identidades (nombre y UUID) ─────────
-    # Usado para validar unicidad antes de permitir
-    # actualizaciones sobre objetos existentes.
-    csv_counts = CsvIdentityCounts(
-        names=count_machine_names(rows, config),
-        uuids=count_inventory_uuids(rows, config),
-    )
+    csv_data = read_and_validate_csv(args.csv, config)
 
     # ── Cargar credenciales ──────────────────────────────────
     url, token, verify_ssl = load_env()
@@ -4778,9 +4802,20 @@ def main() -> None:
     }
 
     # ── Clasificar filas por tipo de nodo ─────────────────────
-    classified_rows, counts = _classify_rows(rows, config, counts)
+    classified_rows, counts = _classify_rows(
+        csv_data.rows, csv_data.line_numbers, config, counts
+    )
     device_rows = classified_rows.device_rows
     vm_rows = classified_rows.vm_rows
+
+    # ── Conteo global de identidades (nombre y UUID) ─────────
+    # Usado para validar unicidad antes de permitir actualizaciones sobre
+    # objetos existentes. Se calcula solo sobre las filas clasificadas.
+    classified_only = [row for _, row in (*device_rows, *vm_rows)]
+    csv_counts = CsvIdentityCounts(
+        names=count_machine_names(classified_only, config),
+        uuids=count_inventory_uuids(classified_only, config),
+    )
 
     # ── Pre-escaneo: asociar clústeres con su tecnología ─────
     device_rows_only = [row for _, row in device_rows]
@@ -4835,7 +4870,7 @@ def main() -> None:
         )
 
     # ── Resumen ──────────────────────────────────────────────
-    _print_summary_and_exit(len(rows), counts, args.dry_run)
+    _print_summary_and_exit(len(csv_data.rows), counts, args.dry_run)
 
 
 if __name__ == "__main__":

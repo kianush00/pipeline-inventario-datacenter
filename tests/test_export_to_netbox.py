@@ -24,6 +24,7 @@ from export_to_netbox import (
     ClusterTypeDefaultConfig,
     ConfigValidationError,
     CsvColumnDef,
+    CsvData,
     CsvIdentityCounts,
     CsvRow,
     CustomFieldConfig,
@@ -72,6 +73,7 @@ from export_to_netbox import (
     _parse_network_interfaces,
     _parse_single_network_interface,
     _prune_network_orphans,
+    _read_csv,
     _resolve_cluster,
     _resolve_default_or_empty,
     _resolve_device_role,
@@ -3226,7 +3228,10 @@ class TestInvalidMachineTypeDoesNotAbortPipeline:
         )
         with (
             patch("export_to_netbox.load_config", return_value=config),
-            patch("export_to_netbox.read_and_validate_csv", return_value=rows),
+            patch(
+                "export_to_netbox.read_and_validate_csv",
+                return_value=CsvData(rows, list(range(2, 2 + len(rows)))),
+            ),
             patch("export_to_netbox.load_env", return_value=("u", "t", True)),
             patch("export_to_netbox.build_nb_client"),
             patch("export_to_netbox.build_netbox_endpoints"),
@@ -3244,6 +3249,85 @@ class TestInvalidMachineTypeDoesNotAbortPipeline:
 
         assert synced == ["srv-ok"]
         assert exit_info.value.code == 1  # la fila inválida cuenta como ERROR
+
+    def test_main_excludes_discarded_rows_from_identity_counts(
+        self,
+        config: NetBoxMappingConfig,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """Una fila descartada con el mismo nombre/UUID no debe volver ambigua a la válida."""
+        uuid_col = config.csv_columns["inventory_uuid"].source
+        rows = [
+            self._row(config, "Contenedor", name="srv-a") | {uuid_col: "U-1"},
+            self._row(config, "Dedicada", name="srv-a") | {uuid_col: "U-1"},
+        ]
+        seen: list[CsvIdentityCounts] = []
+
+        def fake_sync_row(
+            row_num: int, row: CsvRow, *args: Any
+        ) -> tuple[SyncCounts, CacheStore]:
+            seen.append(args[-3])
+            return args[-2], args[-4]
+
+        monkeypatch.setattr(
+            sys, "argv", ["export_to_netbox.py", str(tmp_path / "in.csv")]
+        )
+        with (
+            patch("export_to_netbox.load_config", return_value=config),
+            patch(
+                "export_to_netbox.read_and_validate_csv",
+                return_value=CsvData(rows, [2, 3]),
+            ),
+            patch("export_to_netbox.load_env", return_value=("u", "t", True)),
+            patch("export_to_netbox.build_nb_client"),
+            patch("export_to_netbox.build_netbox_endpoints"),
+            patch("export_to_netbox.ensure_custom_fields"),
+            patch("export_to_netbox.ensure_site"),
+            patch(
+                "export_to_netbox.ensure_dynamic_cluster_types",
+                return_value=(MagicMock(), {}),
+            ),
+            patch("export_to_netbox.ensure_all_device_roles", return_value=({}, {})),
+            patch("export_to_netbox._sync_row", side_effect=fake_sync_row),
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+        assert len(seen) == 1
+        assert seen[0].names["srv-a"] == 1
+        assert seen[0].uuids["u-1"] == 1
+
+
+class TestReadCsvLineNumbers:
+    """Las líneas reportadas deben ser las del archivo, aun con celdas multilínea."""
+
+    @staticmethod
+    def _write(path: Path, content: str, encoding: str = "utf-8") -> Path:
+        path.write_bytes(content.encode(encoding))
+        return path
+
+    def test_simple_csv(self, tmp_path: Path) -> None:
+        csv_path = self._write(tmp_path / "a.csv", "A,B\n1,2\n3,4\n")
+        _, data = _read_csv(csv_path)
+        assert data.line_numbers == [2, 3]
+        assert len(data.rows) == 2
+
+    def test_multiline_cell_and_blank_line(self, tmp_path: Path) -> None:
+        content = 'A,B\n"x\ny\nz",1\n\nq,2\nr,3\n'
+        _, data = _read_csv(self._write(tmp_path / "b.csv", content))
+        # El 1.er registro ocupa las líneas 2-4; la línea 5 está en blanco.
+        assert data.line_numbers == [2, 6, 7]
+
+    def test_utf8_bom_does_not_shift_lines(self, tmp_path: Path) -> None:
+        csv_path = self._write(tmp_path / "c.csv", "\ufeffA,B\n1,2\n", "utf-8")
+        headers, data = _read_csv(csv_path)
+        assert headers == ["A", "B"]
+        assert data.line_numbers == [2]
+
+    def test_empty_body(self, tmp_path: Path) -> None:
+        _, data = _read_csv(self._write(tmp_path / "d.csv", "A,B\n"))
+        assert data == CsvData([], [])
 
 
 class TestEnsureTaxonomyQACases:
@@ -3831,18 +3915,18 @@ class TestClassifyRows:
 
         counts = {SyncStatus.ERROR: 0}
 
-        result, new_counts = _classify_rows(rows, MagicMock(), counts)  # type: ignore
+        result, new_counts = _classify_rows(rows, [2, 3, 4], MagicMock(), counts)  # type: ignore
 
         assert len(result.device_rows) == 2
         assert len(result.vm_rows) == 1
         assert new_counts[SyncStatus.ERROR] == 0
-        # Validar índices reales devueltos (start=2)
+        # Se propagan las líneas reales recibidas, no el índice de la lista
         assert result.device_rows[0][0] == 2
         assert result.vm_rows[0][0] == 3
         assert result.device_rows[1][0] == 4
 
     def test_classify_rows_validation_error(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Verifica el caso de borde destructivo: Una fila corrompida lanza RowValidationError."""
 
@@ -3867,11 +3951,19 @@ class TestClassifyRows:
 
         counts = {SyncStatus.ERROR: 5}  # Empezamos con un estado previo
 
-        result, new_counts = _classify_rows(rows, MagicMock(), counts)  # type: ignore
+        result, new_counts = _classify_rows(
+            rows,
+            [2, 7],
+            MagicMock(),
+            counts,  # type: ignore
+        )
 
         assert len(result.device_rows) == 1
         assert len(result.vm_rows) == 0
         assert new_counts[SyncStatus.ERROR] == 6  # Se sumó 1 error
+        # La fila válida conserva su línea real (7), no su índice en la lista
+        assert result.device_rows[0][0] == 7
+        assert "línea 2 ('broken_host')" in caplog.text
 
 
 class TestFormatDiffKeys:

@@ -60,10 +60,12 @@ The pipeline is designed to be executed repeatedly with the same input without g
 
 The exporter follows this logic for each row in the CSV:
 
+Rows are identified in logs by the physical CSV line where they start (not by list position), so messages stay accurate with multi-line cells.
+
 1. **Identity resolution (two stages)**:
    1. **By UUID**: searches NetBox by `inventory_uuid` (exact match) and requires the UUID to be unique, i.e. it appears exactly once in the CSV and on exactly one NetBox object. If so, that object is synchronized.
    2. **By name** (only if the UUID stage does not resolve the row: empty, not found, or duplicated in the CSV or NetBox): searches by machine name.
-2. **Uniqueness validation**: A name match requires the name to be unique both in the CSV and in NetBox; otherwise the row is skipped. A name match is also skipped when the existing object already carries a *different* non-empty `inventory_uuid` (the identity of another node is never overwritten). Rows that share a duplicated UUID therefore never overwrite each other: each one is resolved independently by its own name.
+2. **Uniqueness validation**: Uniqueness is counted only over CSV rows with a valid `machine_type` (rows discarded as invalid are not synchronized, so they cannot make another row ambiguous). A name match requires the name to be unique both in the CSV and in NetBox; otherwise the row is skipped. A name match is also skipped when the existing object already carries a *different* non-empty `inventory_uuid` (the identity of another node is never overwritten). Rows that share a duplicated UUID therefore never overwrite each other: each one is resolved independently by its own name.
 3. **Payload construction**: Fields are mapped according to the contract defined in `netbox_mapping.yaml`, applying casts and transformations.
 4. **Change detection**: Compares the payload against the current state of the record. An update is only issued if there are actual differences.
 5. **Dependency synchronization**: Sites, Manufacturers, Device Types, Platforms, Roles, Clusters, Custom Fields, Interfaces, Prefixes, and IPs are created or resolved as prerequisites.
