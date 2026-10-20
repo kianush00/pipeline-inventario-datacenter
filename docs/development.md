@@ -26,6 +26,8 @@ Before committing new code or deploying changes, make sure all tests pass succes
 
 Checks type annotations, missing arguments, and unjustified use of `Any`.
 
+Pyright targets Python 3.12 (`pythonVersion` in [`pyrightconfig.json`](../pyrightconfig.json)).
+
 ### Linting (Ruff)
 
 ```bash
@@ -35,6 +37,8 @@ Checks type annotations, missing arguments, and unjustified use of `Any`.
 # Format according to PEP 8
 .venv/bin/ruff format <file>
 ```
+
+Ruff targets Python 3.12 (`target-version` in [`ruff.toml`](../ruff.toml)), so its modernization rules expect 3.12 syntax, e.g. PEP 695 `type` aliases instead of `TypeAlias`.
 
 ### Syntax Validation
 

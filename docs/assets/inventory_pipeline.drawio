@@ -4,7 +4,7 @@
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="setup" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EBEBEB;strokeColor=#666666;fontSize=14;spacing=10;align=left;shadow=1;glass=1;" value="&lt;b&gt;Prerequisites&lt;/b&gt;&lt;br&gt;&lt;br&gt;• Python 3.10+&lt;br&gt;• source .venv/bin/activate&lt;br&gt;• pip install -r requirements.txt&lt;br&gt;• LibreOffice (ODS/XLSX)" vertex="1">
+        <mxCell id="setup" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EBEBEB;strokeColor=#666666;fontSize=14;spacing=10;align=left;shadow=1;glass=1;" value="&lt;b&gt;Prerequisites&lt;/b&gt;&lt;br&gt;&lt;br&gt;• Python 3.12+&lt;br&gt;• source .venv/bin/activate&lt;br&gt;• pip install -r requirements.txt&lt;br&gt;• LibreOffice (ODS/XLSX)" vertex="1">
           <mxGeometry height="140" width="240" x="500" y="23" as="geometry" />
         </mxCell>
         <mxCell id="nodes" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=14;spacing=10;fontStyle=1" value="Target nodes&lt;br&gt;&lt;span style=&quot;font-weight:normal;font-size:12px&quot;&gt;Physical servers, VMs, hypervisors&lt;/span&gt;" vertex="1">

@@ -1,6 +1,6 @@
 # 🏢 Datacenter Inventory Pipeline
 
-[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Python Version](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![NetBox Integration](https://img.shields.io/badge/NetBox-4.6%2B-0060B8.svg)](https://netbox.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -78,6 +78,7 @@ python3 export_to_netbox.py merged_inventory.csv --prune-network-orphans
 ├── requirements.txt
 ├── .env.example                  # NetBox credentials template
 ├── pyrightconfig.json            # Pyright (static typing) configuration
+├── ruff.toml                     # Ruff (lint/format) configuration, Python 3.12 target
 ├── .pyrefly.toml                 # Pyrefly (static typing) configuration
 ├── conftest.py
 ├── .agents/skills/               # AI agent specialized skills

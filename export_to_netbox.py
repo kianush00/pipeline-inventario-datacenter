@@ -61,9 +61,7 @@ from typing import (
     Literal,
     NamedTuple,
     NoReturn,
-    TypeAlias,
     TypedDict,
-    Union,
     assert_never,
     cast,
 )
@@ -178,21 +176,22 @@ DEFAULT_DEVICE_TYPE_U_HEIGHT: Final = 1.0
 # Longitud máxima de DeviceType.part_number en NetBox (CharField max_length=50).
 PART_NUMBER_MAX_LENGTH: Final = 50
 
-NetBoxObject: TypeAlias = Union[Record, "MockNetBoxRecord"]
-CsvRow: TypeAlias = dict[str, str]
-FieldValue: TypeAlias = str | int | float | bool | list[str] | None
-CustomFieldsPayload: TypeAlias = dict[str, FieldValue]
-SyncCounts: TypeAlias = dict[SyncStatus, int]
-NetBoxPayload: TypeAlias = dict[str, Any]
+# Los alias `type` (PEP 695) se evalúan de forma diferida: pueden referenciar clases
+# definidas más abajo en el módulo (ej. MockNetBoxRecord) sin comillas.
+type NetBoxObject = Record | MockNetBoxRecord
+type CsvRow = dict[str, str]
+type FieldValue = str | int | float | bool | list[str] | None
+type CustomFieldsPayload = dict[str, FieldValue]
+type SyncCounts = dict[SyncStatus, int]
+type NetBoxPayload = dict[str, Any]
 
 # Alias de Tipos para los Cachés de NetBox
-NameCache: TypeAlias = dict[str, NetBoxObject]
-SiteNameCache: TypeAlias = dict[tuple[int, str], NetBoxObject]
-ManufModelCache: TypeAlias = dict[tuple[str, str], NetBoxObject]
-HostDeviceCache: TypeAlias = dict[tuple[int, str], int | None]
-DeviceTypeKey: TypeAlias = tuple[
-    str, str
-]  # (fabricante, modelo) tal como vienen del CSV
+type NameCache = dict[str, NetBoxObject]
+type SiteNameCache = dict[tuple[int, str], NetBoxObject]
+type ManufModelCache = dict[tuple[str, str], NetBoxObject]
+type HostDeviceCache = dict[tuple[int, str], int | None]
+# (fabricante, modelo) tal como vienen del CSV.
+type DeviceTypeKey = tuple[str, str]
 # TODO: no sería mejor mover el TypeAlias DeviceTypeKey a un NamedTuple? evalúa ese y otros TypeAlias
 
 
@@ -206,7 +205,7 @@ class DeviceTypeAttributes(NamedTuple):
     part_number: str | None
 
 
-DeviceTypeAttrsMap: TypeAlias = dict[DeviceTypeKey, DeviceTypeAttributes]
+type DeviceTypeAttrsMap = dict[DeviceTypeKey, DeviceTypeAttributes]
 # TODO: No sería mejor convertir DeviceTypeAttrsMap a un TypedDict?
 
 

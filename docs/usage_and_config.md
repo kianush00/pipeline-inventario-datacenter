@@ -6,7 +6,7 @@ This document describes how to configure the environment, the required variables
 
 ## Prerequisites
 
-- Python 3.10 or higher
+- Python 3.12 or higher
 - `pip`
 - LibreOffice available as `libreoffice` or `soffice` in `PATH` (for ODS/XLSX conversion and ODS updates)
 - NetBox 4.6 or higher (for the export stage)
