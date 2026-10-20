@@ -4,7 +4,9 @@ Pruebas unitarias para export_to_netbox.py
 
 import hashlib
 import logging
+import sys
 from collections import Counter
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
@@ -14,6 +16,7 @@ from pynetbox.core.query import RequestError  # type: ignore
 
 import export_to_netbox
 from export_to_netbox import (
+    CacheStore,
     CastType,
     ChoiceItemConfig,
     ChoiceSetConfig,
@@ -22,6 +25,7 @@ from export_to_netbox import (
     ConfigValidationError,
     CsvColumnDef,
     CsvIdentityCounts,
+    CsvRow,
     CustomFieldConfig,
     DeviceRoleConfig,
     Endpoint,
@@ -42,6 +46,7 @@ from export_to_netbox import (
     SiteConfig,
     SiteNameCache,
     StatusDefaultConfig,
+    SyncCounts,
     SyncResult,
     SyncStatus,
     ValidationError,
@@ -109,6 +114,7 @@ from export_to_netbox import (
     get_node_type_from_row,
     get_or_create_cached,
     load_config,
+    main,
     parse_bool_si_no,
     parse_float,
     parse_float_to_int,
@@ -3166,6 +3172,78 @@ class TestGetOrCreateCached:
 
         assert result == mock_obj
         assert endpoint.filter.call_count == 2
+
+
+class TestInvalidMachineTypeDoesNotAbortPipeline:
+    """
+    Un 'machine_type' fuera del mapa debe contarse como ERROR de su fila
+    (vía _classify_rows) y no abortar el pipeline desde el pre-escaneo global.
+    """
+
+    @staticmethod
+    def _row(config: NetBoxMappingConfig, machine_type: str, **extra: str) -> CsvRow:
+        src = {k: v.source for k, v in config.csv_columns.items()}
+        row = {
+            src["machine_name"]: extra.get("name", "srv-01"),
+            src["machine_type"]: machine_type,
+            src["cluster_name"]: extra.get("cluster", "Cluster-A"),
+            src["hypervisor_os"]: extra.get("hypervisor_os", ""),
+        }
+        return row
+
+    def test_precompute_ignores_unknown_machine_type(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        rows = [
+            self._row(config, "Contenedor", name="srv-x", hypervisor_os="ESXi"),
+            self._row(config, "Hipervisor", name="hv-1", hypervisor_os="Proxmox VE"),
+        ]
+        assert precompute_cluster_type_map(rows, config) == {"Cluster-A": "Proxmox VE"}
+
+    def test_main_counts_invalid_row_as_error_and_syncs_the_rest(
+        self,
+        config: NetBoxMappingConfig,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        rows = [
+            self._row(config, "Contenedor", name="srv-x"),
+            self._row(config, "Dedicada", name="srv-ok"),
+        ]
+        synced: list[str] = []
+        name_col = config.csv_columns["machine_name"].source
+
+        def fake_sync_row(
+            row_num: int, row: CsvRow, *args: Any
+        ) -> tuple[SyncCounts, CacheStore]:
+            counts: SyncCounts = args[-2]
+            synced.append(row[name_col])
+            counts[SyncStatus.UNCHANGED] += 1
+            return counts, args[-4]
+
+        monkeypatch.setattr(
+            sys, "argv", ["export_to_netbox.py", str(tmp_path / "in.csv")]
+        )
+        with (
+            patch("export_to_netbox.load_config", return_value=config),
+            patch("export_to_netbox.read_and_validate_csv", return_value=rows),
+            patch("export_to_netbox.load_env", return_value=("u", "t", True)),
+            patch("export_to_netbox.build_nb_client"),
+            patch("export_to_netbox.build_netbox_endpoints"),
+            patch("export_to_netbox.ensure_custom_fields"),
+            patch("export_to_netbox.ensure_site"),
+            patch(
+                "export_to_netbox.ensure_dynamic_cluster_types",
+                return_value=(MagicMock(), {}),
+            ),
+            patch("export_to_netbox.ensure_all_device_roles", return_value=({}, {})),
+            patch("export_to_netbox._sync_row", side_effect=fake_sync_row),
+            pytest.raises(SystemExit) as exit_info,
+        ):
+            main()
+
+        assert synced == ["srv-ok"]
+        assert exit_info.value.code == 1  # la fila inválida cuenta como ERROR
 
 
 class TestEnsureTaxonomyQACases:

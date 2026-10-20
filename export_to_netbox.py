@@ -2029,12 +2029,18 @@ def precompute_cluster_type_map(
     mismo clúster reportan distintos valores de SO, lanza un error
     explícito para forzar la corrección del maestro.
 
+    Decisiones de diseño:
+    - El mapeo de 'machine_type' es no estricto: un tipo desconocido no es
+      un hipervisor y se ignora aquí. Reportarlo como ERROR por fila es
+      responsabilidad de `_classify_rows`; lanzar desde este pre-escaneo global
+      abortaría todo el pipeline por una sola celda inválida.
+
     Retorna un diccionario {cluster_name: hypervisor_os}.
     """
     cluster_type_map: dict[str, str] = {}
 
     for row in rows:
-        machine_type = extract_csv_value(row, "machine_type", config)
+        machine_type = extract_csv_value(row, "machine_type", config, strict_map=False)
         if not config.is_cluster_host(machine_type):
             continue
 
@@ -4762,21 +4768,6 @@ def main() -> None:
     # ── Inicializar caches ───────────────────────────────────
     caches: CacheStore = CacheStore()
 
-    # ── Pre-escaneo: asociar clústeres con su tecnología ─────
-    cluster_type_map = precompute_cluster_type_map(rows, config)
-    fallback_cluster_type, caches.cluster_types = ensure_dynamic_cluster_types(
-        endpoints,
-        cluster_type_map,
-        config.cluster_type,
-        caches.cluster_types,
-        args.dry_run,
-    )
-
-    # ── Garantizar taxonomía local ──────────────────────────
-    _, caches.device_roles = ensure_all_device_roles(
-        endpoints, config.device_roles, caches.device_roles, args.dry_run
-    )
-
     # ── Contadores ───────────────────────────────────────────
     counts: SyncCounts = {
         SyncStatus.CREATED: 0,
@@ -4790,6 +4781,22 @@ def main() -> None:
     classified_rows, counts = _classify_rows(rows, config, counts)
     device_rows = classified_rows.device_rows
     vm_rows = classified_rows.vm_rows
+
+    # ── Pre-escaneo: asociar clústeres con su tecnología ─────
+    device_rows_only = [row for _, row in device_rows]
+    cluster_type_map = precompute_cluster_type_map(device_rows_only, config)
+    fallback_cluster_type, caches.cluster_types = ensure_dynamic_cluster_types(
+        endpoints,
+        cluster_type_map,
+        config.cluster_type,
+        caches.cluster_types,
+        args.dry_run,
+    )
+
+    # ── Garantizar taxonomía local ──────────────────────────
+    _, caches.device_roles = ensure_all_device_roles(
+        endpoints, config.device_roles, caches.device_roles, args.dry_run
+    )
 
     # ── Fase 1: Sincronizar Devices ──────────────────────────
     log.info("── Fase 1: Sincronizando %d Device(s) ──", len(device_rows))
