@@ -1,4 +1,0 @@
-# Configuración de Ruff (linter y formateador) del proyecto.
-# Versión mínima de Python soportada: alinea las reglas de modernización (pyupgrade)
-# y el formateo con la sintaxis disponible en 3.12.
-target-version = "py312"
