@@ -173,6 +173,11 @@ class CastType(str, Enum):
 
 # Posición mínima (U) que NetBox acepta en Device.position (MinValueValidator(1)).
 RACK_POSITION_MIN: Final = 1.0
+# Altura por defecto (U) con la que se crea un DeviceType si el CSV no la informa.
+DEFAULT_DEVICE_TYPE_U_HEIGHT: Final = 1.0
+# Longitud máxima de DeviceType.part_number en NetBox (CharField max_length=50).
+PART_NUMBER_MAX_LENGTH: Final = 50
+# TODO: duda: es factible mover esos valores a netbox_mapping.yaml?
 
 NetBoxObject: TypeAlias = Union[Record, "MockNetBoxRecord"]
 CsvRow: TypeAlias = dict[str, str]
@@ -186,6 +191,24 @@ NameCache: TypeAlias = dict[str, NetBoxObject]
 SiteNameCache: TypeAlias = dict[tuple[int, str], NetBoxObject]
 ManufModelCache: TypeAlias = dict[tuple[str, str], NetBoxObject]
 HostDeviceCache: TypeAlias = dict[tuple[int, str], int | None]
+DeviceTypeKey: TypeAlias = tuple[
+    str, str
+]  # (fabricante, modelo) tal como vienen del CSV
+# TODO: no sería mejor mover el TypeAlias DeviceTypeKey a un NamedTuple? evalúa ese y otros TypeAlias
+
+
+class DeviceTypeAttributes(NamedTuple):
+    """
+    Atributos de nivel de modelo de un DeviceType informados por el CSV.
+    `None` significa "no informado": nunca se usa para modificar un DeviceType existente.
+    """
+
+    u_height: float | None
+    part_number: str | None
+
+
+DeviceTypeAttrsMap: TypeAlias = dict[DeviceTypeKey, DeviceTypeAttributes]
+# TODO: No sería mejor convertir DeviceTypeAttrsMap a un TypedDict?
 
 
 class CsvIdentityCounts(NamedTuple):
@@ -1006,6 +1029,27 @@ def parse_rack_position(value: Any) -> float:
     if not (position * 2).is_integer():
         raise ValueError("La posición debe ser múltiplo de 0.5 unidades de rack.")
     return position
+
+
+def parse_u_height(value: Any) -> float:
+    """
+    Convierte la altura (U) de un DeviceType a float válido para NetBox.
+
+    Decisiones de diseño:
+    - NetBox almacena `u_height` como Decimal (1 decimal) y su `clean()` exige
+      incrementos de 0.5. El 0 es válido (dispositivos 0U, ej. blades hijos de un chasis).
+    - Se valida aquí para reportar un error claro por fila en lugar de un HTTP 400.
+    """
+    try:
+        u_height = _to_float(value)
+    except (ValueError, TypeError) as e:
+        raise ValueError("No es una altura (U) numérica válida.") from e
+
+    if u_height < 0:
+        raise ValueError("La altura (U) no puede ser negativa.")
+    if not (u_height * 2).is_integer():
+        raise ValueError("La altura (U) debe ser múltiplo de 0.5 unidades de rack.")
+    return u_height
 
 
 def parse_bool_si_no(value: Any) -> bool:
@@ -2151,6 +2195,132 @@ def precompute_cluster_type_map(
     return cluster_type_map
 
 
+def parse_device_type_attributes(
+    row: CsvRow, config: NetBoxMappingConfig
+) -> DeviceTypeAttributes:
+    """
+    Extrae y valida los atributos de DeviceType ('hei_u', 'part_number') de una fila.
+
+    Un valor vacío se representa como `None` ("no informado"); un 0 explícito es un
+    valor real. Lanza RowValidationError si algún valor informado es inválido.
+    """
+    raw_u_height = extract_csv_value(row, "hei_u", config)
+    u_height: float | None = None
+    if raw_u_height:
+        try:
+            u_height = parse_u_height(raw_u_height)
+        except ValueError as e:
+            raise RowValidationError(
+                f"Valor inválido '{raw_u_height}' para 'hei_u'. {e}"
+            ) from e
+
+    part_number: str | None = extract_csv_value(row, "part_number", config) or None
+    if part_number is not None and len(part_number) > PART_NUMBER_MAX_LENGTH:
+        raise RowValidationError(
+            f"El P/N '{part_number}' supera los {PART_NUMBER_MAX_LENGTH} caracteres "
+            "que admite NetBox."
+        )
+
+    return DeviceTypeAttributes(u_height, part_number)
+
+
+def _consolidate_attribute(
+    model_label: str,
+    attribute_label: str,
+    current: tuple[float | str, int] | None,
+    candidate: float | str | None,
+    candidate_line: int,
+) -> tuple[float | str, int] | None:
+    """
+    Aplica la regla "primer valor no vacío" a un atributo de un modelo.
+
+    `current` es (valor, línea de origen) ya elegido, o None si aún no hay valor.
+    Advierte cuando una fila posterior contradice el valor elegido.
+    Retorna el (valor, línea) vigente tras considerar el candidato.
+    """
+    if candidate is None:
+        return current
+    if current is None:
+        return candidate, candidate_line
+
+    chosen_value, chosen_line = current
+    if candidate != chosen_value:
+        log.warning(
+            "Conflicto en DeviceType '%s': '%s' = %r (línea %d) vs %r (línea %d). "
+            "Se usa %r; corrija el inventario maestro.",
+            model_label,
+            attribute_label,
+            chosen_value,
+            chosen_line,
+            candidate,
+            candidate_line,
+            chosen_value,
+        )
+    return current
+
+
+def precompute_device_type_attributes(
+    device_rows: list[tuple[int, CsvRow]],
+    config: NetBoxMappingConfig,
+) -> DeviceTypeAttrsMap:
+    """
+    Pre-escaneo del CSV: consolida un único valor de altura y P/N por modelo.
+
+    Decisiones de diseño:
+    - Altura y P/N son atributos del DeviceType, que comparten todos los equipos de
+      un mismo modelo. Si cada fila los escribiera, ganaría la última y el tipo
+      oscilaría en cada ejecución. Se elige un valor por modelo antes de sincronizar.
+    - Regla determinista: el primer valor no vacío según el orden del CSV, evaluada
+      por atributo. Los conflictos se advierten con sus líneas de origen.
+    - Las filas sin fabricante/modelo o con valores inválidos se ignoran aquí: se
+      reportan como SKIP/ERROR al sincronizarse. Lanzar desde este pre-escaneo global
+      abortaría todo el pipeline por una sola celda.
+
+    Retorna un diccionario {(fabricante, modelo): DeviceTypeAttributes}.
+    """
+    # TODO: valdría la pena darle un alias o alguna estructura semantica a tuple[float | str, int] | None?
+    heights: dict[DeviceTypeKey, tuple[float | str, int] | None] = {}
+    part_numbers: dict[DeviceTypeKey, tuple[float | str, int] | None] = {}
+
+    for line_number, row in device_rows:
+        manufacturer = extract_csv_value(row, "manufacturer", config)
+        model = extract_csv_value(row, "model", config)
+        if not manufacturer or not model:
+            continue
+        try:
+            attributes = parse_device_type_attributes(row, config)
+        except RowValidationError:
+            # TODO: es correcto que solamente haga continue? o debería imprimir algun mensaje?
+            continue
+
+        key: DeviceTypeKey = (manufacturer, model)
+        model_label = f"{manufacturer} / {model}"
+        heights[key] = _consolidate_attribute(
+            model_label,
+            "Altura (U)",
+            heights.get(key),
+            attributes.u_height,
+            line_number,
+        )
+        part_numbers[key] = _consolidate_attribute(
+            model_label,
+            "P/N",
+            part_numbers.get(key),
+            attributes.part_number,
+            line_number,
+        )
+
+    consolidated: DeviceTypeAttrsMap = {}
+    for key in heights.keys() | part_numbers.keys():
+        height_entry = heights.get(key)
+        pn_entry = part_numbers.get(key)
+        consolidated[key] = DeviceTypeAttributes(
+            float(height_entry[0]) if height_entry is not None else None,
+            str(pn_entry[0]) if pn_entry is not None else None,
+        )
+    return consolidated
+
+
 def _ensure_cluster_type(
     cluster_type_endpoint: Endpoint,
     name: str,
@@ -2353,24 +2523,26 @@ def ensure_manufacturer(
 def _sync_device_type_attributes(
     existing_dt: Record,
     model: str,
-    target_height: float,
-    target_part_number: str,
+    attributes: DeviceTypeAttributes,
     dry_run: bool,
 ) -> bool:
     """
     Sincroniza los atributos del DeviceType (u_height y part_number).
-    Actualiza el objeto in-place si es necesario.
+
+    Solo se actualizan los atributos informados (`not None`): un valor vacío en el
+    CSV nunca borra ni degrada lo que ya tiene NetBox (ej. un P/N cargado a mano o
+    la altura 0U de un tipo hijo).
     Retorna True si el objeto fue (o habría sido) actualizado, False en caso contrario.
     """
-    current_val = getattr(existing_dt, "u_height", 1)
-    current_height = float(current_val) if current_val is not None else 1.0
+    current_raw_h = getattr(existing_dt, "u_height", None)
+    current_height = float(current_raw_h) if current_raw_h is not None else None
     current_pn = getattr(existing_dt, "part_number", "") or ""
 
     updates: NetBoxPayload = {}
-    if current_height != target_height:
-        updates["u_height"] = target_height
-    if current_pn != target_part_number:
-        updates["part_number"] = target_part_number
+    if attributes.u_height is not None and current_height != attributes.u_height:
+        updates["u_height"] = attributes.u_height
+    if attributes.part_number is not None and current_pn != attributes.part_number:
+        updates["part_number"] = attributes.part_number
 
     if not updates:
         return False
@@ -2382,18 +2554,43 @@ def ensure_device_type(
     device_types_endpoint: Endpoint,
     manufacturer: NetBoxObject,
     model: str,
-    part_number: str,
-    u_height: float,
+    attributes: DeviceTypeAttributes,
     cache: ManufModelCache,
     dry_run: bool,
 ) -> tuple[NetBoxObject, ManufModelCache]:
-    """Garantiza que el DeviceType exista en NetBox.
-    Retorna el objeto DeviceType creado y la caché actualizada."""
+    """
+    Garantiza que el DeviceType exista en NetBox con los atributos consolidados del modelo.
+
+    Decisiones de diseño:
+    - Los atributos se sincronizan una sola vez por modelo y ejecución (al resolverse
+      por primera vez); los aciertos de caché no vuelven a escribir el tipo.
+    - Al crear, un valor no informado usa el default (altura 1.0U, P/N vacío).
+    - Si NetBox rechaza la actualización (ej. pasar a 0U con equipos montados en racks,
+      o ampliar la altura sin espacio), se advierte y se conserva el tipo actual: el
+      DeviceType existe y es válido, por lo que no debe bloquear la sincronización del nodo.
+
+    Retorna el objeto DeviceType y la caché actualizada.
+    """
     manufacturer_id = get_netbox_object_id(manufacturer)
 
     # El ID numérico se retiene solo como fallback.
     manufacturer_name = str(getattr(manufacturer, "name", manufacturer_id))
     key = (manufacturer_name, model)
+    already_resolved = key in cache
+
+    if attributes.u_height is None and not already_resolved:
+        log.warning(
+            "Altura (U) vacía para el modelo '%s / %s': si el DeviceType no existe se "
+            "creará con %.1fU por defecto; si ya existe, se conserva su altura actual.",
+            manufacturer_name,
+            model,
+            DEFAULT_DEVICE_TYPE_U_HEIGHT,
+        )
+    u_height = (
+        attributes.u_height
+        if attributes.u_height is not None
+        else DEFAULT_DEVICE_TYPE_U_HEIGHT
+    )
 
     slug = slugify(f"{manufacturer_name} {model}")
 
@@ -2404,7 +2601,7 @@ def ensure_device_type(
         filter_kwargs={"model": model, "manufacturer_id": manufacturer_id},
         create_kwargs={
             "model": model,
-            "part_number": part_number,
+            "part_number": attributes.part_number or "",
             "slug": slug,
             "manufacturer": manufacturer_id,
             "u_height": u_height,
@@ -2416,9 +2613,18 @@ def ensure_device_type(
         skip_filter=(manufacturer_id == 0),
     )
 
-    if getattr(obj, "id", 0) != 0:
-        _sync_device_type_attributes(
-            cast(Record, obj), model, u_height, part_number, dry_run
+    if already_resolved or getattr(obj, "id", 0) == 0:
+        return obj, cache
+
+    try:
+        _sync_device_type_attributes(cast(Record, obj), model, attributes, dry_run)
+    except NetBoxApiError as e:
+        log.warning(
+            "NetBox rechazó actualizar el DeviceType '%s / %s'; se conserva el tipo "
+            "actual: %s",
+            manufacturer_name,
+            model,
+            e,
         )
     return obj, cache
 
@@ -2911,15 +3117,21 @@ def _resolve_device_type(
     row: CsvRow,
     manufacturer: str,
     model: str,
+    device_type_attrs: DeviceTypeAttrsMap,
     caches: CacheStore,
     config: NetBoxMappingConfig,
     dry_run: bool,
 ) -> tuple[int, CacheStore]:
     """
     Resuelve y retorna el ID del DeviceType utilizando el manufacturer y el modelo.
-    Si la altura ('hei_u') no se proporciona o es inválida, asume 1 por defecto.
+
+    Los atributos de la fila se validan siempre (un valor inválido es error de la
+    fila), pero el DeviceType se sincroniza con los atributos consolidados del modelo
+    (`device_type_attrs`), para que todas las filas de un modelo coincidan.
     Retorna una tupla con el ID del DeviceType y la caché (CacheStore) actualizada.
     """
+    row_attributes = parse_device_type_attributes(row, config)
+    attributes = device_type_attrs.get((manufacturer, model), row_attributes)
 
     # Manufacturer.
     manufacturer_obj, caches.manufacturers = ensure_manufacturer(
@@ -2929,25 +3141,11 @@ def _resolve_device_type(
         dry_run,
     )
 
-    raw_u_height = extract_csv_value(row, "hei_u", config)
-    if not raw_u_height:
-        u_height = 1.0
-    else:
-        try:
-            u_height = parse_float(raw_u_height)
-        except ValueError:
-            raise RowValidationError(
-                f"Valor numérico inválido '{raw_u_height}' para 'hei_u'."
-            )
-
-    part_number = extract_csv_value(row, "part_number", config) or ""
-
     device_type, caches.device_types = ensure_device_type(
         endpoints.device_types,
         manufacturer_obj,
         model,
-        part_number,
-        u_height,
+        attributes,
         caches.device_types,
         dry_run,
     )
@@ -3382,6 +3580,7 @@ def sync_device(
     config: NetBoxMappingConfig,
     site: NetBoxObject,
     cluster_type_map: dict[str, str],
+    device_type_attrs: DeviceTypeAttrsMap,
     fallback_cluster_type: NetBoxObject,
     caches: CacheStore,
     csv_counts: CsvIdentityCounts,
@@ -3480,6 +3679,7 @@ def sync_device(
         row,
         manufacturer,
         model,
+        device_type_attrs,
         caches,
         config,
         dry_run,
@@ -4620,6 +4820,7 @@ def _process_node_sync(
     config: NetBoxMappingConfig,
     site: NetBoxObject,
     cluster_type_map: dict[str, str],
+    device_type_attrs: DeviceTypeAttrsMap,
     fallback_cluster_type: NetBoxObject,
     caches: CacheStore,
     csv_counts: CsvIdentityCounts,
@@ -4646,6 +4847,7 @@ def _process_node_sync(
             config,
             site,
             cluster_type_map,
+            device_type_attrs,
             fallback_cluster_type,
             caches,
             csv_counts,
@@ -4677,6 +4879,7 @@ def _sync_row(
     config: NetBoxMappingConfig,
     site: NetBoxObject,
     cluster_type_map: dict[str, str],
+    device_type_attrs: DeviceTypeAttrsMap,
     fallback_cluster_type: NetBoxObject,
     caches: CacheStore,
     csv_counts: CsvIdentityCounts,
@@ -4710,6 +4913,7 @@ def _sync_row(
             config,
             site,
             cluster_type_map,
+            device_type_attrs,
             fallback_cluster_type,
             caches,
             csv_counts,
@@ -4927,6 +5131,9 @@ def main() -> None:
         args.dry_run,
     )
 
+    # ── Pre-escaneo: atributos de DeviceType consolidados por modelo ──
+    device_type_attrs = precompute_device_type_attributes(device_rows, config)
+
     # ── Garantizar taxonomía local ──────────────────────────
     _, caches.device_roles = ensure_all_device_roles(
         endpoints, config.device_roles, caches.device_roles, args.dry_run
@@ -4943,6 +5150,7 @@ def main() -> None:
             config,
             site,
             cluster_type_map,
+            device_type_attrs,
             fallback_cluster_type,
             caches,
             csv_counts,
@@ -4961,6 +5169,7 @@ def main() -> None:
             config,
             site,
             cluster_type_map,
+            device_type_attrs,
             fallback_cluster_type,
             caches,
             csv_counts,

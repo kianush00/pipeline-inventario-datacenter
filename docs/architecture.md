@@ -76,6 +76,16 @@ Rows are identified in logs by the physical CSV line where they start (not by li
 6. **Shared IP handling**: NetBox does not allow the same IP on two interfaces (e.g. a node and its replica). An IP already assigned to another interface is skipped with a `WARNING` naming its owner, not counted as an error. The first node processed keeps the IP.
 7. **Primary IP assignment**: If a Device or VM has exactly one valid IP, it is automatically assigned as the primary IPv4.
 
+### Device Type Attributes (Model-Level Consolidation)
+
+`Height (U)` and `P/N` belong to the **DeviceType**, which is shared by every device of the same manufacturer and model. To keep the export idempotent, they are consolidated **once per model** before synchronizing:
+
+- **First non-empty value wins**, per attribute and in CSV order. Rows of the same model that disagree produce a `WARNING` with the CSV lines involved; the master inventory should be corrected.
+- The DeviceType is written **at most once per run** with the consolidated values, so rows never overwrite each other and a re-run issues no updates.
+- **Empty never overwrites**: an existing DeviceType keeps its height and P/N when the CSV does not inform them (protects manual P/N and 0U child types). A new DeviceType without height is created with `1.0U` (with a warning). `0` is an explicit, valid height.
+- If NetBox **rejects** the update (e.g. switching to 0U while devices are racked, or growing the height without rack space), a `WARNING` is logged and the device is synchronized with the current DeviceType.
+- Invalid values in a row (height not a multiple of `0.5`, negative, or P/N longer than 50 characters) make that row fail; they are ignored by the consolidation.
+
 ### Taxonomy Resolution & Slug Collisions (Fail-Fast vs. Fail-Safe)
 
 NetBox mandates a URL-friendly `slug` for abstract taxonomy models (`Site`, `ClusterType`, `Manufacturer`, `DeviceType`, `DeviceRole`, `Platform`), but does not use slugs for physical instantiated objects (`Rack`, `Cluster`, `Device`, `VirtualMachine`).

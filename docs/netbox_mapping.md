@@ -53,7 +53,7 @@ This table acts as a data dictionary of the fields the script expects to extract
 | `rack` | `Rack` | Name of the physical rack where it is located. | `Rack-A1`, `Row-2-R4` |
 | `rack_location` | `Fila` | Name of the Location (row/corridor) where the rack is grouped. | `Row A`, `Row B` |
 | `pos_u` | `Posicion (U)` | Physical position or lowest bay number within the rack. Must be `>= 1` and a multiple of `0.5` (NetBox `Device.position` constraint). | `12`, `25`, `12.5` |
-| `hei_u` | `Altura (U)` | Total U height the device occupies in the rack (usually 1, 2, or fractional). | `1.0`, `1.5`, `2.0` |
+| `hei_u` | `Altura (U)` | Total U height of the device **model** (DeviceType). Must be `>= 0` and a multiple of `0.5`; `0` is valid (e.g. blades inside a chassis). If empty, an existing DeviceType keeps its height and a new one is created with `1.0` (with a warning). | `0`, `1.0`, `1.5`, `2.0` |
 | `os` | `SO Host` | Base operating system of the node. | `Ubuntu`, `Windows Server 2022` |
 | `os_ver` | `Version SO Host` | Specific OS version. | `22.04 LTS`, `2019 Standard` |
 | `hypervisor_os` | `SO Hipervisor` | Base hypervisor operating system (e.g. ESXi, Proxmox). | `VMware ESXi`, `Proxmox VE` |
@@ -74,7 +74,7 @@ This table acts as a data dictionary of the fields the script expects to extract
 | `manufacturer` | `Marca` | Hardware brand or manufacturer. | `Dell`, `HP`, `Cisco` |
 | `model` | `Modelo` | Specific hardware model. | `PowerEdge R740`, `ProLiant DL380` |
 | `serial` | `Serial Number` | Physical serial number for general hardware (non-Dell). Coalesced with Service Tag. | `ABC12345` |
-| `part_number` | `P/N` | Part Number (P/N) or SKU of the hardware. | `123-456-789` |
+| `part_number` | `P/N` | Part Number (P/N) or SKU of the hardware **model** (DeviceType). Max 50 characters (NetBox limit). If empty, an existing P/N is kept. | `123-456-789` |
 | `service_tag` | `Service Tag` | Conventionally reserved for the Service Tag of Dell equipment. Coalesced into native Serial. | `ST-442-XY` |
 | `asset_tag` | `Nro Inventario` | Internal inventory plate or number. | `INV-9876` |
 | `inventory_uuid` | `UUID` | Unique and deterministic identifier of the node (ideally extracted from DMI or virtual system). Uniqueness is enforced at export time: a UUID repeated in the CSV or in NetBox is not used to identify the node and the row falls back to name resolution (see [architecture](architecture.md#netbox-synchronization-flow)). | `564d...e2f1` |

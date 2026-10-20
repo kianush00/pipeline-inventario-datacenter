@@ -16,6 +16,7 @@ from pynetbox.core.query import RequestError  # type: ignore
 
 import export_to_netbox
 from export_to_netbox import (
+    DEFAULT_DEVICE_TYPE_U_HEIGHT,
     CacheStore,
     CastType,
     ChoiceItemConfig,
@@ -29,9 +30,12 @@ from export_to_netbox import (
     CsvRow,
     CustomFieldConfig,
     DeviceRoleConfig,
+    DeviceTypeAttributes,
+    DeviceTypeAttrsMap,
     Endpoint,
     FieldMappingConfig,
     FieldParseError,
+    ManufModelCache,
     MockNetBoxRecord,
     NameCache,
     NetBoxApiError,
@@ -118,12 +122,14 @@ from export_to_netbox import (
     load_config,
     main,
     parse_bool_si_no,
+    parse_device_type_attributes,
     parse_float,
     parse_float_to_int,
     parse_int,
     parse_int_gb_to_mb,
     parse_rack_position,
     precompute_cluster_type_map,
+    precompute_device_type_attributes,
     process_interfaces_and_ips,
     slugify,
     sync_device,
@@ -2776,7 +2782,9 @@ class TestSyncDeviceTypeAttributes:
         existing = MagicMock()
         existing.u_height = 1.5
         existing.part_number = "PN1"
-        result = _sync_device_type_attributes(existing, "Model A", 1.5, "PN1", False)
+        result = _sync_device_type_attributes(
+            existing, "Model A", DeviceTypeAttributes(1.5, "PN1"), False
+        )
         assert result is False
         existing.update.assert_not_called()
 
@@ -2784,93 +2792,280 @@ class TestSyncDeviceTypeAttributes:
         existing = MagicMock()
         existing.u_height = 1.0
         existing.part_number = ""
-        result = _sync_device_type_attributes(existing, "Model B", 1.5, "PN2", False)
+        result = _sync_device_type_attributes(
+            existing, "Model B", DeviceTypeAttributes(1.5, "PN2"), False
+        )
         assert result is True
         existing.update.assert_called_once_with({"u_height": 1.5, "part_number": "PN2"})
 
 
 class TestResolveDeviceTypeUHeight:
-    """QA Tester verification para extracción de alturas fraccionarias."""
+    """Verifica qué atributos recibe ensure_device_type desde _resolve_device_type."""
 
-    def test_fractional_u_height(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Mock dependencias para aislar _resolve_device_type
+    @staticmethod
+    def _row(config: NetBoxMappingConfig, height: str, pn: str = "") -> CsvRow:
+        return {
+            config.csv_columns["hei_u"].source: height,
+            config.csv_columns["part_number"].source: pn,
+        }
+
+    @staticmethod
+    def _resolve(
+        config: NetBoxMappingConfig,
+        row: CsvRow,
+        attrs: DeviceTypeAttrsMap,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> MagicMock:
         monkeypatch.setattr(
             export_to_netbox,
             "ensure_manufacturer",
-            lambda *args, **kwargs: (MagicMock(), MagicMock()),
+            lambda *args, **kwargs: (MockNetBoxRecord(id=1, name="Dell"), {}),
         )
-
-        mock_ensure_device_type = MagicMock(return_value=(MagicMock(), MagicMock()))
-        monkeypatch.setattr(
-            export_to_netbox, "ensure_device_type", mock_ensure_device_type
-        )
-
-        def mock_extract(
-            row: dict[str, Any], key: str, config: Any, *args: Any, **kwargs: Any
-        ) -> Any:
-            if key == "hei_u":
-                return row.get(key)
-            return "mocked"
-
-        monkeypatch.setattr(export_to_netbox, "extract_csv_value", mock_extract)
-        monkeypatch.setattr(export_to_netbox, "get_netbox_object_id", lambda x: 1)
-
-        row = {"manufacturer": "Dell", "model": "R740", "hei_u": "1.5"}
+        mock_ensure = MagicMock(return_value=(MockNetBoxRecord(id=5), {}))
+        monkeypatch.setattr(export_to_netbox, "ensure_device_type", mock_ensure)
         _resolve_device_type(
-            endpoints=MagicMock(),
-            row=row,
-            manufacturer="Dell",
-            model="R740",
-            caches=MagicMock(),
-            config=MagicMock(),
-            dry_run=False,
+            MagicMock(), row, "Dell", "R740", attrs, CacheStore(), config, False
         )
+        return mock_ensure
 
-        # Verificar que ensure_device_type recibe el argumento u_height como un float=1.5
-        mock_ensure_device_type.assert_called_once()
-        args, _ = mock_ensure_device_type.call_args
-        # ensure_device_type(device_types_endpoint, manufacturer, model, part_number, u_height, cache, dry_run)
-        assert args[4] == 1.5
-        assert isinstance(args[4], float)
-
-    def test_empty_u_height_defaults_to_1_0(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_fractional_u_height(
+        self, config: NetBoxMappingConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(
-            export_to_netbox,
-            "ensure_manufacturer",
-            lambda *args, **kwargs: (MagicMock(), MagicMock()),
+        mock_ensure = self._resolve(config, self._row(config, "1.5"), {}, monkeypatch)
+        assert mock_ensure.call_args.args[3] == DeviceTypeAttributes(1.5, None)
+
+    def test_empty_u_height_is_not_informed(
+        self, config: NetBoxMappingConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Una altura vacía ya no se convierte en 1.0: se conserva la del tipo existente."""
+        mock_ensure = self._resolve(config, self._row(config, ""), {}, monkeypatch)
+        assert mock_ensure.call_args.args[3] == DeviceTypeAttributes(None, None)
+
+    def test_consolidated_attributes_take_precedence_over_row(
+        self, config: NetBoxMappingConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        consolidated = {("Dell", "R740"): DeviceTypeAttributes(2.0, "PN-A")}
+        mock_ensure = self._resolve(
+            config, self._row(config, "1", "PN-B"), consolidated, monkeypatch
         )
-        mock_ensure_device_type = MagicMock(return_value=(MagicMock(), MagicMock()))
-        monkeypatch.setattr(
-            export_to_netbox, "ensure_device_type", mock_ensure_device_type
+        assert mock_ensure.call_args.args[3] == DeviceTypeAttributes(2.0, "PN-A")
+
+    def test_invalid_row_value_is_a_row_error_even_if_consolidated(
+        self, config: NetBoxMappingConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        consolidated = {("Dell", "R740"): DeviceTypeAttributes(2.0, "PN-A")}
+        with pytest.raises(RowValidationError, match="hei_u"):
+            self._resolve(config, self._row(config, "1.25"), consolidated, monkeypatch)
+
+
+class TestParseDeviceTypeAttributes:
+    """Validación por fila de 'hei_u' y 'part_number'."""
+
+    @staticmethod
+    def _row(config: NetBoxMappingConfig, height: str, pn: str = "") -> CsvRow:
+        return {
+            config.csv_columns["hei_u"].source: height,
+            config.csv_columns["part_number"].source: pn,
+        }
+
+    @pytest.mark.parametrize(
+        ("height", "expected"),
+        [("1", 1.0), ("1,5", 1.5), ("0", 0.0), ("0.5", 0.5), ("", None), ("N/A", None)],
+    )
+    def test_heights(
+        self, config: NetBoxMappingConfig, height: str, expected: float | None
+    ) -> None:
+        """El 0 es un valor explícito (blades 0U); el vacío es 'no informado'."""
+        attrs = parse_device_type_attributes(self._row(config, height), config)
+        assert attrs.u_height == expected
+
+    @pytest.mark.parametrize("height", ["1.25", "-1", "abc", "nan", "inf"])
+    def test_invalid_heights(self, config: NetBoxMappingConfig, height: str) -> None:
+        with pytest.raises(RowValidationError, match="hei_u"):
+            parse_device_type_attributes(self._row(config, height), config)
+
+    def test_part_number_limits(self, config: NetBoxMappingConfig) -> None:
+        ok = parse_device_type_attributes(self._row(config, "1", "x" * 50), config)
+        assert ok.part_number == "x" * 50
+        assert parse_device_type_attributes(self._row(config, "1"), config) == (
+            DeviceTypeAttributes(1.0, None)
         )
+        with pytest.raises(RowValidationError, match="50 caracteres"):
+            parse_device_type_attributes(self._row(config, "1", "x" * 51), config)
 
-        def mock_extract(
-            row: dict[str, Any], key: str, config: Any, *args: Any, **kwargs: Any
-        ) -> Any:
-            if key == "hei_u":
-                return ""  # Simulamos celda vacía
-            return "mocked"
 
-        monkeypatch.setattr(export_to_netbox, "extract_csv_value", mock_extract)
-        monkeypatch.setattr(export_to_netbox, "get_netbox_object_id", lambda x: 1)
+class TestPrecomputeDeviceTypeAttributes:
+    """Consolidación por modelo: primer valor no vacío, por atributo, con aviso de conflictos."""
 
-        row = {"hei_u": ""}
-        _resolve_device_type(
-            endpoints=MagicMock(),
-            row=row,
-            manufacturer="Dell",
-            model="R740",
-            caches=MagicMock(),
-            config=MagicMock(),
-            dry_run=False,
+    @staticmethod
+    def _row(config: NetBoxMappingConfig, model: str, height: str, pn: str) -> CsvRow:
+        src = {k: v.source for k, v in config.csv_columns.items()}
+        return {
+            src["manufacturer"]: "Dell",
+            src["model"]: model,
+            src["hei_u"]: height,
+            src["part_number"]: pn,
+        }
+
+    def test_first_non_empty_value_wins_per_attribute(
+        self, config: NetBoxMappingConfig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        rows = [
+            (2, self._row(config, "R640", "1", "")),
+            (3, self._row(config, "R640", "", "PN-A")),
+            (4, self._row(config, "R640", "2", "PN-B")),
+        ]
+        with caplog.at_level(logging.WARNING):
+            result = precompute_device_type_attributes(rows, config)
+
+        assert result == {("Dell", "R640"): DeviceTypeAttributes(1.0, "PN-A")}
+        assert "'Altura (U)' = 1.0 (línea 2) vs 2.0 (línea 4)" in caplog.text
+        assert "'P/N' = 'PN-A' (línea 3) vs 'PN-B' (línea 4)" in caplog.text
+
+    def test_models_are_independent_and_zero_is_a_value(
+        self, config: NetBoxMappingConfig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        rows = [
+            (2, self._row(config, "M1000e", "10", "")),
+            (3, self._row(config, "M630", "0", "")),
+            (4, self._row(config, "M630", "0", "")),
+        ]
+        with caplog.at_level(logging.WARNING):
+            result = precompute_device_type_attributes(rows, config)
+
+        assert result[("Dell", "M1000e")] == DeviceTypeAttributes(10.0, None)
+        assert result[("Dell", "M630")] == DeviceTypeAttributes(0.0, None)
+        assert "Conflicto" not in caplog.text
+
+    def test_invalid_and_incomplete_rows_are_ignored_without_raising(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        """El pre-escaneo global nunca aborta: esas filas fallan al sincronizarse."""
+        rows = [
+            (2, self._row(config, "R640", "1.25", "PN-X")),
+            (3, self._row(config, "", "1", "PN-Y")),
+            (4, self._row(config, "R640", "2", "PN-OK")),
+        ]
+        assert precompute_device_type_attributes(rows, config) == {
+            ("Dell", "R640"): DeviceTypeAttributes(2.0, "PN-OK")
+        }
+
+
+class _FakeDeviceType:
+    """DeviceType simulado: update() aplica los cambios in-place, como pynetbox."""
+
+    def __init__(self, u_height: float, part_number: str) -> None:
+        self.id = 5
+        self.name = "R640"
+        self.u_height = u_height
+        self.part_number = part_number
+        self.patches: list[dict[str, Any]] = []
+
+    def update(self, data: dict[str, Any]) -> bool:
+        self.patches.append(dict(data))
+        for key, value in data.items():
+            setattr(self, key, value)
+        return True
+
+
+class TestEnsureDeviceTypeIdempotency:
+    """El DeviceType compartido se escribe una vez por modelo y nunca oscila."""
+
+    MANUFACTURER = MockNetBoxRecord(id=1, name="Dell")
+
+    @staticmethod
+    def _endpoint(device_type: Any) -> MagicMock:
+        endpoint = MagicMock()
+        endpoint.name = "device-types"
+        endpoint.filter.return_value = [device_type]
+        return endpoint
+
+    def _run(self, dt: _FakeDeviceType, attrs: DeviceTypeAttributes, rows: int) -> None:
+        """Simula una ejecución: `rows` filas del mismo modelo con caché compartida."""
+        cache: ManufModelCache = {}
+        endpoint = self._endpoint(dt)
+        for _ in range(rows):
+            _, cache = ensure_device_type(
+                endpoint, self.MANUFACTURER, "R640", attrs, cache, dry_run=False
+            )
+
+    def test_single_write_per_run_and_none_on_rerun(self) -> None:
+        dt = _FakeDeviceType(2.0, "PN-MANUAL")
+        attrs = DeviceTypeAttributes(1.0, "PN-A")
+
+        self._run(dt, attrs, rows=3)
+        assert dt.patches == [{"u_height": 1.0, "part_number": "PN-A"}]
+
+        dt.patches.clear()
+        self._run(dt, attrs, rows=3)
+        assert dt.patches == []
+
+    def test_empty_values_never_overwrite_existing(self) -> None:
+        """P/N cargado a mano y tipo hijo 0U se conservan si el CSV no los informa."""
+        dt = _FakeDeviceType(0.0, "PN-MANUAL")
+        self._run(dt, DeviceTypeAttributes(None, None), rows=2)
+        assert dt.patches == []
+        assert (dt.u_height, dt.part_number) == (0.0, "PN-MANUAL")
+
+    def test_explicit_zero_height_is_applied(self) -> None:
+        dt = _FakeDeviceType(1.0, "")
+        self._run(dt, DeviceTypeAttributes(0.0, None), rows=1)
+        assert dt.patches == [{"u_height": 0.0}]
+
+    def test_rejected_update_is_a_warning_not_an_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        dt = MagicMock(id=5, u_height=1.0, part_number="")
+        dt.update.side_effect = RequestError(MagicMock(status_code=400))
+        endpoint = self._endpoint(dt)
+
+        with caplog.at_level(logging.WARNING):
+            obj, _ = ensure_device_type(
+                endpoint,
+                self.MANUFACTURER,
+                "R640",
+                DeviceTypeAttributes(0.0, None),
+                {},
+                dry_run=False,
+            )
+
+        assert obj is dt
+        assert "rechazó actualizar el DeviceType 'Dell / R640'" in caplog.text
+
+    def test_new_type_with_empty_height_uses_default_and_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        endpoint = MagicMock()
+        endpoint.name = "device-types"
+        endpoint.filter.return_value = []
+        endpoint.create.return_value = MagicMock(id=7, u_height=1.0, part_number="")
+
+        with caplog.at_level(logging.WARNING):
+            ensure_device_type(
+                endpoint,
+                self.MANUFACTURER,
+                "R750",
+                DeviceTypeAttributes(None, None),
+                {},
+                dry_run=False,
+            )
+
+        create_kwargs = endpoint.create.call_args.kwargs
+        assert create_kwargs["u_height"] == DEFAULT_DEVICE_TYPE_U_HEIGHT
+        assert create_kwargs["part_number"] == ""
+        assert "Altura (U) vacía para el modelo 'Dell / R750'" in caplog.text
+
+    def test_dry_run_reports_without_writing(self) -> None:
+        dt = _FakeDeviceType(2.0, "PN-MANUAL")
+        ensure_device_type(
+            self._endpoint(dt),
+            self.MANUFACTURER,
+            "R640",
+            DeviceTypeAttributes(1.0, "PN-A"),
+            {},
+            dry_run=True,
         )
-
-        mock_ensure_device_type.assert_called_once()
-        args, _ = mock_ensure_device_type.call_args
-        assert args[4] == 1.0
-        assert isinstance(args[4], float)
+        assert dt.patches == []
 
 
 class TestPruneNetworkOrphans:
@@ -2994,6 +3189,7 @@ class TestSyncSkips:
                 config=mock_config,
                 site=MagicMock(),
                 cluster_type_map={},
+                device_type_attrs={},
                 fallback_cluster_type=MagicMock(),
                 caches=MagicMock(),
                 csv_counts=_counts(),
@@ -3114,6 +3310,7 @@ class TestSyncDevice:
             config=mock_config,
             site=MagicMock(),
             cluster_type_map={},
+            device_type_attrs={},
             fallback_cluster_type=MagicMock(),
             caches=mock_caches,
             csv_counts=_counts(),
@@ -3734,8 +3931,7 @@ class TestEnsureTaxonomyQACases:
             device_types_endpoint=endpoint,
             manufacturer=manufacturer,
             model="Blade",
-            part_number="",
-            u_height=0.0,
+            attributes=DeviceTypeAttributes(0.0, None),
             cache={},
             dry_run=False,
         )
@@ -3759,8 +3955,7 @@ class TestEnsureTaxonomyQACases:
             _sync_device_type_attributes(
                 existing_dt=mock_record,
                 model="R640",
-                target_height=2.0,
-                target_part_number="PN",
+                attributes=DeviceTypeAttributes(2.0, "PN"),
                 dry_run=False,
             )
 
@@ -4418,6 +4613,7 @@ class TestSyncRowEdgeCases:
             config=MagicMock(),
             site=MagicMock(),
             cluster_type_map={},
+            device_type_attrs={},
             fallback_cluster_type=MagicMock(),
             caches=MagicMock(),
             csv_counts=_counts(),
@@ -4470,6 +4666,7 @@ class TestSyncRowEdgeCases:
             config=MagicMock(),
             site=MagicMock(),
             cluster_type_map={},
+            device_type_attrs={},
             fallback_cluster_type=MagicMock(),
             caches=MagicMock(),
             csv_counts=_counts(),
