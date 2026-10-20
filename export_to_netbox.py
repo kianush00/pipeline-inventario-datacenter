@@ -177,7 +177,6 @@ RACK_POSITION_MIN: Final = 1.0
 DEFAULT_DEVICE_TYPE_U_HEIGHT: Final = 1.0
 # Longitud máxima de DeviceType.part_number en NetBox (CharField max_length=50).
 PART_NUMBER_MAX_LENGTH: Final = 50
-# TODO: duda: es factible mover esos valores a netbox_mapping.yaml?
 
 NetBoxObject: TypeAlias = Union[Record, "MockNetBoxRecord"]
 CsvRow: TypeAlias = dict[str, str]
@@ -2199,19 +2198,19 @@ def parse_device_type_attributes(
     row: CsvRow, config: NetBoxMappingConfig
 ) -> DeviceTypeAttributes:
     """
-    Extrae y valida los atributos de DeviceType ('hei_u', 'part_number') de una fila.
+    Extrae y valida los atributos de DeviceType ('height_u', 'part_number') de una fila.
 
     Un valor vacío se representa como `None` ("no informado"); un 0 explícito es un
     valor real. Lanza RowValidationError si algún valor informado es inválido.
     """
-    raw_u_height = extract_csv_value(row, "hei_u", config)
+    raw_u_height = extract_csv_value(row, "height_u", config)
     u_height: float | None = None
     if raw_u_height:
         try:
             u_height = parse_u_height(raw_u_height)
         except ValueError as e:
             raise RowValidationError(
-                f"Valor inválido '{raw_u_height}' para 'hei_u'. {e}"
+                f"Valor inválido '{raw_u_height}' para 'height_u'. {e}"
             ) from e
 
     part_number: str | None = extract_csv_value(row, "part_number", config) or None

@@ -53,7 +53,7 @@ This table acts as a data dictionary of the fields the script expects to extract
 | `rack` | `Rack` | Name of the physical rack where it is located. | `Rack-A1`, `Row-2-R4` |
 | `rack_location` | `Fila` | Name of the Location (row/corridor) where the rack is grouped. | `Row A`, `Row B` |
 | `pos_u` | `Posicion (U)` | Physical position or lowest bay number within the rack. Must be `>= 1` and a multiple of `0.5` (NetBox `Device.position` constraint). | `12`, `25`, `12.5` |
-| `hei_u` | `Altura (U)` | Total U height of the device **model** (DeviceType). Must be `>= 0` and a multiple of `0.5`; `0` is valid (e.g. blades inside a chassis). If empty, an existing DeviceType keeps its height and a new one is created with `1.0` (with a warning). | `0`, `1.0`, `1.5`, `2.0` |
+| `height_u` | `Altura (U)` | Total U height of the device **model** (DeviceType). Must be `>= 0` and a multiple of `0.5`; `0` is valid (e.g. blades inside a chassis). If empty, an existing DeviceType keeps its height and a new one is created with `1.0` (with a warning). | `0`, `1.0`, `1.5`, `2.0` |
 | `os` | `SO Host` | Base operating system of the node. | `Ubuntu`, `Windows Server 2022` |
 | `os_ver` | `Version SO Host` | Specific OS version. | `22.04 LTS`, `2019 Standard` |
 | `hypervisor_os` | `SO Hipervisor` | Base hypervisor operating system (e.g. ESXi, Proxmox). | `VMware ESXi`, `Proxmox VE` |

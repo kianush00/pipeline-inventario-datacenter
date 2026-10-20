@@ -2805,7 +2805,7 @@ class TestResolveDeviceTypeUHeight:
     @staticmethod
     def _row(config: NetBoxMappingConfig, height: str, pn: str = "") -> CsvRow:
         return {
-            config.csv_columns["hei_u"].source: height,
+            config.csv_columns["height_u"].source: height,
             config.csv_columns["part_number"].source: pn,
         }
 
@@ -2854,17 +2854,17 @@ class TestResolveDeviceTypeUHeight:
         self, config: NetBoxMappingConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         consolidated = {("Dell", "R740"): DeviceTypeAttributes(2.0, "PN-A")}
-        with pytest.raises(RowValidationError, match="hei_u"):
+        with pytest.raises(RowValidationError, match="height_u"):
             self._resolve(config, self._row(config, "1.25"), consolidated, monkeypatch)
 
 
 class TestParseDeviceTypeAttributes:
-    """Validación por fila de 'hei_u' y 'part_number'."""
+    """Validación por fila de 'height_u' y 'part_number'."""
 
     @staticmethod
     def _row(config: NetBoxMappingConfig, height: str, pn: str = "") -> CsvRow:
         return {
-            config.csv_columns["hei_u"].source: height,
+            config.csv_columns["height_u"].source: height,
             config.csv_columns["part_number"].source: pn,
         }
 
@@ -2881,7 +2881,7 @@ class TestParseDeviceTypeAttributes:
 
     @pytest.mark.parametrize("height", ["1.25", "-1", "abc", "nan", "inf"])
     def test_invalid_heights(self, config: NetBoxMappingConfig, height: str) -> None:
-        with pytest.raises(RowValidationError, match="hei_u"):
+        with pytest.raises(RowValidationError, match="height_u"):
             parse_device_type_attributes(self._row(config, height), config)
 
     def test_part_number_limits(self, config: NetBoxMappingConfig) -> None:
@@ -2903,7 +2903,7 @@ class TestPrecomputeDeviceTypeAttributes:
         return {
             src["manufacturer"]: "Dell",
             src["model"]: model,
-            src["hei_u"]: height,
+            src["height_u"]: height,
             src["part_number"]: pn,
         }
 
