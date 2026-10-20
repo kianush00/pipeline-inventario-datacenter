@@ -1,0 +1,25 @@
+# pyproject.toml
+# ==============
+
+[project]
+name = "pipeline-inventario"
+version = "0.1.0"
+description = "Automated, idempotent ETL pipeline that collects, consolidates and synchronizes datacenter infrastructure into NetBox."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+
+# ── Ruff (linter y formateador) ─────────────────────────────
+[tool.ruff]
+
+# ── Pyright (tipado estático) ───────────────────────────────
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.12"
+
+# ── Pytest ──────────────────────────────────────────────────
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

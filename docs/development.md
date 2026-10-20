@@ -9,8 +9,14 @@ This document describes how to contribute to the project, run tests, and the cod
 The repository includes a comprehensive unit test suite that validates logic, edge cases, and API interactions (using mocks). To run the tests:
 
 ```bash
-pytest tests/ -v
+pytest tests/
 ```
+
+Pytest is configured under `[tool.pytest.ini_options]` in [`pyproject.toml`](../pyproject.toml): `pythonpath = ["."]` lets the tests import the root-level scripts without installing the project, so `pytest` works from the repository root or from inside `tests/`.
+
+## Project Configuration (`pyproject.toml`)
+
+[`pyproject.toml`](../pyproject.toml) centralizes the project metadata and the development tool configuration (Ruff, Pyright and Pytest). `requires-python` is the single source of the minimum Python version. The project is **not** installable as a package (there is no `[build-system]`), and dependencies remain pinned in [`requirements.txt`](../requirements.txt), which works as the reproducible lockfile.
 
 Before committing new code or deploying changes, make sure all tests pass successfully.
 
@@ -26,7 +32,7 @@ Before committing new code or deploying changes, make sure all tests pass succes
 
 Checks type annotations, missing arguments, and unjustified use of `Any`.
 
-Pyright targets Python 3.12 (`pythonVersion` in [`pyrightconfig.json`](../pyrightconfig.json)).
+Pyright targets Python 3.12 (`pythonVersion` under `[tool.pyright]` in [`pyproject.toml`](../pyproject.toml)).
 
 ### Linting (Ruff)
 
@@ -38,7 +44,7 @@ Pyright targets Python 3.12 (`pythonVersion` in [`pyrightconfig.json`](../pyrigh
 .venv/bin/ruff format <file>
 ```
 
-Ruff targets Python 3.12 (`target-version` in [`ruff.toml`](../ruff.toml)), so its modernization rules expect 3.12 syntax, e.g. PEP 695 `type` aliases instead of `TypeAlias`.
+Ruff infers its target (Python 3.12) from `requires-python` in [`pyproject.toml`](../pyproject.toml), so its modernization rules expect 3.12 syntax.
 
 ### Syntax Validation
 

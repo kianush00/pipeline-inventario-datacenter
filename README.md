@@ -75,12 +75,10 @@ python3 export_to_netbox.py merged_inventory.csv --prune-network-orphans
 ├── base_inventory.py             # Shared utilities module
 ├── netbox_mapping.yaml           # NetBox mapping contract
 ├── rundeck_header_list.txt       # Column schema and merge flags
-├── requirements.txt
+├── pyproject.toml                # Project metadata and tool config (Ruff, Pyright, Pytest)
+├── requirements.txt              # Pinned dependencies (lockfile)
 ├── .env.example                  # NetBox credentials template
-├── pyrightconfig.json            # Pyright (static typing) configuration
-├── ruff.toml                     # Ruff (lint/format) configuration, Python 3.12 target
 ├── .pyrefly.toml                 # Pyrefly (static typing) configuration
-├── conftest.py
 ├── .agents/skills/               # AI agent specialized skills
 │   ├── code-reviewer/SKILL.md
 │   └── qa-tester/SKILL.md
