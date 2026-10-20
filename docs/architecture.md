@@ -60,6 +60,8 @@ The pipeline is designed to be executed repeatedly with the same input without g
 
 The exporter follows this logic for each row in the CSV:
 
+Malformed CSV records are handled at read time: a record with **fewer** fields than the header is padded with empty values (with a warning), while one with **more** fields (typically an unquoted comma shifting the columns) is discarded and counted as an error, since its values could land in the wrong column.
+
 Rows are identified in logs by the physical CSV line where they start (not by list position), so messages stay accurate with multi-line cells.
 
 1. **Identity resolution (two stages)**:

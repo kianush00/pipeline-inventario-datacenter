@@ -204,10 +204,12 @@ class CsvData(NamedTuple):
     """
     Filas del CSV de entrada junto con la línea física del archivo donde empieza
     cada una (paralelas: `line_numbers[i]` corresponde a `rows[i]`).
+    `rejected_rows` cuenta los registros descartados por estructura inválida.
     """
 
     rows: list[CsvRow]
     line_numbers: list[int]
+    rejected_rows: int = 0
 
 
 class SyncResult(NamedTuple):
@@ -1383,16 +1385,63 @@ def build_netbox_endpoints(nb: Api) -> NetBoxEndpoints:
 # ============================================================
 
 
-def _record_start_line(reader_line_num: int, row: CsvRow) -> int:
+def _record_start_line(reader_line_num: int, row: dict[str | None, Any]) -> int:
     """
     Calcula la línea física donde empieza un registro CSV.
 
     `csv.reader.line_num` indica la línea donde *termina* el registro; los saltos de
     línea embebidos en celdas entre comillas hacen que un registro ocupe varias líneas,
-    por lo que se restan para obtener la primera.
+    por lo que se restan para obtener la primera. Los campos sobrantes (que DictReader
+    agrupa en una lista bajo la clave `None`) también se consideran.
     """
-    embedded_newlines = sum(v.count("\n") for v in row.values() if isinstance(v, str))
+    embedded_newlines = 0
+    for value in row.values():
+        if isinstance(value, str):
+            embedded_newlines += value.count("\n")
+        elif isinstance(value, list):
+            embedded_newlines += sum(item.count("\n") for item in value)
     return reader_line_num - embedded_newlines
+
+
+def _normalize_csv_record(
+    row: dict[str | None, Any], line_number: int, expected_columns: int
+) -> CsvRow | None:
+    """
+    Valida la estructura de un registro leído por DictReader y lo normaliza a `CsvRow`.
+
+    Decisiones de diseño:
+    - Registro corto (faltan celdas finales): DictReader rellena con `None`, que rompe
+      las utilidades de strings aguas abajo. Se completa con "" (equivale a vacío) y
+      se advierte, igual que con las columnas ausentes del encabezado.
+    - Registro largo (campos sobrantes): suele indicar una coma sin comillas que
+      desplaza las columnas, por lo que los valores podrían terminar en el campo
+      equivocado (ej. un UUID en otra columna). Se descarta en lugar de adivinar.
+
+    Retorna el registro normalizado, o None si debe descartarse.
+    """
+    extra_fields = row.pop(None, None)
+    if extra_fields:
+        log.error(
+            "ERROR línea %d: tiene %d campos pero el encabezado define %d "
+            "(posible coma sin comillas). Se descarta el registro.",
+            line_number,
+            expected_columns + len(extra_fields),
+            expected_columns,
+        )
+        return None
+
+    missing_columns = [name for name, value in row.items() if value is None]
+    if missing_columns:
+        log.warning(
+            "Línea %d: faltan %d campo(s) finales (%s). Se tratarán como vacíos.",
+            line_number,
+            len(missing_columns),
+            ", ".join(repr(c) for c in missing_columns),
+        )
+
+    return {
+        str(name): ("" if value is None else str(value)) for name, value in row.items()
+    }
 
 
 def _read_csv(path: Path) -> tuple[list[str], CsvData]:
@@ -1401,22 +1450,28 @@ def _read_csv(path: Path) -> tuple[list[str], CsvData]:
     Retorna una tupla: (cabeceras, CsvData), donde cada fila es un diccionario
     {cabecera: valor} y `line_numbers` indica su línea real en el archivo (útil para
     reportar errores aunque haya celdas multilínea o líneas en blanco).
+    Los registros con estructura inválida se descartan y se cuentan en `rejected_rows`.
     """
     if not path.is_file():
         raise ConfigValidationError(f"No se encontró el CSV de entrada: {path}")
 
     rows: list[CsvRow] = []
     line_numbers: list[int] = []
+    rejected_rows = 0
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         headers = reader.fieldnames or []
-        for row in reader:
-            record = dict(row)
+        for raw_row in reader:
+            line_number = _record_start_line(reader.line_num, raw_row)
+            record = _normalize_csv_record(raw_row, line_number, len(headers))
+            if record is None:
+                rejected_rows += 1
+                continue
             rows.append(record)
-            line_numbers.append(_record_start_line(reader.line_num, record))
+            line_numbers.append(line_number)
 
     log.info("CSV leído: %d filas, %d columnas", len(rows), len(headers))
-    return list(headers), CsvData(rows, line_numbers)
+    return list(headers), CsvData(rows, line_numbers, rejected_rows)
 
 
 def _validate_csv_headers(
@@ -4800,6 +4855,10 @@ def main() -> None:
         SyncStatus.SKIPPED: 0,
         SyncStatus.ERROR: 0,
     }
+
+    # Los registros con estructura inválida ya se descartaron al leer el CSV
+    # y deben reflejarse en el resumen y en el código de salida.
+    counts[SyncStatus.ERROR] += csv_data.rejected_rows
 
     # ── Clasificar filas por tipo de nodo ─────────────────────
     classified_rows, counts = _classify_rows(

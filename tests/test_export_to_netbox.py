@@ -3298,6 +3298,47 @@ class TestInvalidMachineTypeDoesNotAbortPipeline:
         assert seen[0].names["srv-a"] == 1
         assert seen[0].uuids["u-1"] == 1
 
+    def test_main_counts_rejected_csv_records_as_errors(
+        self,
+        config: NetBoxMappingConfig,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        rows = [self._row(config, "Dedicada", name="srv-ok")]
+        monkeypatch.setattr(
+            sys, "argv", ["export_to_netbox.py", str(tmp_path / "in.csv")]
+        )
+
+        def fake_sync_row(
+            row_num: int, row: CsvRow, *args: Any
+        ) -> tuple[SyncCounts, CacheStore]:
+            counts: SyncCounts = args[-2]
+            counts[SyncStatus.UNCHANGED] += 1
+            return counts, args[-4]
+
+        with (
+            patch("export_to_netbox.load_config", return_value=config),
+            patch(
+                "export_to_netbox.read_and_validate_csv",
+                return_value=CsvData(rows, [2], rejected_rows=1),
+            ),
+            patch("export_to_netbox.load_env", return_value=("u", "t", True)),
+            patch("export_to_netbox.build_nb_client"),
+            patch("export_to_netbox.build_netbox_endpoints"),
+            patch("export_to_netbox.ensure_custom_fields"),
+            patch("export_to_netbox.ensure_site"),
+            patch(
+                "export_to_netbox.ensure_dynamic_cluster_types",
+                return_value=(MagicMock(), {}),
+            ),
+            patch("export_to_netbox.ensure_all_device_roles", return_value=({}, {})),
+            patch("export_to_netbox._sync_row", side_effect=fake_sync_row),
+            pytest.raises(SystemExit) as exit_info,
+        ):
+            main()
+
+        assert exit_info.value.code == 1
+
 
 class TestReadCsvLineNumbers:
     """Las líneas reportadas deben ser las del archivo, aun con celdas multilínea."""
@@ -3324,6 +3365,39 @@ class TestReadCsvLineNumbers:
         headers, data = _read_csv(csv_path)
         assert headers == ["A", "B"]
         assert data.line_numbers == [2]
+
+    def test_short_record_is_padded_with_empty_strings(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Una fila corta no debe dejar celdas None (rompían .strip() aguas abajo)."""
+        content = "A,B,C\n1,2,3\nsolo-a\n"
+        with caplog.at_level(logging.WARNING):
+            _, data = _read_csv(self._write(tmp_path / "e.csv", content))
+
+        assert data.rows[1] == {"A": "solo-a", "B": "", "C": ""}
+        assert all(isinstance(v, str) for r in data.rows for v in r.values())
+        assert data.rejected_rows == 0
+        assert "Línea 3: faltan 2 campo(s)" in caplog.text
+
+    def test_long_record_is_rejected_and_counted(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Campos sobrantes (coma sin comillas) desplazan columnas: se descarta la fila."""
+        content = "A,B\n1,2\n3,4,5\n6,7\n"
+        with caplog.at_level(logging.ERROR):
+            _, data = _read_csv(self._write(tmp_path / "f.csv", content))
+
+        assert data.rows == [{"A": "1", "B": "2"}, {"A": "6", "B": "7"}]
+        assert data.line_numbers == [2, 4]  # paralelas a las filas conservadas
+        assert data.rejected_rows == 1
+        assert "línea 3" in caplog.text
+
+    def test_short_record_after_multiline_cell_keeps_line_numbers(
+        self, tmp_path: Path
+    ) -> None:
+        content = 'A,B\n"x\ny",1\nsolo\n'
+        _, data = _read_csv(self._write(tmp_path / "g.csv", content))
+        assert data.line_numbers == [2, 4]
 
     def test_empty_body(self, tmp_path: Path) -> None:
         _, data = _read_csv(self._write(tmp_path / "d.csv", "A,B\n"))
