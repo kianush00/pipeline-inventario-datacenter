@@ -3148,25 +3148,51 @@ def _is_name_safely_unique(
     )
 
 
+def _get_object_site_id(obj: NetBoxObject) -> int | None:
+    """Obtiene el ID del Site de un objeto NetBox (None si no tiene Site asignado)."""
+    site = getattr(obj, "site", None)
+    site_id = getattr(site, "id", None)
+    return int(site_id) if site_id is not None else None
+
+
 def _resolve_by_uuid(
     endpoint: Endpoint,
     uuid: str,
     csv_uuid_counts: Counter[str],
     config: NetBoxMappingConfig,
+    site_id: int,
 ) -> list[Record]:
     """
     Etapa 1 de la resolución de identidad: búsqueda por UUID con validación de unicidad.
 
+    Decisiones de diseño:
+    - El UUID es una identidad global, por lo que se busca en todos los Sites. Si el
+      nodo existe pero pertenece a otro Site, actualizarlo lo movería (y pisaría
+      datos fuera del alcance del pipeline) y crearlo duplicaría su UUID: se omite
+      la fila para revisión humana.
+
     Retorna el objeto (en lista de un elemento) si el UUID es único en NetBox y en el
     CSV; lista vacía si no se pudo resolver por esta vía.
+    Lanza RowSkipCondition si el nodo pertenece a otro Site.
     """
     if config.is_empty(uuid):
         return []
 
     existing = _find_by_uuid(endpoint, uuid)
-    if _is_uuid_safely_unique(endpoint, existing, uuid, csv_uuid_counts):
-        return existing
-    return []
+    if not _is_uuid_safely_unique(endpoint, existing, uuid, csv_uuid_counts):
+        return []
+
+    object_site_id = _get_object_site_id(existing[0])
+    if object_site_id is not None and object_site_id != site_id:
+        log.warning(
+            "SKIP: el UUID '%s' ya existe en un nodo del Site ID=%d, distinto del "
+            "Site configurado (ID=%d). No se modifica ni se duplica.",
+            uuid,
+            object_site_id,
+            site_id,
+        )
+        raise RowSkipCondition("El UUID pertenece a un nodo de otro Site.")
+    return existing
 
 
 def _resolve_by_name(
@@ -3175,11 +3201,15 @@ def _resolve_by_name(
     uuid: str,
     csv_name_counts: Counter[str],
     config: NetBoxMappingConfig,
+    site_id: int,
 ) -> list[Record]:
     """
     Etapa 2 de la resolución de identidad: búsqueda por nombre con validación de unicidad.
 
     Decisiones de diseño:
+    - La búsqueda se acota al Site configurado: los nombres solo son únicos dentro de
+      un Site en NetBox, por lo que un homónimo de otro Site no es el mismo nodo y
+      jamás debe actualizarse. Un Site aún inexistente (ID 0, dry-run) no tiene nodos.
     - Un objeto hallado por nombre cuyo UUID coincide (sin distinguir mayúsculas) se
       acepta: cubre UUIDs almacenados con otra capitalización y UUIDs duplicados cuyas
       filas ya se separaron por nombre en una ejecución previa.
@@ -3189,7 +3219,10 @@ def _resolve_by_name(
     Retorna lista vacía si no existe (se debe crear) o el objeto a actualizar.
     Lanza RowSkipCondition si no se puede garantizar una coincidencia segura.
     """
-    existing: list[Record] = list(endpoint.filter(name=machine_name))
+    if site_id == 0:
+        return []
+
+    existing: list[Record] = list(endpoint.filter(name=machine_name, site_id=site_id))
     if not existing:
         return []
 
@@ -3221,19 +3254,22 @@ def _resolve_existing_object(
     uuid: str,
     csv_counts: CsvIdentityCounts,
     config: NetBoxMappingConfig,
+    site_id: int,
 ) -> list[Record]:
     """
     Resuelve el objeto existente en NetBox en dos etapas: UUID único y, si no se
-    resuelve, nombre único.
+    resuelve, nombre único dentro del Site configurado.
 
     Retorna lista vacía si el nodo debe crearse, o el objeto a actualizar.
-    Lanza RowSkipCondition si ninguna etapa puede garantizar unicidad.
+    Lanza RowSkipCondition si ninguna etapa puede garantizar una coincidencia segura.
     """
-    by_uuid = _resolve_by_uuid(endpoint, uuid, csv_counts.uuids, config)
+    by_uuid = _resolve_by_uuid(endpoint, uuid, csv_counts.uuids, config, site_id)
     if by_uuid:
         return by_uuid
 
-    return _resolve_by_name(endpoint, machine_name, uuid, csv_counts.names, config)
+    return _resolve_by_name(
+        endpoint, machine_name, uuid, csv_counts.names, config, site_id
+    )
 
 
 def _execute_sync(
@@ -3309,6 +3345,7 @@ def _validate_sync(
     uuid: str,
     csv_counts: CsvIdentityCounts,
     config: NetBoxMappingConfig,
+    site_id: int,
     dry_run: bool,
 ) -> SyncResult:
     """
@@ -3316,8 +3353,9 @@ def _validate_sync(
 
     Decisiones de diseño:
     - Identidad en dos etapas: primero UUID (único en NetBox y CSV); si no resuelve,
-      nombre (único en NetBox y CSV). Actualizar a ciegas ante un identificador
-      ambiguo provocaría corrupción de datos cruzada entre nodos.
+      nombre (único en NetBox y CSV, dentro del Site configurado). Actualizar a ciegas
+      ante un identificador ambiguo provocaría corrupción de datos cruzada entre nodos.
+    - El pipeline opera sobre un único Site: nunca se modifican nodos de otro Site.
     - Fail-Fast: Se aborta tempranamente lanzando `RowSkipCondition` si no se puede
       garantizar la unicidad absoluta.
 
@@ -3325,7 +3363,7 @@ def _validate_sync(
         SyncResult: El resultado final de la operación.
     """
     existing = _resolve_existing_object(
-        endpoint, machine_name, uuid, csv_counts, config
+        endpoint, machine_name, uuid, csv_counts, config, site_id
     )
 
     return _execute_sync(
@@ -3456,6 +3494,7 @@ def sync_device(
         uuid,
         csv_counts,
         config,
+        get_netbox_object_id(site),
         dry_run,
     )
     return sync_res, caches
@@ -3545,6 +3584,7 @@ def sync_vm(
         uuid,
         csv_counts,
         config,
+        get_netbox_object_id(site),
         dry_run,
     )
     return sync_res, caches

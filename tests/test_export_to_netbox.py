@@ -1108,6 +1108,9 @@ class TestResolveDeviceRole:
             _resolve_device_role(row, cache, config)
 
 
+SITE_ID = 1  # Site configurado usado por las pruebas de resolución de identidad
+
+
 def _counts(
     names: dict[str, int] | None = None, uuids: dict[str, int] | None = None
 ) -> CsvIdentityCounts:
@@ -1199,6 +1202,7 @@ class TestResolveExistingObject:
             "uuid-123",
             _counts({"SRV-01": 1}, {"uuid-123": 1}),
             config,
+            SITE_ID,
         )
 
         assert result == [record]
@@ -1217,10 +1221,13 @@ class TestResolveExistingObject:
             "uuid-123",
             _counts({"SRV-01": 1}, {"uuid-123": 1}),
             config,
+            SITE_ID,
         )
 
         assert result == [by_name]
         assert endpoint.filter.call_count == 2
+        # La etapa de nombre se acota al Site configurado.
+        endpoint.filter.assert_called_with(name="SRV-01", site_id=SITE_ID)
 
     def test_name_stage_accepts_uuid_with_different_case(
         self, config: NetBoxMappingConfig
@@ -1235,6 +1242,7 @@ class TestResolveExistingObject:
             "uuid-123-abc",
             _counts({"SRV-01": 1}, {"uuid-123-abc": 1}),
             config,
+            SITE_ID,
         )
         assert result == [record]
 
@@ -1250,6 +1258,7 @@ class TestResolveExistingObject:
             "uuid-123",
             _counts({"SRV-01": 1}, {"uuid-123": 1}),
             config,
+            SITE_ID,
         )
         assert result == []
 
@@ -1261,11 +1270,11 @@ class TestResolveExistingObject:
         endpoint.filter.return_value = [record]
 
         result = _resolve_existing_object(
-            endpoint, "SRV-01", "", _counts({"SRV-01": 1}), config
+            endpoint, "SRV-01", "", _counts({"SRV-01": 1}), config, SITE_ID
         )
 
         assert result == [record]
-        endpoint.filter.assert_called_once_with(name="SRV-01")
+        endpoint.filter.assert_called_once_with(name="SRV-01", site_id=SITE_ID)
 
     def test_duplicated_uuid_in_csv_falls_back_to_name(
         self, config: NetBoxMappingConfig
@@ -1281,6 +1290,7 @@ class TestResolveExistingObject:
             "dup",
             _counts({"SRV-A": 1, "SRV-B": 1}, {"dup": 2}),
             config,
+            SITE_ID,
         )
         assert result == []
 
@@ -1300,6 +1310,7 @@ class TestResolveExistingObject:
             "dup",
             _counts({"SRV-B": 1}, {"dup": 1}),
             config,
+            SITE_ID,
         )
         assert result == [mine]
 
@@ -1315,7 +1326,12 @@ class TestResolveExistingObject:
 
         with pytest.raises(RowSkipCondition):
             _resolve_existing_object(
-                endpoint, "SRV", "uuid-1", _counts({"SRV": 1}, {"uuid-1": 1}), config
+                endpoint,
+                "SRV",
+                "uuid-1",
+                _counts({"SRV": 1}, {"uuid-1": 1}),
+                config,
+                SITE_ID,
             )
 
     def test_duplicated_name_in_csv_skips(self, config: NetBoxMappingConfig) -> None:
@@ -1325,7 +1341,7 @@ class TestResolveExistingObject:
 
         with pytest.raises(RowSkipCondition):
             _resolve_existing_object(
-                endpoint, "SRV-01", "", _counts({"SRV-01": 2}), config
+                endpoint, "SRV-01", "", _counts({"SRV-01": 2}), config, SITE_ID
             )
 
     def test_name_match_with_different_uuid_skips(
@@ -1343,6 +1359,7 @@ class TestResolveExistingObject:
                 "uuid-123",
                 _counts({"SRV-01": 1}, {"uuid-123": 1}),
                 config,
+                SITE_ID,
             )
 
     def test_name_match_with_empty_uuid_is_adopted(
@@ -1358,8 +1375,85 @@ class TestResolveExistingObject:
             "uuid-123",
             _counts({"SRV-01": 1}, {"uuid-123": 1}),
             config,
+            SITE_ID,
         )
         assert result == [record]
+
+    def test_uuid_owned_by_other_site_skips_without_name_fallback(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        """Un UUID que ya existe en otro Site no se actualiza ni se duplica."""
+        endpoint = MagicMock()
+        foreign = MockNetBoxRecord.model_validate(
+            {
+                "id": 9,
+                "name": "SRV-01",
+                "custom_fields": {"inventory_uuid": "uuid-123"},
+                "site": SimpleNamespace(id=SITE_ID + 1),
+            }
+        )
+        endpoint.filter.return_value = [foreign]
+
+        with pytest.raises(RowSkipCondition, match="otro Site"):
+            _resolve_existing_object(
+                endpoint,
+                "SRV-01",
+                "uuid-123",
+                _counts({"SRV-01": 1}, {"uuid-123": 1}),
+                config,
+                SITE_ID,
+            )
+        endpoint.filter.assert_called_once()  # no cae a la etapa de nombre
+
+    def test_uuid_in_configured_site_resolves(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        endpoint = MagicMock()
+        mine = MockNetBoxRecord.model_validate(
+            {
+                "id": 9,
+                "custom_fields": {"inventory_uuid": "uuid-123"},
+                "site": SimpleNamespace(id=SITE_ID),
+            }
+        )
+        endpoint.filter.return_value = [mine]
+
+        result = _resolve_existing_object(
+            endpoint,
+            "SRV-01",
+            "uuid-123",
+            _counts({"SRV-01": 1}, {"uuid-123": 1}),
+            config,
+            SITE_ID,
+        )
+        assert result == [mine]
+
+    def test_same_name_in_other_site_is_not_a_match(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        """El filtro por Site excluye homónimos de otros Sites: el nodo se crea."""
+        endpoint = MagicMock()
+        endpoint.filter.return_value = []
+
+        result = _resolve_existing_object(
+            endpoint, "SRV-01", "", _counts({"SRV-01": 1}), config, SITE_ID
+        )
+
+        assert result == []
+        endpoint.filter.assert_called_once_with(name="SRV-01", site_id=SITE_ID)
+
+    def test_nonexistent_site_has_no_nodes_to_match(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        """Site simulado (ID 0, dry-run): no se consulta por nombre."""
+        endpoint = MagicMock()
+
+        result = _resolve_existing_object(
+            endpoint, "SRV-01", "", _counts({"SRV-01": 1}), config, 0
+        )
+
+        assert result == []
+        endpoint.filter.assert_not_called()
 
 
 class _FakeNodeEndpoint:
@@ -1371,14 +1465,21 @@ class _FakeNodeEndpoint:
     def __init__(self) -> None:
         self.records: list[MockNetBoxRecord] = []
 
-    def filter(self, **kwargs: str) -> list[MockNetBoxRecord]:
+    def filter(self, **kwargs: Any) -> list[MockNetBoxRecord]:
         if "cf_inventory_uuid" in kwargs:
             wanted = kwargs["cf_inventory_uuid"]
             return [r for r in self.records if _uuid_of(r) == wanted]
-        return [r for r in self.records if r.name == kwargs["name"]]
+        return [
+            r
+            for r in self.records
+            if r.name == kwargs["name"]
+            and getattr(r.site, "id", None) == kwargs["site_id"]  # type: ignore[attr-defined]
+        ]
 
     def create(self, **payload: Any) -> MockNetBoxRecord:
-        record = MockNetBoxRecord(id=len(self.records) + 1, **payload)
+        """Crea el registro; `site` se guarda como objeto anidado, como hace pynetbox."""
+        site_ref = SimpleNamespace(id=payload.pop("site", SITE_ID))
+        record = MockNetBoxRecord(id=len(self.records) + 1, site=site_ref, **payload)  # type: ignore[call-arg]
         self.records.append(record)
         return record
 
@@ -1392,7 +1493,11 @@ class TestValidateSyncDuplicatedUuid:
 
     @staticmethod
     def _payload(name: str, uuid: str) -> dict[str, Any]:
-        return {"name": name, "custom_fields": {"inventory_uuid": uuid}}
+        return {
+            "name": name,
+            "site": SITE_ID,
+            "custom_fields": {"inventory_uuid": uuid},
+        }
 
     def test_rows_do_not_overwrite_each_other_across_runs(
         self, config: NetBoxMappingConfig
@@ -1410,6 +1515,7 @@ class TestValidateSyncDuplicatedUuid:
                     uuid,
                     counts,
                     config,
+                    SITE_ID,
                     dry_run=False,
                 ).status
                 for name, uuid in rows
@@ -1420,6 +1526,65 @@ class TestValidateSyncDuplicatedUuid:
             assert statuses == expected
 
         assert sorted(r.name for r in endpoint.records) == ["SRV-A", "SRV-B"]
+
+
+class TestValidateSyncMultiSite:
+    """Escenario end-to-end: nodos homónimos o con el mismo UUID en otro Site."""
+
+    OTHER_SITE_ID = SITE_ID + 1
+
+    @staticmethod
+    def _payload(name: str, uuid: str, site_id: int) -> dict[str, Any]:
+        return {
+            "name": name,
+            "site": site_id,
+            "custom_fields": {"inventory_uuid": uuid},
+        }
+
+    def test_same_name_in_other_site_is_never_touched(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        endpoint = _FakeNodeEndpoint()
+        endpoint.create(**self._payload("SRV-01", "uuid-other", self.OTHER_SITE_ID))
+        counts = _counts({"SRV-01": 1}, {"uuid-mine": 1})
+
+        result = _validate_sync(
+            cast(Endpoint, endpoint),
+            self._payload("SRV-01", "uuid-mine", SITE_ID),
+            "SRV-01",
+            "uuid-mine",
+            counts,
+            config,
+            SITE_ID,
+            dry_run=False,
+        )
+
+        assert result.status == SyncStatus.CREATED
+        assert len(endpoint.records) == 2
+        other = endpoint.records[0]
+        assert _uuid_of(other) == "uuid-other"
+        assert other.site.id == self.OTHER_SITE_ID  # type: ignore[attr-defined]
+
+    def test_uuid_in_other_site_is_skipped_not_moved_or_duplicated(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        endpoint = _FakeNodeEndpoint()
+        endpoint.create(**self._payload("SRV-01", "uuid-1", self.OTHER_SITE_ID))
+
+        with pytest.raises(RowSkipCondition, match="otro Site"):
+            _validate_sync(
+                cast(Endpoint, endpoint),
+                self._payload("SRV-01", "uuid-1", SITE_ID),
+                "SRV-01",
+                "uuid-1",
+                _counts({"SRV-01": 1}, {"uuid-1": 1}),
+                config,
+                SITE_ID,
+                dry_run=False,
+            )
+
+        assert len(endpoint.records) == 1
+        assert endpoint.records[0].site.id == self.OTHER_SITE_ID  # type: ignore[attr-defined]
 
 
 class TestEnsureCustomFieldFilterLogic:
