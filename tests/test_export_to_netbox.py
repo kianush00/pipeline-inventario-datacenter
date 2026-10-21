@@ -1344,6 +1344,7 @@ class TestResolveExistingObject:
             [_node(1, "", name="SRV"), _node(2, "", name="SRV")],
         ]
 
+        # TODO: me aparece este warning de sonarqube: Refactor this exception test to have only one invocation possibly throwing an exception
         with pytest.raises(RowSkipCondition):
             _resolve_existing_object(
                 endpoint,
