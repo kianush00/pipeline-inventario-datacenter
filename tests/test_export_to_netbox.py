@@ -33,6 +33,7 @@ from export_to_netbox import (
     DeviceRoleConfig,
     DeviceTypeAttributes,
     DeviceTypeAttrsMap,
+    DeviceTypeKey,
     Endpoint,
     FieldMappingConfig,
     FieldParseError,
@@ -49,10 +50,12 @@ from export_to_netbox import (
     NodeMappingConfig,
     NodeType,
     NodeTypesConfig,
+    NumberedRow,
     RowSkipCondition,
     RowValidationError,
     SiteConfig,
     SiteNameCache,
+    SiteScopedName,
     StatusDefaultConfig,
     SyncCounts,
     SyncResult,
@@ -2851,7 +2854,9 @@ class TestResolveDeviceTypeUHeight:
     def test_consolidated_attributes_take_precedence_over_row(
         self, config: NetBoxMappingConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        consolidated = {("Dell", "R740"): DeviceTypeAttributes(2.0, "PN-A")}
+        consolidated = {
+            DeviceTypeKey("Dell", "R740"): DeviceTypeAttributes(2.0, "PN-A")
+        }
         mock_ensure = self._resolve(
             config, self._row(config, "1", "PN-B"), consolidated, monkeypatch
         )
@@ -2860,7 +2865,9 @@ class TestResolveDeviceTypeUHeight:
     def test_invalid_row_value_is_a_row_error_even_if_consolidated(
         self, config: NetBoxMappingConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        consolidated = {("Dell", "R740"): DeviceTypeAttributes(2.0, "PN-A")}
+        consolidated = {
+            DeviceTypeKey("Dell", "R740"): DeviceTypeAttributes(2.0, "PN-A")
+        }
         with pytest.raises(RowValidationError, match="height_u"):
             self._resolve(config, self._row(config, "1.25"), consolidated, monkeypatch)
 
@@ -2901,6 +2908,20 @@ class TestParseDeviceTypeAttributes:
             parse_device_type_attributes(self._row(config, "1", "x" * 51), config)
 
 
+class TestCompositeKeys:
+    """Las claves con nombre siguen siendo tuplas: compatibles como clave de diccionario."""
+
+    def test_device_type_key_is_tuple_compatible_and_has_label(self) -> None:
+        key = DeviceTypeKey("Dell", "R640")
+        assert key == ("Dell", "R640")
+        assert {("Dell", "R640"): 1}[key] == 1
+        assert key.label == "Dell / R640"
+
+    def test_site_scoped_name_is_tuple_compatible(self) -> None:
+        cache: dict[tuple[int, str], str] = {SiteScopedName(1, "Rack-A"): "ok"}
+        assert cache[(1, "Rack-A")] == "ok"
+
+
 class TestPrecomputeDeviceTypeAttributes:
     """Consolidación por modelo: primer valor no vacío, por atributo, con aviso de conflictos."""
 
@@ -2918,14 +2939,16 @@ class TestPrecomputeDeviceTypeAttributes:
         self, config: NetBoxMappingConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
         rows = [
-            (2, self._row(config, "R640", "1", "")),
-            (3, self._row(config, "R640", "", "PN-A")),
-            (4, self._row(config, "R640", "2", "PN-B")),
+            NumberedRow(2, self._row(config, "R640", "1", "")),
+            NumberedRow(3, self._row(config, "R640", "", "PN-A")),
+            NumberedRow(4, self._row(config, "R640", "2", "PN-B")),
         ]
         with caplog.at_level(logging.WARNING):
             result = precompute_device_type_attributes(rows, config)
 
-        assert result == {("Dell", "R640"): DeviceTypeAttributes(1.0, "PN-A")}
+        assert result == {
+            DeviceTypeKey("Dell", "R640"): DeviceTypeAttributes(1.0, "PN-A")
+        }
         assert "'Altura (U)' = 1.0 (línea 2) vs 2.0 (línea 4)" in caplog.text
         assert "'P/N' = 'PN-A' (línea 3) vs 'PN-B' (línea 4)" in caplog.text
 
@@ -2933,29 +2956,39 @@ class TestPrecomputeDeviceTypeAttributes:
         self, config: NetBoxMappingConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
         rows = [
-            (2, self._row(config, "M1000e", "10", "")),
-            (3, self._row(config, "M630", "0", "")),
-            (4, self._row(config, "M630", "0", "")),
+            NumberedRow(2, self._row(config, "M1000e", "10", "")),
+            NumberedRow(3, self._row(config, "M630", "0", "")),
+            NumberedRow(4, self._row(config, "M630", "0", "")),
         ]
         with caplog.at_level(logging.WARNING):
             result = precompute_device_type_attributes(rows, config)
 
-        assert result[("Dell", "M1000e")] == DeviceTypeAttributes(10.0, None)
-        assert result[("Dell", "M630")] == DeviceTypeAttributes(0.0, None)
+        assert result[DeviceTypeKey("Dell", "M1000e")] == DeviceTypeAttributes(
+            10.0, None
+        )
+        assert result[DeviceTypeKey("Dell", "M630")] == DeviceTypeAttributes(0.0, None)
         assert "Conflicto" not in caplog.text
 
     def test_invalid_and_incomplete_rows_are_ignored_without_raising(
-        self, config: NetBoxMappingConfig
+        self, config: NetBoxMappingConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
         """El pre-escaneo global nunca aborta: esas filas fallan al sincronizarse."""
         rows = [
-            (2, self._row(config, "R640", "1.25", "PN-X")),
-            (3, self._row(config, "", "1", "PN-Y")),
-            (4, self._row(config, "R640", "2", "PN-OK")),
+            NumberedRow(2, self._row(config, "R640", "1.25", "PN-X")),
+            NumberedRow(3, self._row(config, "", "1", "PN-Y")),
+            NumberedRow(4, self._row(config, "R640", "2", "PN-OK")),
         ]
-        assert precompute_device_type_attributes(rows, config) == {
-            ("Dell", "R640"): DeviceTypeAttributes(2.0, "PN-OK")
+        with caplog.at_level(logging.DEBUG):
+            result = precompute_device_type_attributes(rows, config)
+
+        assert result == {
+            DeviceTypeKey("Dell", "R640"): DeviceTypeAttributes(2.0, "PN-OK")
         }
+        # La fila inválida no aporta valores, pero deja traza (solo visible con --verbose).
+        assert "Línea 2 ignorada en la consolidación del DeviceType 'Dell / R640'" in (
+            caplog.text
+        )
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
 class _FakeDeviceType:

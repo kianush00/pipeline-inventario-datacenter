@@ -185,14 +185,46 @@ type CustomFieldsPayload = dict[str, FieldValue]
 type SyncCounts = dict[SyncStatus, int]
 type NetBoxPayload = dict[str, Any]
 
+
+class SiteScopedName(NamedTuple):
+    """
+    Clave de objetos cuyo nombre solo es único dentro de un Site (Location, Rack, Device).
+
+    Al ser una tupla con nombre, es compatible con las tuplas `(site_id, nombre)`
+    como clave de diccionario.
+    """
+
+    site_id: int
+    name: str
+
+
+class DeviceTypeKey(NamedTuple):
+    """Identidad de un modelo de hardware, con fabricante y modelo tal como vienen del CSV."""
+
+    manufacturer: str
+    model: str
+
+    @property
+    def label(self) -> str:
+        """Etiqueta legible para logs (ej. 'Dell / R640')."""
+        return f"{self.manufacturer} / {self.model}"
+
+
+class NumberedRow(NamedTuple):
+    """Fila del CSV junto con la línea física del archivo donde empieza."""
+
+    line_number: int
+    row: CsvRow
+
+
 # Alias de Tipos para los Cachés de NetBox
 type NameCache = dict[str, NetBoxObject]
-type SiteNameCache = dict[tuple[int, str], NetBoxObject]
+type SiteNameCache = dict[SiteScopedName, NetBoxObject]
+# Clave (nombre del fabricante *en NetBox*, modelo): puede diferir del texto del CSV
+# cuando se reutiliza un fabricante existente por slug, por eso no es DeviceTypeKey.
+# TODO: aquí no se asigna DeviceTypeKey a la clave de ManufModelCache?
 type ManufModelCache = dict[tuple[str, str], NetBoxObject]
-type HostDeviceCache = dict[tuple[int, str], int | None]
-# (fabricante, modelo) tal como vienen del CSV.
-type DeviceTypeKey = tuple[str, str]
-# TODO: no sería mejor mover el TypeAlias DeviceTypeKey a un NamedTuple? evalúa ese y otros TypeAlias
+type HostDeviceCache = dict[SiteScopedName, int | None]
 
 
 class DeviceTypeAttributes(NamedTuple):
@@ -206,7 +238,6 @@ class DeviceTypeAttributes(NamedTuple):
 
 
 type DeviceTypeAttrsMap = dict[DeviceTypeKey, DeviceTypeAttributes]
-# TODO: No sería mejor convertir DeviceTypeAttrsMap a un TypedDict?
 
 
 class CsvIdentityCounts(NamedTuple):
@@ -250,8 +281,8 @@ class ClassifiedRows(NamedTuple):
     por su rol en la jerarquía (físico vs virtual).
     """
 
-    device_rows: list[tuple[int, CsvRow]]
-    vm_rows: list[tuple[int, CsvRow]]
+    device_rows: list[NumberedRow]
+    vm_rows: list[NumberedRow]
 
 
 class Ipv4Candidate(NamedTuple):
@@ -2240,43 +2271,49 @@ def parse_device_type_attributes(
     return DeviceTypeAttributes(u_height, part_number)
 
 
-def _consolidate_attribute(
-    model_label: str,
+class SourcedValue[T](NamedTuple):
+    """Valor consolidado de un atributo junto con la línea del CSV de la que proviene."""
+
+    value: T
+    source_line: int
+
+
+def _consolidate_attribute[T](
+    model: DeviceTypeKey,
     attribute_label: str,
-    current: tuple[float | str, int] | None,
-    candidate: float | str | None,
+    current: SourcedValue[T] | None,
+    candidate: T | None,
     candidate_line: int,
-) -> tuple[float | str, int] | None:
+) -> SourcedValue[T] | None:
     """
     Aplica la regla "primer valor no vacío" a un atributo de un modelo.
 
-    `current` es (valor, línea de origen) ya elegido, o None si aún no hay valor.
+    `current` es el valor ya elegido, o None si aún no hay valor.
     Advierte cuando una fila posterior contradice el valor elegido.
-    Retorna el (valor, línea) vigente tras considerar el candidato.
+    Retorna el valor vigente tras considerar el candidato.
     """
     if candidate is None:
         return current
     if current is None:
-        return candidate, candidate_line
+        return SourcedValue(candidate, candidate_line)
 
-    chosen_value, chosen_line = current
-    if candidate != chosen_value:
+    if candidate != current.value:
         log.warning(
             "Conflicto en DeviceType '%s': '%s' = %r (línea %d) vs %r (línea %d). "
             "Se usa %r; corrija el inventario maestro.",
-            model_label,
+            model.label,
             attribute_label,
-            chosen_value,
-            chosen_line,
+            current.value,
+            current.source_line,
             candidate,
             candidate_line,
-            chosen_value,
+            current.value,
         )
     return current
 
 
 def precompute_device_type_attributes(
-    device_rows: list[tuple[int, CsvRow]],
+    device_rows: list[NumberedRow],
     config: NetBoxMappingConfig,
 ) -> DeviceTypeAttrsMap:
     """
@@ -2292,47 +2329,45 @@ def precompute_device_type_attributes(
       reportan como SKIP/ERROR al sincronizarse. Lanzar desde este pre-escaneo global
       abortaría todo el pipeline por una sola celda.
 
-    Retorna un diccionario {(fabricante, modelo): DeviceTypeAttributes}.
+    Retorna un diccionario {DeviceTypeKey: DeviceTypeAttributes}.
     """
-    # TODO: valdría la pena darle un alias o alguna estructura semantica a tuple[float | str, int] | None?
-    heights: dict[DeviceTypeKey, tuple[float | str, int] | None] = {}
-    part_numbers: dict[DeviceTypeKey, tuple[float | str, int] | None] = {}
+    heights: dict[DeviceTypeKey, SourcedValue[float] | None] = {}
+    part_numbers: dict[DeviceTypeKey, SourcedValue[str] | None] = {}
 
     for line_number, row in device_rows:
         manufacturer = extract_csv_value(row, "manufacturer", config)
         model = extract_csv_value(row, "model", config)
         if not manufacturer or not model:
             continue
+
+        key = DeviceTypeKey(manufacturer, model)
         try:
             attributes = parse_device_type_attributes(row, config)
-        except RowValidationError:
-            # TODO: es correcto que solamente haga continue? o debería imprimir algun mensaje?
+        except RowValidationError as e:
+            # La fila fallará con ERROR al sincronizarse; aquí solo se deja la traza
+            # (visible con --verbose) para no duplicar el mensaje.
+            log.debug(
+                "Línea %d ignorada en la consolidación del DeviceType '%s': %s",
+                line_number,
+                key.label,
+                e,
+            )
             continue
 
-        key: DeviceTypeKey = (manufacturer, model)
-        model_label = f"{manufacturer} / {model}"
         heights[key] = _consolidate_attribute(
-            model_label,
-            "Altura (U)",
-            heights.get(key),
-            attributes.u_height,
-            line_number,
+            key, "Altura (U)", heights.get(key), attributes.u_height, line_number
         )
         part_numbers[key] = _consolidate_attribute(
-            model_label,
-            "P/N",
-            part_numbers.get(key),
-            attributes.part_number,
-            line_number,
+            key, "P/N", part_numbers.get(key), attributes.part_number, line_number
         )
 
     consolidated: DeviceTypeAttrsMap = {}
     for key in heights.keys() | part_numbers.keys():
-        height_entry = heights.get(key)
-        pn_entry = part_numbers.get(key)
+        height = heights.get(key)
+        part_number = part_numbers.get(key)
         consolidated[key] = DeviceTypeAttributes(
-            float(height_entry[0]) if height_entry is not None else None,
-            str(pn_entry[0]) if pn_entry is not None else None,
+            height.value if height is not None else None,
+            part_number.value if part_number is not None else None,
         )
     return consolidated
 
@@ -2655,7 +2690,7 @@ def ensure_location(
     """Garantiza que el Location (Fila) exista en NetBox.
     Retorna el objeto Location creado y la caché actualizada."""
     site_id = get_netbox_object_id(site)
-    cache_key = (site_id, name)
+    cache_key = SiteScopedName(site_id, name)
 
     return get_or_create_cached(
         endpoint=locations_endpoint,
@@ -2701,7 +2736,7 @@ def ensure_rack(
     """Garantiza que el Rack exista en NetBox y esté asociado a la Location indicada.
     Retorna el objeto Rack creado/actualizado y la caché actualizada."""
     site_id = get_netbox_object_id(site)
-    cache_key = (site_id, name)
+    cache_key = SiteScopedName(site_id, name)
 
     create_kwargs = {"name": name, "site": site_id}
     if location_id is not None:
@@ -3147,7 +3182,9 @@ def _resolve_device_type(
     Retorna una tupla con el ID del DeviceType y la caché (CacheStore) actualizada.
     """
     row_attributes = parse_device_type_attributes(row, config)
-    attributes = device_type_attrs.get((manufacturer, model), row_attributes)
+    attributes = device_type_attrs.get(
+        DeviceTypeKey(manufacturer, model), row_attributes
+    )
 
     # Manufacturer.
     manufacturer_obj, caches.manufacturers = ensure_manufacturer(
@@ -3173,9 +3210,9 @@ def _resolve_host_device(
     row: CsvRow,
     site: NetBoxObject,
     machine_name: str,
-    cache: dict[tuple[int, str], int | None],
+    cache: HostDeviceCache,
     config: NetBoxMappingConfig,
-) -> tuple[int | None, dict[tuple[int, str], int | None]]:
+) -> tuple[int | None, HostDeviceCache]:
     """
     Resuelve y cachea el ID del Device correspondiente al hipervisor host,
     acotado estrictamente al site configurado.
@@ -3186,7 +3223,7 @@ def _resolve_host_device(
         return None, cache
 
     site_id = get_netbox_object_id(site)
-    cache_key = (site_id, host_name_csv)
+    cache_key = SiteScopedName(site_id, host_name_csv)
 
     # Solo buscar si no existe en caché.
     if cache_key not in cache:
@@ -5005,16 +5042,16 @@ def _classify_rows(
     Retorna:
         tuple[ClassifiedRows, SyncCounts]: Las filas separadas y los contadores mutados.
     """
-    device_rows: list[tuple[int, CsvRow]] = []
-    vm_rows: list[tuple[int, CsvRow]] = []
+    device_rows: list[NumberedRow] = []
+    vm_rows: list[NumberedRow] = []
 
     for row_num, row in zip(line_numbers, rows, strict=True):
         try:
             node_type = get_node_type_from_row(row, config)
             if node_type == NodeType.DEVICE:
-                device_rows.append((row_num, row))
+                device_rows.append(NumberedRow(row_num, row))
             else:
-                vm_rows.append((row_num, row))
+                vm_rows.append(NumberedRow(row_num, row))
         except RowValidationError as e:
             machine_name = (
                 extract_csv_value(row, "machine_name", config) or f"línea {row_num}"
@@ -5074,7 +5111,7 @@ def _process_node_sync(
             dry_run,
         )
         site_id = get_netbox_object_id(site)
-        caches.host_devices[(site_id, machine_name)] = sync_res[1]
+        caches.host_devices[SiteScopedName(site_id, machine_name)] = sync_res[1]
         return sync_res, caches
     else:
         sync_res, caches = sync_vm(
@@ -5334,14 +5371,14 @@ def main() -> None:
     # ── Conteo global de identidades (nombre y UUID) ─────────
     # Usado para validar unicidad antes de permitir actualizaciones sobre
     # objetos existentes. Se calcula solo sobre las filas clasificadas.
-    classified_only = [row for _, row in (*device_rows, *vm_rows)]
+    classified_only = [numbered.row for numbered in (*device_rows, *vm_rows)]
     csv_counts = CsvIdentityCounts(
         names=count_machine_names(classified_only, config),
         uuids=count_inventory_uuids(classified_only, config),
     )
 
     # ── Pre-escaneo: asociar clústeres con su tecnología ─────
-    device_rows_only = [row for _, row in device_rows]
+    device_rows_only = [numbered.row for numbered in device_rows]
     cluster_type_map = precompute_cluster_type_map(device_rows_only, config)
     fallback_cluster_type, caches.cluster_types = ensure_dynamic_cluster_types(
         endpoints,
