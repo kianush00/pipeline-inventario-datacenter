@@ -3697,6 +3697,7 @@ def sync_device(
         if cluster_id is not None:
             payload["cluster"] = cluster_id
         else:
+            # TODO: qué formato debería tener este log INFO si quiero que su formato sea consistente con el resto de logs? evalua este log y modificalo si es pertinente
             log.info("INFO (%s): Hipervisor sin cluster asignado.", machine_name)
 
     # Location (Fila).
@@ -4903,7 +4904,7 @@ def _resolve_interface_renames(
     renames = detect_interface_renames(orphan_fingerprints, newcomer_fingerprints)
     for rename in renames:
         log.info(
-            "Renombre de interfaz detectado en objeto %s: '%s' → '%s' (coincidencia: %s).",
+            "Renombre de interfaz detectado en objeto %s: '%s' -> '%s' (coincidencia: %s).",
             obj_id,
             rename.old_name,
             rename.new_name,
