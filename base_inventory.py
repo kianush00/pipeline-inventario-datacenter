@@ -18,6 +18,7 @@ from typing import NoReturn
 # SALIDA DE ERROR FATAL
 # ============================================================
 
+
 def error(message: str) -> NoReturn:
     """Imprime un mensaje de error en stderr y termina con exit 1."""
     print(f"[ERROR] {message}", file=sys.stderr)
@@ -50,6 +51,7 @@ def usage(message: str) -> NoReturn:
 # conservan sin tocar y nunca se fusionan.
 # ============================================================
 
+
 def load_rundeck_header_list(path: Path) -> list[tuple[str, int]]:
     """
     Lee rundeck_header_list.txt y devuelve una lista de tuplas:
@@ -75,10 +77,7 @@ def load_rundeck_header_list(path: Path) -> list[tuple[str, int]]:
         Lista de (nombre_columna, flag).
     """
     if not path.is_file():
-        error(
-            f"No se encontró el archivo rundeck_header_list:\n"
-            f"  {path}"
-        )
+        error(f"No se encontró el archivo rundeck_header_list:\n  {path}")
 
     entries: list[tuple[str, int]] = []
     seen_names: set[str] = set()
@@ -131,11 +130,7 @@ def load_rundeck_header_list(path: Path) -> list[tuple[str, int]]:
     if not entries:
         error("rundeck_header_list está vacío (sin entradas válidas).")
 
-    key_entries = [
-        name
-        for name, flag in entries
-        if flag == 2
-    ]
+    key_entries = [name for name, flag in entries if flag == 2]
 
     if len(key_entries) != 1:
         error(
@@ -162,6 +157,7 @@ def load_rundeck_header_list(path: Path) -> list[tuple[str, int]]:
 #
 # Retorna None si las comillas están desbalanceadas.
 # ============================================================
+
 
 def split_quoted_csv_line(line: str) -> list[str] | None:
     """
@@ -213,6 +209,7 @@ def split_quoted_csv_line(line: str) -> list[str] | None:
 # ============================================================
 # LIMPIEZA DE VALOR CSV
 # ============================================================
+
 
 def strip_quotes(value: str) -> str:
     """Elimina las comillas externas de un campo CSV y des-escapa
@@ -266,9 +263,4 @@ def clean_value(value: str) -> str:
         'hello\\r\\nworld' -> 'hello world'
         'hello world' -> 'hello world'
     """
-    return (
-        value
-        .replace("\r\n", " ")
-        .replace("\r", " ")
-        .replace("\n", " ")
-    )
+    return value.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")

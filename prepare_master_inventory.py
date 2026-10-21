@@ -55,14 +55,14 @@ from base_inventory import (
 # BUSCAR LIBREOFFICE
 # ============================================================
 
+
 def find_libreoffice() -> str:
     for executable in ("libreoffice", "soffice"):
         path = shutil.which(executable)
         if path:
             return path
     error(
-        "No se encontró LibreOffice.\n"
-        "Se necesita 'libreoffice' o 'soffice' en el PATH."
+        "No se encontró LibreOffice.\nSe necesita 'libreoffice' o 'soffice' en el PATH."
     )
     return ""
 
@@ -70,6 +70,7 @@ def find_libreoffice() -> str:
 # ============================================================
 # CONVERTIR PLANILLA A CSV
 # ============================================================
+
 
 def convert_spreadsheet_to_csv(
     libreoffice: str,
@@ -82,8 +83,10 @@ def convert_spreadsheet_to_csv(
     command = [
         libreoffice,
         "--headless",
-        "--convert-to", "csv",
-        "--outdir", str(temporary_directory),
+        "--convert-to",
+        "csv",
+        "--outdir",
+        str(temporary_directory),
         str(input_path),
     ]
 
@@ -116,6 +119,7 @@ def convert_spreadsheet_to_csv(
 # BUSCAR HEADER REAL
 # ============================================================
 
+
 def find_real_header(
     rows: list[list[str]],
     rundeck_header_list: list[tuple[str, int]],
@@ -141,20 +145,13 @@ def find_real_header(
         if not required_set.issubset(row_names):
             continue
 
-        duplicated_required = [
-            name
-            for name in required_names
-            if row.count(name) != 1
-        ]
+        duplicated_required = [name for name in required_names if row.count(name) != 1]
 
         if duplicated_required:
             error(
                 "La fila candidata a header contiene columnas "
                 "definidas en rundeck_header_list.txt duplicadas:\n"
-                + "\n".join(
-                    f"  - {name}"
-                    for name in duplicated_required
-                )
+                + "\n".join(f"  - {name}" for name in duplicated_required)
                 + f"\nFila del CSV temporal: {row_index + 1}"
             )
 
@@ -171,6 +168,7 @@ def find_real_header(
 # ============================================================
 # VALIDAR HEADER Y PROCESAR CSV
 # ============================================================
+
 
 def process_csv(
     source_csv: Path,
@@ -241,9 +239,7 @@ def process_csv(
     # Validar cantidad mínima de filas.
     # --------------------------------------------------------
     if not rows:
-        error(
-            "El inventario no contiene ninguna fila."
-        )
+        error("El inventario no contiene ninguna fila.")
 
     # --------------------------------------------------------
     # Buscar el header real.
@@ -258,39 +254,25 @@ def process_csv(
 
     discarded_rows = header_row_index
 
-    print(
-        f"Fila del header real en el CSV temporal: "
-        f"{header_row_index + 1}"
-    )
+    print(f"Fila del header real en el CSV temporal: {header_row_index + 1}")
 
     if discarded_rows > 0:
-        print(
-            f"Filas descartadas antes del header: "
-            f"{discarded_rows}"
-        )
+        print(f"Filas descartadas antes del header: {discarded_rows}")
 
-    print(
-        f"Columnas encontradas en el inventario maestro: "
-        f"{len(source_header)}"
-    )
+    print(f"Columnas encontradas en el inventario maestro: {len(source_header)}")
 
     # --------------------------------------------------------
     # Validar columnas sin nombre.
     # --------------------------------------------------------
     unnamed_columns = [
-        index + 1
-        for index, name in enumerate(source_header)
-        if name == ""
+        index + 1 for index, name in enumerate(source_header) if name == ""
     ]
 
     if unnamed_columns:
         error(
             "El header del inventario maestro contiene "
             "columnas sin nombre en las siguientes posiciones:\n"
-            + "\n".join(
-                f"  - posición {position}"
-                for position in unnamed_columns
-            )
+            + "\n".join(f"  - posición {position}" for position in unnamed_columns)
         )
 
     # --------------------------------------------------------
@@ -307,8 +289,7 @@ def process_csv(
     if duplicated_headers:
         error(
             "El header del inventario maestro contiene columnas "
-            "duplicadas:\n"
-            + "\n".join(f"  - {name}" for name in duplicated_headers)
+            "duplicadas:\n" + "\n".join(f"  - {name}" for name in duplicated_headers)
         )
 
     print(
@@ -336,9 +317,7 @@ def process_csv(
                 lineterminator="\n",
             )
 
-            writer.writerow(
-                [clean_value(v) for v in source_header]
-            )
+            writer.writerow([clean_value(v) for v in source_header])
 
             # ------------------------------------------------
             # Los datos comienzan inmediatamente después del
@@ -365,22 +344,15 @@ def process_csv(
                 writer.writerow([clean_value(v) for v in row])
 
     except OSError as exc:
-        error(
-            f"No se pudo escribir el CSV de salida:\n"
-            f"  {output_csv}\n"
-            f"Motivo: {exc}"
-        )
+        error(f"No se pudo escribir el CSV de salida:\n  {output_csv}\nMotivo: {exc}")
     except csv.Error as exc:
-        error(
-            f"Error al escribir el CSV de salida:\n"
-            f"  {output_csv}\n"
-            f"Motivo: {exc}"
-        )
+        error(f"Error al escribir el CSV de salida:\n  {output_csv}\nMotivo: {exc}")
 
 
 # ============================================================
 # MAIN
 # ============================================================
+
 
 def main() -> None:
     if len(sys.argv) < 2:
@@ -427,10 +399,7 @@ def main() -> None:
         )
 
     if input_size == 0:
-        error(
-            f"El archivo de entrada está vacío (0 bytes):\n"
-            f"  {input_path}"
-        )
+        error(f"El archivo de entrada está vacío (0 bytes):\n  {input_path}")
 
     # --------------------------------------------------------
     # Resolver ruta de salida.

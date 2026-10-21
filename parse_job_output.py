@@ -95,7 +95,7 @@ def parse_key_value_field(field: str) -> tuple[str, str] | None:
         return None
 
     key = field[:separator_index]
-    value = field[separator_index + 1:]
+    value = field[separator_index + 1 :]
 
     if not key:
         return None
@@ -179,8 +179,7 @@ def main() -> None:
     # de las columnas del CSV final.
     # --------------------------------------------------------
     header_positions = {
-        name: index
-        for index, (name, _flag) in enumerate(rundeck_header_list)
+        name: index for index, (name, _flag) in enumerate(rundeck_header_list)
     }
 
     header_flags = dict(rundeck_header_list)
@@ -189,10 +188,7 @@ def main() -> None:
     # Construir la línea de header del CSV de salida.
     # Los nombres vienen directamente de rundeck_header_list, en orden.
     # --------------------------------------------------------
-    header_line = ",".join(
-        csv_field(name)
-        for name, _flag in rundeck_header_list
-    )
+    header_line = ",".join(csv_field(name) for name, _flag in rundeck_header_list)
 
     print("Header final:")
     print(header_line)
@@ -237,12 +233,7 @@ def main() -> None:
             # Una clave desconocida o una clave duplicada provoca
             # un error fatal y termina el script con exit 1.
             # ------------------------------------------------
-            with input_path.open(
-                "r",
-                encoding="utf-8",
-                errors="replace"
-            ) as in_f:
-
+            with input_path.open("r", encoding="utf-8", errors="replace") as in_f:
                 for line_number, raw_line in enumerate(in_f, start=1):
                     line = raw_line.rstrip("\r\n")
 
@@ -298,14 +289,10 @@ def main() -> None:
                     # Procesar cada campo CLAVE="VALOR".
                     # ------------------------------------------------
                     for field in fields:
-
                         parsed = parse_key_value_field(field)
 
                         if parsed is None:
-                            error(
-                                f"Línea {line_number}: "
-                                f"campo inválido: {field}"
-                            )
+                            error(f"Línea {line_number}: campo inválido: {field}")
 
                         key, value = parsed
 
@@ -327,10 +314,7 @@ def main() -> None:
                         # misma fila.
                         # ------------------------------------------------
                         if key in seen_keys:
-                            error(
-                                f"Línea {line_number}: "
-                                f"clave duplicada: '{key}'"
-                            )
+                            error(f"Línea {line_number}: clave duplicada: '{key}'")
 
                         seen_keys.add(key)
 
@@ -357,11 +341,7 @@ def main() -> None:
                     # llegado desde Rundeck.
                     # ------------------------------------------------
                     out_f.write(
-                        ",".join(
-                            csv_field(value)
-                            for value in output_values
-                        )
-                        + "\n"
+                        ",".join(csv_field(value) for value in output_values) + "\n"
                     )
 
         # --------------------------------------------------------
