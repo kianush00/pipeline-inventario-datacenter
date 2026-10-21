@@ -93,6 +93,7 @@ from export_to_netbox import (
     _resolve_device_type,
     _resolve_existing_object,
     _resolve_field_value,
+    _resolve_host_device,
     _resolve_interface_renames,
     _resolve_netbox_status,
     _sanitize_mac_address,
@@ -3361,6 +3362,84 @@ class TestSyncDevice:
         assert payload_passed["face"] == "front"
         assert payload_passed["position"] == 10
         assert returned_caches is mock_caches
+
+
+class TestNodeLogFormat:
+    """Los logs no deben repetir el nivel (el formateador del logger ya lo imprime)."""
+
+    def test_hypervisor_without_cluster_message(
+        self, config: NetBoxMappingConfig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        cols = {k: v.source for k, v in config.csv_columns.items()}
+        row = {cols["manufacturer"]: "Dell", cols["model"]: "R740"}
+        mock_caches = MagicMock()
+
+        with (
+            patch(
+                "export_to_netbox._resolve_base_node",
+                return_value=(
+                    {
+                        "machine_name": "hv-01",
+                        "inventory_uuid": "u1",
+                        "machine_type": "hypervisor",
+                        "payload": {},
+                    },
+                    mock_caches,
+                ),
+            ),
+            patch(
+                "export_to_netbox._resolve_cluster", return_value=(None, mock_caches)
+            ),
+            patch(
+                "export_to_netbox._resolve_device_type", return_value=(1, mock_caches)
+            ),
+            patch(
+                "export_to_netbox._validate_sync",
+                return_value=SyncResult(SyncStatus.CREATED, 1, MagicMock()),
+            ),
+            caplog.at_level(logging.INFO),
+        ):
+            sync_device(
+                MagicMock(),
+                row,
+                config,
+                MockNetBoxRecord(id=1),
+                {},
+                {},
+                MagicMock(),
+                mock_caches,
+                _counts(),
+                False,
+            )
+
+        assert (
+            "Hipervisor 'hv-01' sin cluster asignado: la columna 'Cluster' está vacía."
+            in caplog.text
+        )
+        assert "INFO (" not in caplog.text
+
+    def test_missing_host_device_message(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        devices = MagicMock()
+        devices.filter.return_value = []
+        config = MagicMock()
+        config.csv_columns = {"host_device": MagicMock(source="Host")}
+
+        with (
+            patch("export_to_netbox.extract_csv_value", return_value="hv-02"),
+            caplog.at_level(logging.WARNING),
+        ):
+            dev_id, _ = _resolve_host_device(
+                devices, {"Host": "hv-02"}, MockNetBoxRecord(id=1), "vm-01", {}, config
+            )
+
+        assert dev_id is None
+        assert (
+            "El dispositivo host 'hv-02' de la VM 'vm-01' no se encontró en el site"
+            in caplog.text
+        )
+        assert "ADVERTENCIA" not in caplog.text
 
 
 class TestGetOrCreateCached:

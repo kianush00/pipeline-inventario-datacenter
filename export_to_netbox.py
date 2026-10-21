@@ -1,42 +1,65 @@
 """
 export_to_netbox.py
 ===================
-Exporta el inventario fusionado (merged_inventory.csv) a NetBox 4.x.
+Exporta el inventario fusionado (merged_inventory.csv) a NetBox 4.6+.
 
-Variables de entorno requeridas:
+Variables de entorno (también se leen desde un archivo .env junto al script;
+las ya definidas en el entorno tienen prioridad):
     NETBOX_URL        → https://netbox.miempresa.com
     NETBOX_TOKEN      → token con permisos write sobre
                         dcim, virtualization, ipam, extras, core
     NETBOX_VERIFY_SSL → "true" / "false"  (por defecto: true)
+    NETBOX_SITE_NAME  → nombre del Site único (lo referencia netbox_mapping.yaml)
 
 Uso:
-    python3 export_to_netbox.py merged_inventory.csv [netbox_mapping.yaml] [--dry-run]
+    python3 export_to_netbox.py merged_inventory.csv [netbox_mapping.yaml] [opciones]
 
 Opciones:
-    --dry-run   Muestra las operaciones que se ejecutarían sin
-                modificar NetBox. Útil para validar antes del
-                primer sync real.
+    --dry-run               Muestra las operaciones que se ejecutarían sin
+                            modificar NetBox. Útil para validar antes del
+                            primer sync real.
+    --verbose               Activa los logs de nivel DEBUG.
+    --prune-network-orphans Reconcilia la red de cada nodo con el CSV: elimina
+                            las interfaces y MACs que ya no existen en él y
+                            desasigna sus IPs (ver "Red e interfaces").
 
-Estrategia de idempotencia:
-    El lookup de Device y VirtualMachine se hace primero por el
-    custom field 'inventory_uuid', usando el nombre como fallback.
-    Si la coincidencia es por nombre y este es único tanto en el
-    CSV como en NetBox, se permite la actualización segura.
-    Esto garantiza que un cambio de nombre en el CSV actualiza
-    el objeto existente en NetBox en lugar de crear un duplicado.
+Identidad e idempotencia (por fila, dentro del Site configurado):
+    1. Por custom field 'inventory_uuid' (coincidencia exacta). Se usa solo si
+       el UUID es único en el CSV y en NetBox; si pertenece a un nodo de otro
+       Site, la fila se omite (SKIP) en lugar de moverlo o duplicarlo.
+    2. Si el UUID no resuelve, por nombre dentro del Site, que debe ser único
+       en el CSV y en NetBox y no pertenecer a un nodo con otro UUID.
+    Así un cambio de nombre en el CSV actualiza el objeto existente en lugar de
+    crear un duplicado, y las filas con identificadores ambiguos nunca se
+    pisan entre sí. Solo se envían los campos que cambiaron.
 
 Formato de entrada del CSV:
     - Campos simples: se procesan como strings directos (con .strip()).
     - Valores vacíos: se ignoran aquellos que coincidan exactamente con
       los valores definidos en `empty_values` del YAML (ej. "N/A", "None").
+    - Registros con menos campos que el encabezado se completan con vacíos
+      (WARNING); con campos de más se descartan (ERROR). Los mensajes indican la
+      línea física del archivo donde empieza cada registro.
+    - Altura (U) y P/N pertenecen al DeviceType, compartido por todos los equipos
+      de un modelo: se consolidan una vez por modelo (primer valor no vacío) y un
+      valor vacío nunca borra el que ya tiene NetBox.
     - Interfaces de red: Las 5 columnas de red (Interfaces, estado, IP,
       Red IP, MAC) admiten múltiples valores separados por comas (`,`).
       Todos deben tener la misma cantidad de elementos por celda para
       sincronizarse correctamente.
 
+Red e interfaces:
+    - Por interfaz se sincronizan Prefix, IP y MAC. Si una interfaz cambia de
+      nombre conservando su IP o MAC, se renombra la existente (no se crea otra).
+    - Una IP ya asignada a otra interfaz se omite con WARNING: NetBox no admite
+      duplicarla.
+    - Con --prune-network-orphans, las IPs con rol asignado en NetBox (secondary,
+      vip, etc.) nunca se desasignan, y una interfaz huérfana que las aloje se
+      conserva.
+
 Códigos de salida:
-    0 → sin errores en filas individuales
-    1 → al menos una fila produjo ERROR
+    0 → sin errores
+    1 → al menos un ERROR (fila, interfaz o registro CSV descartado)
 """
 
 import argparse
@@ -3247,10 +3270,10 @@ def _resolve_host_device(
 
     if dev_id is None:
         log.warning(
-            "ADVERTENCIA (%s): El dispositivo host '%s' no se encontró en el site. "
-            "La VM se creará sin asignación de host.",
-            machine_name,
+            "El dispositivo host '%s' de la VM '%s' no se encontró en el site: "
+            "la VM se creará sin asignación de host.",
             host_name_csv,
+            machine_name,
         )
 
     return dev_id, cache
@@ -3697,8 +3720,11 @@ def sync_device(
         if cluster_id is not None:
             payload["cluster"] = cluster_id
         else:
-            # TODO: qué formato debería tener este log INFO si quiero que su formato sea consistente con el resto de logs? evalua este log y modificalo si es pertinente
-            log.info("INFO (%s): Hipervisor sin cluster asignado.", machine_name)
+            log.info(
+                "Hipervisor '%s' sin cluster asignado: la columna '%s' está vacía.",
+                machine_name,
+                config.csv_columns["cluster_name"].source,
+            )
 
     # Location (Fila).
     location_id: int | None = None
