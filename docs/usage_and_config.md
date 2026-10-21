@@ -139,4 +139,6 @@ To automatically delete interfaces and MAC addresses, and unassign IP addresses 
 python3 export_to_netbox.py merged_inventory.csv --prune-network-orphans --dry-run
 ```
 
+IP addresses with a **role** assigned in NetBox (e.g. `secondary`, `vip`, `vrrp`, `loopback`) are never unassigned: the exporter creates IPs without a role, so a role marks an address curated manually, and the CSV holds a single IP per interface. An orphan interface hosting such an IP is kept (with a `WARNING`), because deleting an interface in NetBox also deletes its IPs; its other IPs and MACs are still pruned.
+
 Interfaces renamed in the master inventory (same IP or MAC under a new name) are renamed in NetBox before pruning, so pruning never deletes them or their IP/MAC objects. Rename detection runs on every export, with or without this flag.

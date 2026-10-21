@@ -222,7 +222,6 @@ type NameCache = dict[str, NetBoxObject]
 type SiteNameCache = dict[SiteScopedName, NetBoxObject]
 # Clave (nombre del fabricante *en NetBox*, modelo): puede diferir del texto del CSV
 # cuando se reutiliza un fabricante existente por slug, por eso no es DeviceTypeKey.
-# TODO: aquí no se asigna DeviceTypeKey a la clave de ManufModelCache?
 type ManufModelCache = dict[tuple[str, str], NetBoxObject]
 type HostDeviceCache = dict[SiteScopedName, int | None]
 
@@ -4423,6 +4422,83 @@ def _prune_orphan_interface(
         return 0, 1
 
 
+def _get_ip_role(ip_obj: NetBoxObject) -> str | None:
+    """
+    Retorna el rol de una IP de NetBox (ej. 'secondary'), o None si no tiene rol.
+
+    pynetbox expone el rol como un objeto de choice (`.value`); se admite también un
+    string plano para no depender de la forma exacta de la respuesta.
+    """
+    role = getattr(ip_obj, "role", None)
+    value = getattr(role, "value", role)
+    return str(value) if value else None
+
+
+def _is_protected_ip(ip_obj: NetBoxObject) -> bool:
+    """
+    Indica si una IP debe excluirse de la poda de huérfanos de red.
+
+    El pipeline crea sus IPs sin rol: una IP con rol (secondary, vip, vrrp, loopback,
+    etc.) fue curada a mano en NetBox. Como el CSV admite una sola IP por interfaz,
+    esas IPs nunca aparecen en él y la poda las desasignaría en cada corrida.
+    """
+    return _get_ip_role(ip_obj) is not None
+
+
+def _find_protected_ips(
+    ip_endpoint: Endpoint, assigned_type: str, iface_id: int
+) -> list[str] | None:
+    """
+    Retorna las direcciones con rol asignado de una interfaz, o None si no se pudo
+    consultar NetBox (el llamador debe tratarlo como "no verificable").
+    """
+    try:
+        iface_ips = list(
+            ip_endpoint.filter(
+                assigned_object_type=assigned_type, assigned_object_id=iface_id
+            )
+        )
+    except RequestError as e:
+        log.error("Error consultando las IPs de la interfaz ID=%d: %s", iface_id, e)
+        return None
+    return [
+        f"{getattr(ip_obj, 'address', '?')} ({_get_ip_role(ip_obj)})"
+        for ip_obj in iface_ips
+        if _is_protected_ip(ip_obj)
+    ]
+
+
+def _keep_orphan_interface(
+    ip_endpoint: Endpoint, assigned_type: str, name: str, iface_id: int
+) -> bool:
+    """
+    Decide si una interfaz huérfana debe conservarse en lugar de borrarse.
+
+    Decisiones de diseño:
+    - En NetBox, borrar una interfaz borra en cascada sus IPs: si alguna tiene rol
+      (curada a mano), borrar la interfaz destruiría justamente lo que se protege.
+    - Fail-safe: si no se puede verificar, se conserva la interfaz (borrar es
+      irreversible; conservarla solo posterga la poda a la siguiente corrida).
+    """
+    protected = _find_protected_ips(ip_endpoint, assigned_type, iface_id)
+    if protected is None:
+        log.warning(
+            "Se conserva la interfaz huérfana '%s': no se pudo verificar si tiene IPs "
+            "con rol asignado.",
+            name,
+        )
+        return True
+    if protected:
+        log.warning(
+            "Se conserva la interfaz huérfana '%s': tiene IPs con rol asignado %s y "
+            "borrarla las eliminaría en cascada.",
+            name,
+            protected,
+        )
+        return True
+    return False
+
+
 def _prune_orphan_ips(
     ip_endpoint: Endpoint,
     assigned_type: str,
@@ -4432,6 +4508,8 @@ def _prune_orphan_ips(
 ) -> tuple[int, int]:
     """
     Desasocia IPs que ya no se encuentran en el CSV.
+
+    Las IPs con rol asignado se conservan (ver `_is_protected_ip`).
     Retorna:
         tuple[int, int]: (cantidad de IPs desasociadas, cantidad de errores)
     """
@@ -4445,6 +4523,14 @@ def _prune_orphan_ips(
         for ip_obj in iface_ips:
             address = str(getattr(ip_obj, "address", ""))
             if not address or address in csv_ips:
+                continue
+            if _is_protected_ip(ip_obj):
+                log.info(
+                    "Se conserva la IP '%s' (rol '%s'): fue asignada manualmente en "
+                    "NetBox y no se desasigna.",
+                    address,
+                    _get_ip_role(ip_obj),
+                )
                 continue
             if dry_run:
                 log.info(
@@ -4514,6 +4600,9 @@ def _prune_network_orphans(
 ) -> PrunedNetworkMetrics:
     """
     Elimina (poda) de NetBox las interfaces y MACs huérfanas, y desvincula IPs.
+
+    Las IPs con rol asignado nunca se desasignan, y una interfaz huérfana que aloje
+    alguna se conserva (con sus demás IPs y MACs sujetas a la poda normal).
     Retorna PrunedNetworkMetrics.
     """
     errors = p_ifaces = p_ips = p_macs = 0
@@ -4522,14 +4611,20 @@ def _prune_network_orphans(
     for name, iface_obj in ifaces_cache.items():
         iface_id = getattr(iface_obj, "id", 0)
 
-        # FASE A: Interfaces
-        del_count, err_count = _prune_orphan_interface(
-            name, iface_obj, csv_iface_names, dry_run
+        # FASE A: Interfaces (salvo huérfanas que alojan IPs protegidas)
+        keep_interface = name not in csv_iface_names and _keep_orphan_interface(
+            endpoints.ip_addresses, assigned_type, name, iface_id
         )
-        p_ifaces += del_count
-        errors += err_count
+        if not keep_interface:
+            del_count, err_count = _prune_orphan_interface(
+                name, iface_obj, csv_iface_names, dry_run
+            )
+            p_ifaces += del_count
+            errors += err_count
+            if del_count > 0:
+                continue
 
-        if del_count > 0 or iface_id == 0:
+        if iface_id == 0:
             continue
 
         # FASE B: IPs (Desvincular)
@@ -4681,15 +4776,22 @@ def _fetch_orphan_fingerprints(
     }
 
 
+def _csv_interface_fingerprint(iface: NetworkInterfaceData) -> InterfaceFingerprint:
+    """Construye la identidad de red (IP host y MAC) de una interfaz del CSV."""
+    cidr = iface["cidr"]
+    mac = iface["mac"]
+    return InterfaceFingerprint(
+        ip_hosts=frozenset([_ip_host(cidr)]) if cidr else frozenset(),
+        macs=frozenset([mac.upper()]) if mac else frozenset(),
+    )
+
+
 def _csv_interface_fingerprints(
     interfaces: list[NetworkInterfaceData], names: set[str]
 ) -> dict[str, InterfaceFingerprint]:
     """Construye la identidad de red de las interfaces del CSV indicadas en `names`."""
     return {
-        iface["name"]: InterfaceFingerprint(
-            ip_hosts=frozenset({_ip_host(cidr)} if (cidr := iface["cidr"]) else ()),
-            macs=frozenset({mac.upper()} if (mac := iface["mac"]) else ()),
-        )
+        iface["name"]: _csv_interface_fingerprint(iface)
         for iface in interfaces
         if iface["name"] in names
     }
@@ -4759,7 +4861,6 @@ def detect_interface_renames(
 
     candidates_by_orphan: dict[str, set[str]] = {}
     candidates_by_newcomer: dict[str, set[str]] = {}
-    # TODO: analizar esto, está correctamente iterando los items de evidence?
     for orphan_name, newcomer_name in evidence:
         candidates_by_orphan.setdefault(orphan_name, set()).add(newcomer_name)
         candidates_by_newcomer.setdefault(newcomer_name, set()).add(orphan_name)

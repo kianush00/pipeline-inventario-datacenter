@@ -68,12 +68,14 @@ from export_to_netbox import (
     _classify_rows,
     _create_record,
     _create_with_fallback_slug,
+    _csv_interface_fingerprint,
     _describe_assignment,
     _ensure_custom_field,
     _execute_sync,
     _extract_concat_dot_value,
     _extract_raw_source_value,
     _find_by_uuid,
+    _get_ip_role,
     _is_collision_error,
     _is_custom_field_changed,
     _is_name_safely_unique,
@@ -83,6 +85,7 @@ from export_to_netbox import (
     _parse_network_interfaces,
     _parse_single_network_interface,
     _prune_network_orphans,
+    _prune_orphan_ips,
     _read_csv,
     _resolve_cluster,
     _resolve_default_or_empty,
@@ -3123,8 +3126,8 @@ class TestPruneNetworkOrphans:
         csv_macs = {"AA:BB:CC"}
 
         endpoints = MagicMock()
-        mock_ip_orphan = MagicMock(address="192.168.1.5/24")
-        mock_ip_valid = MagicMock(address="10.0.0.1/24")
+        mock_ip_orphan = MagicMock(address="192.168.1.5/24", role=None)
+        mock_ip_valid = MagicMock(address="10.0.0.1/24", role=None)
 
         # Simula que eth0 tiene una IP válida y una IP huérfana
         def filter_ips(**kwargs):
@@ -3142,8 +3145,6 @@ class TestPruneNetworkOrphans:
             return []
 
         endpoints.mac_addresses.filter.side_effect = filter_macs
-
-        from export_to_netbox import NodeType
 
         metrics = _prune_network_orphans(
             endpoints=endpoints,
@@ -3180,12 +3181,10 @@ class TestPruneNetworkOrphans:
         csv_iface_names = set()
 
         endpoints = MagicMock()
-        mock_ip = MagicMock(address="192.168.1.5/24")
+        mock_ip = MagicMock(address="192.168.1.5/24", role=None)
         endpoints.ip_addresses.filter.return_value = [mock_ip]
         mock_mac = MagicMock(mac_address="FF:EE:DD")
         endpoints.mac_addresses.filter.return_value = [mock_mac]
-
-        from export_to_netbox import NodeType
 
         metrics = _prune_network_orphans(
             endpoints=endpoints,
@@ -4874,6 +4873,40 @@ class TestDetectInterfaceRenames:
         assert detect_interface_renames({"ens18": _fp()}, {"eth0": _fp()}) == []
 
 
+class TestCsvInterfaceFingerprint:
+    """Identidad de red de una interfaz del CSV (IP host y MAC normalizada)."""
+
+    @staticmethod
+    def _iface(cidr: str | None, mac: str | None) -> NetworkInterfaceData:
+        return cast(
+            NetworkInterfaceData,
+            {
+                "name": "eth0",
+                "enabled": True,
+                "mac": mac,
+                "ip": None,
+                "prefix": None,
+                "cidr": cidr,
+                "network": None,
+            },
+        )
+
+    def test_ip_without_mask_and_uppercase_mac(self) -> None:
+        fingerprint = _csv_interface_fingerprint(
+            self._iface("10.0.0.5/24", "aa:bb:cc:dd:ee:ff")
+        )
+        assert fingerprint == _fp(ips=("10.0.0.5",), macs=("AA:BB:CC:DD:EE:FF",))
+
+    @pytest.mark.parametrize("cidr", ["10.0.0.5/24", "10.0.0.5/26", "10.0.0.5/32"])
+    def test_mask_change_keeps_identity(self, cidr: str) -> None:
+        assert _csv_interface_fingerprint(self._iface(cidr, None)).ip_hosts == {
+            "10.0.0.5"
+        }
+
+    def test_missing_ip_and_mac_give_empty_fingerprint(self) -> None:
+        assert _csv_interface_fingerprint(self._iface(None, None)) == _fp()
+
+
 class TestRekeyInterfacesCache:
     def test_moves_only_renamed_keys_without_mutating_input(self) -> None:
         old, kept = MockNetBoxRecord(id=1), MockNetBoxRecord(id=2)
@@ -5148,3 +5181,153 @@ class TestInterfaceRenameEndToEnd:
 
         assert [i.name for i in nb.records["interfaces"]] == ["eth0"]
         assert ("delete", "interfaces") in [(w[0], w[1]) for w in nb.writes]
+
+
+# ============================================================
+# PODA: IPs CON ROL ASIGNADO (curadas a mano en NetBox)
+# ============================================================
+
+
+class TestIpRoleProtection:
+    """Las IPs con rol nunca se desasignan; sin rol, la poda sigue igual."""
+
+    @pytest.mark.parametrize(
+        ("role", "expected"),
+        [
+            (None, None),
+            (SimpleNamespace(value="secondary", label="Secondary"), "secondary"),
+            ("vip", "vip"),  # string plano
+            (SimpleNamespace(value=None), None),
+        ],
+    )
+    def test_get_ip_role(self, role: Any, expected: str | None) -> None:
+        assert _get_ip_role(MockNetBoxRecord.model_validate({"role": role})) == expected
+
+    def test_ip_with_role_is_kept_and_reported(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        secondary = MagicMock(
+            address="10.0.0.6/24", role=SimpleNamespace(value="secondary")
+        )
+        plain_orphan = MagicMock(address="10.0.0.7/24", role=None)
+        endpoint = MagicMock()
+        endpoint.filter.return_value = [secondary, plain_orphan]
+
+        with caplog.at_level(logging.INFO):
+            pruned, errors = _prune_orphan_ips(
+                endpoint, "dcim.interface", 101, {"10.0.0.5/24"}, dry_run=False
+            )
+
+        assert (pruned, errors) == (1, 0)
+        secondary.update.assert_not_called()
+        plain_orphan.update.assert_called_once()
+        assert "Se conserva la IP '10.0.0.6/24' (rol 'secondary')" in caplog.text
+
+    def test_dry_run_also_respects_protection(self) -> None:
+        vip = MagicMock(address="10.0.0.6/24", role=SimpleNamespace(value="vip"))
+        endpoint = MagicMock()
+        endpoint.filter.return_value = [vip]
+
+        assert _prune_orphan_ips(endpoint, "dcim.interface", 101, set(), True) == (0, 0)
+        vip.update.assert_not_called()
+
+
+class TestIpRoleProtectionEndToEnd:
+    """Con --prune-network-orphans, sobre un NetBox en memoria."""
+
+    DEVICE_ID = 7
+
+    @staticmethod
+    def _add_ip(
+        nb: _FakeNetBox, iface: _FakeRecord, cidr: str, role: str | None
+    ) -> None:
+        nb.records["ips"].append(
+            _FakeRecord(
+                nb,
+                "ips",
+                id=nb.next_id(),
+                address=cidr,
+                role=SimpleNamespace(value=role) if role else None,
+                assigned_object_type="dcim.interface",
+                assigned_object_id=iface.id,
+            )
+        )
+
+    @staticmethod
+    def _csv_iface(name: str, cidr: str) -> NetworkInterfaceData:
+        return cast(
+            NetworkInterfaceData,
+            {
+                "name": name,
+                "enabled": True,
+                "mac": None,
+                "ip": cidr.split("/")[0],
+                "prefix": None,
+                "cidr": cidr,
+                "network": None,
+            },
+        )
+
+    def _sync(self, nb: _FakeNetBox, interfaces: list[NetworkInterfaceData]) -> Any:
+        args = argparse.Namespace(dry_run=False, prune_network_orphans=True)
+        return _sync_interfaces_for_object(
+            nb.endpoints, self.DEVICE_ID, NodeType.DEVICE, interfaces, args
+        )
+
+    def test_secondary_ip_survives_while_plain_orphan_ip_is_unassigned(self) -> None:
+        nb = _FakeNetBox()
+        eth0 = nb.add_interface(self.DEVICE_ID, "eth0", "10.0.0.5/24", None)
+        self._add_ip(nb, eth0, "10.0.0.6/24", "secondary")
+        self._add_ip(nb, eth0, "10.0.0.7/24", None)
+
+        result = self._sync(nb, [self._csv_iface("eth0", "10.0.0.5/24")])
+
+        assigned = {ip.address: ip.assigned_object_id for ip in nb.records["ips"]}
+        assert result.errors == 0
+        assert assigned["10.0.0.6/24"] == eth0.id  # protegida
+        assert assigned["10.0.0.7/24"] is None  # huérfana sin rol: desasignada
+
+    def test_orphan_interface_hosting_a_protected_ip_is_not_deleted(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        nb = _FakeNetBox()
+        nb.add_interface(self.DEVICE_ID, "eth0", "10.0.0.5/24", None)
+        old = nb.add_interface(self.DEVICE_ID, "eth9", None, None)
+        self._add_ip(nb, old, "10.0.9.9/24", "vrrp")
+
+        with caplog.at_level(logging.WARNING):
+            self._sync(nb, [self._csv_iface("eth0", "10.0.0.5/24")])
+
+        assert "eth9" in [iface.name for iface in nb.records["interfaces"]]
+        assert ("delete", "interfaces") not in [(w[0], w[1]) for w in nb.writes]
+        assert "Se conserva la interfaz huérfana 'eth9'" in caplog.text
+
+    def test_orphan_interface_without_protected_ips_is_still_deleted(self) -> None:
+        nb = _FakeNetBox()
+        nb.add_interface(self.DEVICE_ID, "eth0", "10.0.0.5/24", None)
+        nb.add_interface(self.DEVICE_ID, "eth9", "10.0.9.9/24", None)
+
+        self._sync(nb, [self._csv_iface("eth0", "10.0.0.5/24")])
+
+        assert [iface.name for iface in nb.records["interfaces"]] == ["eth0"]
+
+
+class TestKeepOrphanInterfaceFailSafe:
+    def test_unverifiable_interface_is_kept(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Si NetBox falla al consultar sus IPs, no se borra (borrar es irreversible)."""
+        endpoints = MagicMock()
+        endpoints.ip_addresses.filter.side_effect = RequestError(
+            MagicMock(status_code=500)
+        )
+        iface = MagicMock(id=102)
+
+        with caplog.at_level(logging.WARNING):
+            metrics = _prune_network_orphans(
+                endpoints, NodeType.DEVICE, {"eth9": iface}, set(), set(), set(), False
+            )
+
+        iface.delete.assert_not_called()
+        assert metrics.pruned_interfaces == 0
+        assert "no se pudo verificar" in caplog.text
