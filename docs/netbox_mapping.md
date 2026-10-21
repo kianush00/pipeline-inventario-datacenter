@@ -116,6 +116,8 @@ A prefix length of `/0` (e.g. `0.0.0.0/0`) is always rejected.
 
 **NetBox side:** for each interface with a valid IP/network, the pipeline (idempotently) creates the **Prefix** (`ipam.prefix`, status `active`) if it does not exist, and then creates/assigns the **IP Address** (`ipam.ip-address`) with the host CIDR (`192.168.1.10/24`) to the interface. NetBox links an IP to its Prefix by address containment, so the IP automatically falls inside the synchronized Prefix. Existing Prefixes are never modified. With `--dry-run`, Prefix creation is only simulated.
 
+**Renaming an interface** in `Interfaces` (e.g. `ens18` → `eth0`) while keeping its `IP` or `MAC` renames the existing NetBox interface, preserving its IP and MAC objects, cables and history (see [architecture](architecture.md#netbox-synchronization-flow)).
+
 ---
 
 ## Site (`site`)

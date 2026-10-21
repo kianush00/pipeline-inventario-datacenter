@@ -73,8 +73,9 @@ Rows are identified in logs by the physical CSV line where they start (not by li
 3. **Payload construction**: Fields are mapped according to the contract defined in `netbox_mapping.yaml`, applying casts and transformations.
 4. **Change detection**: Compares the payload against the current state of the record. An update is only issued if there are actual differences.
 5. **Dependency synchronization**: Sites, Manufacturers, Device Types, Platforms, Roles, Clusters, Custom Fields, Interfaces, Prefixes, and IPs are created or resolved as prerequisites.
-6. **Shared IP handling**: NetBox does not allow the same IP on two interfaces (e.g. a node and its replica). An IP already assigned to another interface is skipped with a `WARNING` naming its owner, not counted as an error. The first node processed keeps the IP.
-7. **Primary IP assignment**: If a Device or VM has exactly one valid IP, it is automatically assigned as the primary IPv4.
+6. **Interface renames**: If an interface disappears from the CSV under one name and a new one appears with the same IP (host, ignoring the mask) or the same MAC, the existing NetBox interface is **renamed** instead of creating a new one and pruning the old one (deleting an interface in NetBox also deletes its IPs and MACs). The match must be one-to-one and unambiguous: values shared by several interfaces (e.g. a bond and its members' MAC) are ignored, and contradicting signals skip the rename with a `WARNING`. Swapping names between two interfaces that exist on both sides is not detected.
+7. **Shared IP handling**: NetBox does not allow the same IP on two interfaces (e.g. a node and its replica). An IP already assigned to another interface is skipped with a `WARNING` naming its owner, not counted as an error. The first node processed keeps the IP.
+8. **Primary IP assignment**: If a Device or VM has exactly one valid IP, it is automatically assigned as the primary IPv4.
 
 ### Device Type Attributes (Model-Level Consolidation)
 

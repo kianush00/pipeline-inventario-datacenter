@@ -294,6 +294,24 @@ class InterfaceSyncResult(NamedTuple):
     any_changes: bool
 
 
+class InterfaceFingerprint(NamedTuple):
+    """
+    Identidad de red de una interfaz, usada para reconocerla aunque cambie de nombre.
+    `ip_hosts` son direcciones sin máscara (un cambio de máscara no altera la identidad).
+    """
+
+    ip_hosts: frozenset[str]
+    macs: frozenset[str]
+
+
+class InterfaceRename(NamedTuple):
+    """Renombre detectado de una interfaz existente en NetBox (ej. 'ens18' → 'eth0')."""
+
+    old_name: str
+    new_name: str
+    evidence: str  # Señales que respaldan la coincidencia (ej. "IP 10.0.0.5").
+
+
 class NetworkInterfaceData(TypedDict):
     """Representa la estructura de datos parseada de una interfaz de red."""
 
@@ -3853,6 +3871,11 @@ def _build_interface_cidr(ip_val: str, pfx_val: str, name: str) -> str:
     return str(interface)
 
 
+def _ip_host(cidr: str) -> str:
+    """Retorna la dirección de host de un CIDR, sin máscara (ej. '10.0.0.5/24' → '10.0.0.5')."""
+    return str(ipaddress.ip_interface(cidr).ip)
+
+
 def _network_from_cidr(cidr: str) -> str:
     """Deriva la red canónica (ej. '192.168.1.0/24') a partir de un CIDR de host."""
     return str(ipaddress.ip_interface(cidr).network)
@@ -4555,6 +4578,7 @@ def _log_interface_deltas(
     interfaces: list[NetworkInterfaceData],
     ifaces_cache: dict[str, NetBoxObject],
     prune_network_orphans: bool,
+    renamed: int,
 ) -> None:
     """Calcula y registra los deltas de las interfaces antes de sincronizar."""
     csv_names = {iface["name"] for iface in interfaces}
@@ -4564,12 +4588,203 @@ def _log_interface_deltas(
     to_prune = cache_names - csv_names if prune_network_orphans else set()
 
     log.debug(
-        "Deltas de interfaces (obj_id=%s) -> Crear: %d | Actualizar: %d | Eliminar: %d",
+        "Deltas de interfaces (obj_id=%s) -> Crear: %d | Actualizar: %d "
+        "(renombradas: %d) | Eliminar: %d",
         obj_id,
         len(to_create),
         len(to_update),
+        renamed,
         len(to_prune),
     )
+
+
+# ============================================================
+# DETECCIÓN DE RENOMBRES DE INTERFACES
+# ============================================================
+
+
+def _fetch_orphan_fingerprints(
+    endpoints: NetBoxEndpoints,
+    node_type: NodeType,
+    obj_id: int,
+    orphans: dict[str, NetBoxObject],
+) -> dict[str, InterfaceFingerprint]:
+    """
+    Obtiene de NetBox la identidad de red (IPs y MACs asignadas) de las interfaces huérfanas.
+
+    Decisiones de diseño:
+    - Dos consultas por nodo (IPs y MACs filtradas por `device_id`/`virtual_machine_id`),
+      agrupadas localmente por interfaz: costo constante en lugar de una consulta por interfaz.
+    - Solo se invoca cuando el nodo tiene a la vez interfaces huérfanas y nuevas.
+    """
+    node_filter = (
+        {"device_id": obj_id}
+        if node_type == NodeType.DEVICE
+        else {"virtual_machine_id": obj_id}
+    )
+    name_by_id = {get_netbox_object_id(obj): name for name, obj in orphans.items()}
+    ip_hosts: dict[str, set[str]] = {name: set() for name in orphans}
+    macs: dict[str, set[str]] = {name: set() for name in orphans}
+
+    for ip_record in endpoints.ip_addresses.filter(**node_filter):
+        owner = name_by_id.get(getattr(ip_record, "assigned_object_id", None) or 0)
+        address = str(getattr(ip_record, "address", "") or "")
+        if owner is not None and address:
+            ip_hosts[owner].add(_ip_host(address))
+
+    for mac_record in endpoints.mac_addresses.filter(**node_filter):
+        owner = name_by_id.get(getattr(mac_record, "assigned_object_id", None) or 0)
+        mac_address = str(getattr(mac_record, "mac_address", "") or "")
+        if owner is not None and mac_address:
+            macs[owner].add(mac_address.upper())
+
+    return {
+        name: InterfaceFingerprint(frozenset(ip_hosts[name]), frozenset(macs[name]))
+        for name in orphans
+    }
+
+
+def _csv_interface_fingerprints(
+    interfaces: list[NetworkInterfaceData], names: set[str]
+) -> dict[str, InterfaceFingerprint]:
+    """Construye la identidad de red de las interfaces del CSV indicadas en `names`."""
+    return {
+        iface["name"]: InterfaceFingerprint(
+            ip_hosts=frozenset({_ip_host(cidr)} if (cidr := iface["cidr"]) else ()),
+            macs=frozenset({mac.upper()} if (mac := iface["mac"]) else ()),
+        )
+        for iface in interfaces
+        if iface["name"] in names
+    }
+
+
+def _unique_signal_owners(
+    fingerprints: dict[str, InterfaceFingerprint],
+) -> dict[str, str]:
+    """
+    Indexa cada señal de identidad (IP host o MAC) a la única interfaz que la posee.
+
+    Las señales presentes en más de una interfaz (ej. la MAC compartida por un bond y
+    sus miembros, o por subinterfaces VLAN) se descartan: no identifican a ninguna.
+    Retorna {señal: nombre_interfaz}; las señales se prefijan con su tipo.
+    """
+    owners: dict[str, set[str]] = {}
+    for name, fingerprint in fingerprints.items():
+        signals = {f"IP {ip}" for ip in fingerprint.ip_hosts} | {
+            f"MAC {mac}" for mac in fingerprint.macs
+        }
+        for signal in signals:
+            owners.setdefault(signal, set()).add(name)
+    return {
+        signal: next(iter(names)) for signal, names in owners.items() if len(names) == 1
+    }
+
+
+def _warn_ambiguous_renames(side_label: str, candidates: dict[str, set[str]]) -> None:
+    """Advierte una sola vez por cada interfaz cuyas señales apuntan a varias interfaces."""
+    for name, matches in sorted(candidates.items()):
+        if len(matches) > 1:
+            log.warning(
+                "Renombre ambiguo: la interfaz %s '%s' coincide con %s. "
+                "No se renombra; revise el inventario maestro.",
+                side_label,
+                name,
+                sorted(matches),
+            )
+
+
+def detect_interface_renames(
+    orphans: dict[str, InterfaceFingerprint],
+    newcomers: dict[str, InterfaceFingerprint],
+) -> list[InterfaceRename]:
+    """
+    Detecta interfaces que cambiaron de nombre comparando su identidad de red.
+
+    Decisiones de diseño:
+    - `orphans` son interfaces que existen en NetBox pero no en el CSV; `newcomers`, las
+      que están en el CSV pero no en NetBox. Un renombre conserva la IP y/o la MAC.
+    - Solo cuentan las señales únicas en cada lado (ver `_unique_signal_owners`).
+    - La pareja debe ser 1:1: cada huérfana con una sola candidata y viceversa. Si las
+      señales apuntan a interfaces distintas, no se renombra (se advierte): adivinar
+      podría asignar la identidad de una interfaz a otra.
+
+    Retorna los renombres aceptados, ordenados por nombre anterior.
+    """
+    orphan_owner = _unique_signal_owners(orphans)
+    newcomer_owner = _unique_signal_owners(newcomers)
+
+    # Señales compartidas por exactamente una huérfana y una nueva.
+    evidence: dict[tuple[str, str], list[str]] = {}
+    for signal, orphan_name in orphan_owner.items():
+        newcomer_name = newcomer_owner.get(signal)
+        if newcomer_name is not None:
+            evidence.setdefault((orphan_name, newcomer_name), []).append(signal)
+
+    candidates_by_orphan: dict[str, set[str]] = {}
+    candidates_by_newcomer: dict[str, set[str]] = {}
+    # TODO: analizar esto, está correctamente iterando los items de evidence?
+    for orphan_name, newcomer_name in evidence:
+        candidates_by_orphan.setdefault(orphan_name, set()).add(newcomer_name)
+        candidates_by_newcomer.setdefault(newcomer_name, set()).add(orphan_name)
+
+    _warn_ambiguous_renames("existente", candidates_by_orphan)
+    _warn_ambiguous_renames("nueva", candidates_by_newcomer)
+
+    return [
+        InterfaceRename(orphan_name, newcomer_name, ", ".join(sorted(signals)))
+        for (orphan_name, newcomer_name), signals in sorted(evidence.items())
+        if len(candidates_by_orphan[orphan_name]) == 1
+        and len(candidates_by_newcomer[newcomer_name]) == 1
+    ]
+
+
+def _resolve_interface_renames(
+    endpoints: NetBoxEndpoints,
+    node_type: NodeType,
+    obj_id: int,
+    interfaces: list[NetworkInterfaceData],
+    ifaces_cache: NameCache,
+) -> list[InterfaceRename]:
+    """
+    Detecta los renombres de interfaces de un nodo existente en NetBox.
+
+    Solo consulta NetBox cuando hay a la vez interfaces huérfanas y nuevas, de modo que
+    un nodo sin cambios de nombre no agrega peticiones.
+    """
+    csv_names = {iface["name"] for iface in interfaces}
+    orphan_names = ifaces_cache.keys() - csv_names
+    newcomer_names = csv_names - ifaces_cache.keys()
+    if obj_id == 0 or not orphan_names or not newcomer_names:
+        return []
+
+    orphans = {name: ifaces_cache[name] for name in orphan_names}
+    orphan_fingerprints = _fetch_orphan_fingerprints(
+        endpoints, node_type, obj_id, orphans
+    )
+    newcomer_fingerprints = _csv_interface_fingerprints(interfaces, newcomer_names)
+    renames = detect_interface_renames(orphan_fingerprints, newcomer_fingerprints)
+    for rename in renames:
+        log.info(
+            "Renombre de interfaz detectado en objeto %s: '%s' → '%s' (coincidencia: %s).",
+            obj_id,
+            rename.old_name,
+            rename.new_name,
+            rename.evidence,
+        )
+    return renames
+
+
+def rekey_interfaces_cache(
+    cache: NameCache, renames: list[InterfaceRename]
+) -> NameCache:
+    """
+    Retorna una caché nueva donde cada interfaz renombrada queda bajo su nombre nuevo.
+
+    Al re-indexar, el upsert de la interfaz encuentra el objeto existente y emite un
+    único PATCH con el nombre nuevo: se conservan su ID, IPs, MACs, cables e historial.
+    """
+    new_name_by_old = {rename.old_name: rename.new_name for rename in renames}
+    return {new_name_by_old.get(name, name): obj for name, obj in cache.items()}
 
 
 def _sync_interfaces_for_object(
@@ -4586,7 +4801,14 @@ def _sync_interfaces_for_object(
     )
     ifaces_cache = _fetch_interfaces_cache(iface_endpoint, iface_filter, obj_id)
 
-    _log_interface_deltas(obj_id, interfaces, ifaces_cache, args.prune_network_orphans)
+    renames = _resolve_interface_renames(
+        endpoints, node_type, obj_id, interfaces, ifaces_cache
+    )
+    ifaces_cache = rekey_interfaces_cache(ifaces_cache, renames)
+
+    _log_interface_deltas(
+        obj_id, interfaces, ifaces_cache, args.prune_network_orphans, len(renames)
+    )
 
     sync_res, ifaces_cache = _process_interfaces_sync(
         interfaces, obj_id, iface_endpoint, ifaces_cache, endpoints, args.dry_run

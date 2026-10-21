@@ -2,6 +2,7 @@
 Pruebas unitarias para export_to_netbox.py
 """
 
+import argparse
 import hashlib
 import logging
 import sys
@@ -35,6 +36,8 @@ from export_to_netbox import (
     Endpoint,
     FieldMappingConfig,
     FieldParseError,
+    InterfaceFingerprint,
+    InterfaceRename,
     ManufModelCache,
     MockNetBoxRecord,
     NameCache,
@@ -84,11 +87,13 @@ from export_to_netbox import (
     _resolve_device_type,
     _resolve_existing_object,
     _resolve_field_value,
+    _resolve_interface_renames,
     _resolve_netbox_status,
     _sanitize_mac_address,
     _search_in_netbox,
     _split_ip_and_embedded_prefix,
     _sync_device_type_attributes,
+    _sync_interfaces_for_object,
     _sync_rack_location,
     _sync_row,
     _sync_single_device_role,
@@ -105,6 +110,7 @@ from export_to_netbox import (
     concat_dot,
     count_inventory_uuids,
     count_machine_names,
+    detect_interface_renames,
     ensure_cluster,
     ensure_device_type,
     ensure_dynamic_cluster_types,
@@ -131,6 +137,7 @@ from export_to_netbox import (
     precompute_cluster_type_map,
     precompute_device_type_attributes,
     process_interfaces_and_ips,
+    rekey_interfaces_cache,
     slugify,
     sync_device,
     sync_vm,
@@ -4743,3 +4750,368 @@ class TestNetBoxMappingConfig:
     def test_apply_map_non_strict(self, config: NetBoxMappingConfig) -> None:
         """Si strict=False, valores desconocidos retornan None."""
         assert config.map_value("status", "desconocido", strict=False) is None
+
+
+# ============================================================
+# DETECCIÓN DE RENOMBRES DE INTERFACES
+# ============================================================
+
+
+def _fp(ips: tuple[str, ...] = (), macs: tuple[str, ...] = ()) -> InterfaceFingerprint:
+    """Construye una huella de interfaz con IPs (host) y MACs."""
+    return InterfaceFingerprint(frozenset(ips), frozenset(macs))
+
+
+class TestDetectInterfaceRenames:
+    """Núcleo puro: empareja interfaces huérfanas y nuevas por IP/MAC únicas y 1:1."""
+
+    def test_rename_by_ip(self) -> None:
+        renames = detect_interface_renames(
+            {"ens18": _fp(ips=("10.0.0.5",))}, {"eth0": _fp(ips=("10.0.0.5",))}
+        )
+        assert renames == [InterfaceRename("ens18", "eth0", "IP 10.0.0.5")]
+
+    def test_rename_by_mac(self) -> None:
+        renames = detect_interface_renames(
+            {"ens18": _fp(macs=("AA:BB:CC:DD:EE:FF",))},
+            {"eth0": _fp(macs=("AA:BB:CC:DD:EE:FF",))},
+        )
+        assert renames == [InterfaceRename("ens18", "eth0", "MAC AA:BB:CC:DD:EE:FF")]
+
+    def test_consistent_ip_and_mac_are_both_reported(self) -> None:
+        signals = _fp(ips=("10.0.0.5",), macs=("AA:BB:CC:DD:EE:FF",))
+        renames = detect_interface_renames({"ens18": signals}, {"eth0": signals})
+        assert renames == [
+            InterfaceRename("ens18", "eth0", "IP 10.0.0.5, MAC AA:BB:CC:DD:EE:FF")
+        ]
+
+    def test_contradicting_signals_do_not_rename(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """La IP apunta a una interfaz nueva y la MAC a otra: no se adivina."""
+        with caplog.at_level(logging.WARNING):
+            renames = detect_interface_renames(
+                {"ens18": _fp(ips=("10.0.0.5",), macs=("AA:AA:AA:AA:AA:AA",))},
+                {
+                    "eth0": _fp(ips=("10.0.0.5",)),
+                    "eth1": _fp(macs=("AA:AA:AA:AA:AA:AA",)),
+                },
+            )
+        assert renames == []
+        assert caplog.text.count("Renombre ambiguo") == 1  # una vez, no por pareja
+        assert "'ens18' coincide con ['eth0', 'eth1']" in caplog.text
+
+    def test_two_orphans_claiming_one_newcomer_do_not_rename(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            renames = detect_interface_renames(
+                {
+                    "ens18": _fp(ips=("10.0.0.5",)),
+                    "ens19": _fp(macs=("AA:AA:AA:AA:AA:AA",)),
+                },
+                {"eth0": _fp(ips=("10.0.0.5",), macs=("AA:AA:AA:AA:AA:AA",))},
+            )
+        assert renames == []
+        assert "la interfaz nueva 'eth0' coincide con ['ens18', 'ens19']" in caplog.text
+
+    def test_mac_shared_by_bond_is_ignored_and_ip_decides(self) -> None:
+        """bond0 y su miembro comparten MAC: la MAC no identifica; decide la IP."""
+        shared_mac = "AA:BB:CC:DD:EE:FF"
+        renames = detect_interface_renames(
+            {"bond-old": _fp(ips=("10.0.0.5",), macs=(shared_mac,))},
+            {
+                "bond0": _fp(ips=("10.0.0.5",), macs=(shared_mac,)),
+                "eth0": _fp(macs=(shared_mac,)),
+            },
+        )
+        assert renames == [InterfaceRename("bond-old", "bond0", "IP 10.0.0.5")]
+
+    def test_two_renames_in_the_same_node(self) -> None:
+        renames = detect_interface_renames(
+            {"ens18": _fp(ips=("10.0.0.5",)), "ens19": _fp(ips=("10.0.1.5",))},
+            {"eth1": _fp(ips=("10.0.1.5",)), "eth0": _fp(ips=("10.0.0.5",))},
+        )
+        assert renames == [
+            InterfaceRename("ens18", "eth0", "IP 10.0.0.5"),
+            InterfaceRename("ens19", "eth1", "IP 10.0.1.5"),
+        ]
+
+    def test_interfaces_without_signals_are_not_renamed(self) -> None:
+        assert detect_interface_renames({"ens18": _fp()}, {"eth0": _fp()}) == []
+
+
+class TestRekeyInterfacesCache:
+    def test_moves_only_renamed_keys_without_mutating_input(self) -> None:
+        old, kept = MockNetBoxRecord(id=1), MockNetBoxRecord(id=2)
+        cache: NameCache = {"ens18": old, "lo": kept}
+
+        result = rekey_interfaces_cache(
+            cache, [InterfaceRename("ens18", "eth0", "IP 10.0.0.5")]
+        )
+
+        assert result == {"eth0": old, "lo": kept}
+        assert cache == {"ens18": old, "lo": kept}
+
+
+class TestResolveInterfaceRenamesQueries:
+    """Las huellas de NetBox solo se consultan cuando puede haber un renombre."""
+
+    @staticmethod
+    def _iface(name: str, cidr: str | None = None) -> NetworkInterfaceData:
+        network = None
+        return cast(
+            NetworkInterfaceData,
+            {
+                "name": name,
+                "enabled": True,
+                "mac": None,
+                "ip": None,
+                "prefix": None,
+                "cidr": cidr,
+                "network": network,
+            },
+        )
+
+    @pytest.mark.parametrize(
+        ("obj_id", "csv_names", "cache_names"),
+        [
+            (0, ["eth0"], ["ens18"]),  # nodo nuevo: no hay interfaces en NetBox
+            (7, ["eth0"], ["eth0"]),  # sin huérfanas ni nuevas
+            (7, ["eth0", "eth1"], ["eth0"]),  # solo nuevas
+            (7, ["eth0"], ["eth0", "ens18"]),  # solo huérfanas
+        ],
+    )
+    def test_no_queries_without_orphans_and_newcomers(
+        self, obj_id: int, csv_names: list[str], cache_names: list[str]
+    ) -> None:
+        endpoints = MagicMock()
+        cache: NameCache = {
+            n: MockNetBoxRecord(id=i + 1) for i, n in enumerate(cache_names)
+        }
+
+        renames = _resolve_interface_renames(
+            endpoints,
+            NodeType.DEVICE,
+            obj_id,
+            [self._iface(n, "10.0.0.5/24") for n in csv_names],
+            cache,
+        )
+
+        assert renames == []
+        endpoints.ip_addresses.filter.assert_not_called()
+        endpoints.mac_addresses.filter.assert_not_called()
+
+
+class _FakeRecord:
+    """Objeto NetBox en memoria: update()/delete() modifican el almacén compartido."""
+
+    def __init__(self, store: "_FakeNetBox", kind: str, **attrs: Any) -> None:
+        self._store = store
+        self._kind = kind
+        for key, value in attrs.items():
+            setattr(self, key, value)
+
+    def __getattr__(self, name: str) -> Any:
+        """Atributos dinámicos (como en pynetbox); los inexistentes siguen fallando."""
+        raise AttributeError(name)
+
+    def update(self, data: dict[str, Any]) -> bool:
+        self._store.writes.append(("update", self._kind, dict(data)))
+        for key, value in data.items():
+            setattr(self, key, value)
+        return True
+
+    def delete(self) -> bool:
+        self._store.writes.append(("delete", self._kind, {"id": self.id}))
+        self._store.records[self._kind].remove(self)
+        return True
+
+
+class _FakeEndpoint:
+    """Endpoint en memoria con los filtros que usa la sincronización de interfaces."""
+
+    def __init__(self, store: "_FakeNetBox", kind: str, url: str) -> None:
+        self._store = store
+        self._kind = kind
+        self.name = kind
+        self.url = url
+
+    def _matches(self, record: _FakeRecord, key: str, value: Any) -> bool:
+        if key == "device_id" and self._kind == "interfaces":
+            return record.device.id == value
+        if key == "device_id":  # IPs/MACs: asignadas a interfaces del Device
+            return self._store.interface_device_id(record) == value
+        return getattr(record, key, None) == value
+
+    def filter(self, **kwargs: Any) -> list[_FakeRecord]:
+        return [
+            r
+            for r in self._store.records[self._kind]
+            if all(self._matches(r, k, v) for k, v in kwargs.items())
+        ]
+
+    def create(self, **payload: Any) -> _FakeRecord:
+        self._store.writes.append(("create", self._kind, dict(payload)))
+        if self._kind == "interfaces":
+            payload["device"] = SimpleNamespace(id=payload["device"])
+        record = _FakeRecord(
+            self._store, self._kind, id=self._store.next_id(), **payload
+        )
+        self._store.records[self._kind].append(record)
+        return record
+
+
+class _FakeNetBox:
+    """NetBox mínimo en memoria: interfaces, IPs, MACs y prefixes de un Device."""
+
+    def __init__(self) -> None:
+        self.records: dict[str, list[_FakeRecord]] = {
+            k: [] for k in ("interfaces", "ips", "macs", "prefixes")
+        }
+        self.writes: list[tuple[str, str, dict[str, Any]]] = []
+        self._ids = 100
+        self.endpoints = cast(
+            NetBoxEndpoints,
+            SimpleNamespace(
+                device_interfaces=_FakeEndpoint(
+                    self, "interfaces", "http://nb/api/dcim/interfaces/"
+                ),
+                ip_addresses=_FakeEndpoint(
+                    self, "ips", "http://nb/api/ipam/ip-addresses/"
+                ),
+                mac_addresses=_FakeEndpoint(
+                    self, "macs", "http://nb/api/dcim/mac-addresses/"
+                ),
+                prefixes=_FakeEndpoint(
+                    self, "prefixes", "http://nb/api/ipam/prefixes/"
+                ),
+            ),
+        )
+
+    def next_id(self) -> int:
+        self._ids += 1
+        return self._ids
+
+    def interface_device_id(self, record: _FakeRecord) -> int | None:
+        iface_id = getattr(record, "assigned_object_id", None)
+        for iface in self.records["interfaces"]:
+            if iface.id == iface_id:
+                return iface.device.id
+        return None
+
+    def add_interface(
+        self, device_id: int, name: str, cidr: str | None, mac: str | None
+    ) -> _FakeRecord:
+        iface = _FakeRecord(
+            self,
+            "interfaces",
+            id=self.next_id(),
+            name=name,
+            enabled=True,
+            type="other",
+            device=SimpleNamespace(id=device_id),
+        )
+        self.records["interfaces"].append(iface)
+        assignment = {
+            "assigned_object_type": "dcim.interface",
+            "assigned_object_id": iface.id,
+        }
+        if cidr:
+            self.records["ips"].append(
+                _FakeRecord(self, "ips", id=self.next_id(), address=cidr, **assignment)
+            )
+        if mac:
+            self.records["macs"].append(
+                _FakeRecord(
+                    self, "macs", id=self.next_id(), mac_address=mac, **assignment
+                )
+            )
+        return iface
+
+
+class TestInterfaceRenameEndToEnd:
+    """Escenario completo: el maestro renombra ens18 → eth0 conservando IP y MAC."""
+
+    DEVICE_ID = 7
+    CIDR = "10.0.0.5/24"
+    MAC = "AA:BB:CC:DD:EE:FF"
+
+    def _csv_iface(
+        self, name: str, cidr: str | None = None, mac: str | None = None
+    ) -> NetworkInterfaceData:
+        return cast(
+            NetworkInterfaceData,
+            {
+                "name": name,
+                "enabled": True,
+                "mac": mac,
+                "ip": cidr.split("/")[0] if cidr else None,
+                "prefix": None,
+                "cidr": cidr,
+                "network": "10.0.0.0/24" if cidr else None,
+            },
+        )
+
+    @staticmethod
+    def _args(dry_run: bool = False, prune: bool = True) -> argparse.Namespace:
+        return argparse.Namespace(dry_run=dry_run, prune_network_orphans=prune)
+
+    def _sync(
+        self, nb: _FakeNetBox, interfaces: list[NetworkInterfaceData], **flags: bool
+    ) -> Any:
+        return _sync_interfaces_for_object(
+            nb.endpoints,
+            self.DEVICE_ID,
+            NodeType.DEVICE,
+            interfaces,
+            self._args(**flags),
+        )
+
+    def test_rename_keeps_object_ip_and_mac_and_is_idempotent(self) -> None:
+        nb = _FakeNetBox()
+        iface = nb.add_interface(self.DEVICE_ID, "ens18", self.CIDR, self.MAC)
+        nb.records["prefixes"].append(
+            _FakeRecord(nb, "prefixes", id=nb.next_id(), prefix="10.0.0.0/24")
+        )
+        csv = [self._csv_iface("eth0", self.CIDR, self.MAC)]
+
+        result = self._sync(nb, csv)
+
+        assert result.errors == 0 and result.any_changes is True
+        assert iface.name == "eth0"  # mismo objeto, renombrado
+        assert len(nb.records["interfaces"]) == 1  # no se creó ni se podó nada
+        assert [w for w in nb.writes if w[0] != "update"] == []
+        assert len(nb.records["ips"]) == 1 and len(nb.records["macs"]) == 1
+        ip_record = nb.records["ips"][0]
+        assert ip_record.assigned_object_id == iface.id
+
+        nb.writes.clear()
+        second = self._sync(nb, csv)
+        assert second.errors == 0 and second.any_changes is False
+        assert nb.writes == []
+
+    def test_dry_run_reports_without_writing(self) -> None:
+        nb = _FakeNetBox()
+        iface = nb.add_interface(self.DEVICE_ID, "ens18", self.CIDR, self.MAC)
+        nb.records["prefixes"].append(
+            _FakeRecord(nb, "prefixes", id=nb.next_id(), prefix="10.0.0.0/24")
+        )
+
+        result = self._sync(
+            nb, [self._csv_iface("eth0", self.CIDR, self.MAC)], dry_run=True
+        )
+
+        assert result.any_changes is True
+        assert nb.writes == []
+        assert iface.name == "ens18"
+
+    def test_unrelated_new_interface_keeps_previous_behaviour(self) -> None:
+        """Sin señales compartidas no hay renombre: se crea la nueva y se poda la vieja."""
+        nb = _FakeNetBox()
+        nb.add_interface(self.DEVICE_ID, "ens18", "10.0.9.9/24", "11:11:11:11:11:11")
+
+        self._sync(nb, [self._csv_iface("eth0")])
+
+        assert [i.name for i in nb.records["interfaces"]] == ["eth0"]
+        assert ("delete", "interfaces") in [(w[0], w[1]) for w in nb.writes]

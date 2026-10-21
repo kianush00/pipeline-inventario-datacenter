@@ -138,3 +138,5 @@ To automatically delete interfaces and MAC addresses, and unassign IP addresses 
 ```bash
 python3 export_to_netbox.py merged_inventory.csv --prune-network-orphans --dry-run
 ```
+
+Interfaces renamed in the master inventory (same IP or MAC under a new name) are renamed in NetBox before pruning, so pruning never deletes them or their IP/MAC objects. Rename detection runs on every export, with or without this flag.
