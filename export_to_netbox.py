@@ -3185,33 +3185,38 @@ def _resolve_cluster(
     return get_netbox_object_id(cluster), cluster_cache
 
 
+def select_device_type_attributes(
+    row: CsvRow,
+    key: DeviceTypeKey,
+    device_type_attrs: DeviceTypeAttrsMap,
+    config: NetBoxMappingConfig,
+) -> DeviceTypeAttributes:
+    """
+    Valida los atributos de DeviceType de la fila y elige los que se sincronizarán.
+
+    Los atributos de la fila se validan siempre (un valor inválido es error de la
+    fila), pero se usan los consolidados del modelo (`device_type_attrs`), para que
+    todas las filas de un mismo modelo coincidan.
+    Lanza RowValidationError si algún valor de la fila es inválido.
+    """
+    row_attributes = parse_device_type_attributes(row, config)
+    return device_type_attrs.get(key, row_attributes)
+
+
 def _resolve_device_type(
     endpoints: NetBoxEndpoints,
-    row: CsvRow,
-    manufacturer: str,
-    model: str,
-    device_type_attrs: DeviceTypeAttrsMap,
+    key: DeviceTypeKey,
+    attributes: DeviceTypeAttributes,
     caches: CacheStore,
-    config: NetBoxMappingConfig,
     dry_run: bool,
 ) -> tuple[int, CacheStore]:
     """
-    Resuelve y retorna el ID del DeviceType utilizando el manufacturer y el modelo.
-
-    Los atributos de la fila se validan siempre (un valor inválido es error de la
-    fila), pero el DeviceType se sincroniza con los atributos consolidados del modelo
-    (`device_type_attrs`), para que todas las filas de un modelo coincidan.
+    Garantiza el Manufacturer y el DeviceType del modelo, con atributos ya validados.
     Retorna una tupla con el ID del DeviceType y la caché (CacheStore) actualizada.
     """
-    row_attributes = parse_device_type_attributes(row, config)
-    attributes = device_type_attrs.get(
-        DeviceTypeKey(manufacturer, model), row_attributes
-    )
-
-    # Manufacturer.
     manufacturer_obj, caches.manufacturers = ensure_manufacturer(
         endpoints.manufacturers,
-        manufacturer,
+        key.manufacturer,
         caches.manufacturers,
         dry_run,
     )
@@ -3219,7 +3224,7 @@ def _resolve_device_type(
     device_type, caches.device_types = ensure_device_type(
         endpoints.device_types,
         manufacturer_obj,
-        model,
+        key.model,
         attributes,
         caches.device_types,
         dry_run,
@@ -3284,34 +3289,28 @@ def _resolve_host_device(
 # ============================================================
 
 
-def _resolve_base_node(
+def _prepare_base_node(
     node_type: NodeType,
-    endpoints: NetBoxEndpoints,
     row: CsvRow,
     config: NetBoxMappingConfig,
     site: NetBoxObject,
-    caches: CacheStore,
+    device_roles_cache: NameCache,
     native_maps: list[FieldMappingConfig],
     custom_maps: list[FieldMappingConfig],
-    dry_run: bool,
-) -> tuple[BaseNodeData, CacheStore]:
+) -> BaseNodeData:
     """
-    Resuelve los campos comunes entre device y virtual_machine.
-    Retorna una tupla con los datos del nodo base y la caché actualizada.
+    Valida la fila y prepara los campos comunes entre device y virtual_machine.
+
+    No escribe en NetBox: solo extrae, mapea y valida (casts, mapas, choices, rol y
+    estado). Así un dato inválido aborta la fila antes de crear dependencias.
+    Lanza RowValidationError si algún valor es inválido.
     """
     machine_name = extract_csv_value(row, "machine_name", config, strict_extract=True)
     uuid = extract_csv_value(row, "inventory_uuid", config).lower()
     machine_type = extract_csv_value(row, "machine_type", config, strict_extract=True)
 
     payload = build_payload(row, native_maps, custom_maps, config)
-
-    platform_id, caches.platforms = _resolve_platform(
-        endpoints.platforms, row, caches.platforms, dry_run, config
-    )
-    if platform_id is not None:
-        payload["platform"] = platform_id
-
-    payload["role"] = _resolve_device_role(row, caches.device_roles, config)
+    payload["role"] = _resolve_device_role(row, device_roles_cache, config)
     payload["status"] = _resolve_netbox_status(row, config, node_type)
     payload["site"] = get_netbox_object_id(site)
 
@@ -3320,7 +3319,27 @@ def _resolve_base_node(
         "inventory_uuid": uuid,
         "machine_type": machine_type,
         "payload": payload,
-    }, caches
+    }
+
+
+def _resolve_common_dependencies(
+    endpoints: NetBoxEndpoints,
+    row: CsvRow,
+    payload: NetBoxPayload,
+    caches: CacheStore,
+    config: NetBoxMappingConfig,
+    dry_run: bool,
+) -> tuple[NetBoxPayload, CacheStore]:
+    """
+    Garantiza las dependencias comunes a Devices y VMs (Platform) y las incorpora
+    al payload. Retorna una copia del payload y la caché actualizada.
+    """
+    platform_id, caches.platforms = _resolve_platform(
+        endpoints.platforms, row, caches.platforms, dry_run, config
+    )
+    if platform_id is None:
+        return payload, caches
+    return {**payload, "platform": platform_id}, caches
 
 
 def _extract_object_uuid(obj: NetBoxObject) -> str:
@@ -3533,6 +3552,12 @@ def _resolve_existing_object(
     Resuelve el objeto existente en NetBox en dos etapas: UUID único y, si no se
     resuelve, nombre único dentro del Site configurado.
 
+    Decisiones de diseño:
+    - Actualizar a ciegas ante un identificador ambiguo provocaría corrupción de datos
+      cruzada entre nodos; el pipeline nunca modifica nodos de otro Site.
+    - Solo lee NetBox: se ejecuta antes de crear dependencias, para que una fila que
+      termina en SKIP no deje escrituras.
+
     Retorna lista vacía si el nodo debe crearse, o el objeto a actualizar.
     Lanza RowSkipCondition si ninguna etapa puede garantizar una coincidencia segura.
     """
@@ -3611,44 +3636,6 @@ def _execute_sync(
     return SyncResult(SyncStatus.UNCHANGED, existing_id, existing_obj)
 
 
-def _validate_sync(
-    endpoint: Endpoint,
-    payload: NetBoxPayload,
-    machine_name: str,
-    uuid: str,
-    csv_counts: CsvIdentityCounts,
-    config: NetBoxMappingConfig,
-    site_id: int,
-    dry_run: bool,
-) -> SyncResult:
-    """
-    Coordina la resolución de identidad, la validación de seguridad y la sincronización.
-
-    Decisiones de diseño:
-    - Identidad en dos etapas: primero UUID (único en NetBox y CSV); si no resuelve,
-      nombre (único en NetBox y CSV, dentro del Site configurado). Actualizar a ciegas
-      ante un identificador ambiguo provocaría corrupción de datos cruzada entre nodos.
-    - El pipeline opera sobre un único Site: nunca se modifican nodos de otro Site.
-    - Fail-Fast: Se aborta tempranamente lanzando `RowSkipCondition` si no se puede
-      garantizar la unicidad absoluta.
-
-    Retorna:
-        SyncResult: El resultado final de la operación.
-    """
-    existing = _resolve_existing_object(
-        endpoint, machine_name, uuid, csv_counts, config, site_id
-    )
-
-    return _execute_sync(
-        endpoint,
-        payload,
-        existing,
-        machine_name,
-        uuid,
-        dry_run,
-    )
-
-
 def sync_device(
     endpoints: NetBoxEndpoints,
     row: CsvRow,
@@ -3665,6 +3652,9 @@ def sync_device(
     Orquesta la sincronización completa de una fila clasificada como Device o Hipervisor.
 
     Decisiones de diseño:
+    - Tres fases: (1) validar la fila sin escribir, (2) resolver su identidad (solo
+      lectura) y (3) escribir dependencias y nodo. Así una fila que termina en SKIP o
+      en ERROR de datos no deja Platform, Location, Rack ni DeviceType escritos.
     - Requisitos estrictos (Fail-Fast): 'manufacturer' y 'model' son campos mandatorios
       en la jerarquía de NetBox; se aborta de inmediato si faltan.
     - Constraints de API: NetBox exige que si un dispositivo tiene 'position' (U-Location),
@@ -3675,27 +3665,22 @@ def sync_device(
     Retorna:
         tuple[SyncResult, CacheStore]: El resultado final y el estado de la caché puramente inyectado.
     """
-    # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
+    # ── FASE 1: VALIDACIÓN (sin escrituras) ──────────────────
     manufacturer = extract_csv_value(row, "manufacturer", config)
     model = extract_csv_value(row, "model", config)
     if not manufacturer or not model:
         raise RowSkipCondition("Falta 'manufacturer' o 'model'. Requerido para Device.")
 
     node_cfg = config.node_types.get_config(NodeType.DEVICE)
-
-    # Resolvemos los campos base
-    base, caches = _resolve_base_node(
+    base = _prepare_base_node(
         NodeType.DEVICE,
-        endpoints,
         row,
         config,
         site,
-        caches,
+        caches.device_roles,
         node_cfg.native_mappings,
         node_cfg.custom_mappings,
-        dry_run,
     )
-
     machine_name = base["machine_name"]
     uuid = base["inventory_uuid"]
     machine_type = base["machine_type"]
@@ -3704,6 +3689,26 @@ def sync_device(
     # Compensación de API NetBox: 'face' es obligatorio si 'position' existe.
     if payload.get("position") is not None and "face" not in payload:
         payload["face"] = "front"
+
+    device_type_key = DeviceTypeKey(manufacturer, model)
+    device_type_attributes = select_device_type_attributes(
+        row, device_type_key, device_type_attrs, config
+    )
+
+    # ── FASE 2: IDENTIDAD (solo lectura) ─────────────────────
+    existing = _resolve_existing_object(
+        endpoints.devices,
+        machine_name,
+        uuid,
+        csv_counts,
+        config,
+        get_netbox_object_id(site),
+    )
+
+    # ── FASE 3: ESCRITURAS (dependencias y nodo) ─────────────
+    payload, caches = _resolve_common_dependencies(
+        endpoints, row, payload, caches, config, dry_run
+    )
 
     # Cluster para hipervisores.
     if config.is_cluster_host(machine_type):
@@ -3752,29 +3757,15 @@ def sync_device(
         )
         payload["rack"] = get_netbox_object_id(rack)
 
-    # DeviceType (busca el Manufacturer por dentro).
+    # DeviceType (y su Manufacturer).
     device_type_id, caches = _resolve_device_type(
-        endpoints,
-        row,
-        manufacturer,
-        model,
-        device_type_attrs,
-        caches,
-        config,
-        dry_run,
+        endpoints, device_type_key, device_type_attributes, caches, dry_run
     )
     payload["device_type"] = device_type_id
 
-    # ── GET o CREATE/UPDATE ──────────────────────────────────
-    sync_res = _validate_sync(
-        endpoints.devices,
-        payload,
-        machine_name,
-        uuid,
-        csv_counts,
-        config,
-        get_netbox_object_id(site),
-        dry_run,
+    # ── CREATE / UPDATE / UNCHANGED ──────────────────────────
+    sync_res = _execute_sync(
+        endpoints.devices, payload, existing, machine_name, uuid, dry_run
     )
     return sync_res, caches
 
@@ -3794,6 +3785,8 @@ def sync_vm(
     Orquesta la sincronización completa de una fila clasificada como Virtual Machine.
 
     Decisiones de diseño:
+    - Tres fases, como en `sync_device`: validar sin escribir, resolver identidad
+      (solo lectura) y escribir dependencias y nodo.
     - Requisitos estrictos (Fail-Fast): En NetBox, toda VM DEBE pertenecer a un Cluster.
       Se descarta el registro inmediatamente si 'cluster_name' está ausente.
     - Host Device (Opcional): Se intenta asociar la VM con el hipervisor físico (Device)
@@ -3802,31 +3795,41 @@ def sync_vm(
     Retorna:
         tuple[SyncResult, CacheStore]: El resultado final y el estado de la caché puramente inyectado.
     """
-    # ── VALIDACIÓN TEMPRANA (Fail-Fast) ──
+    # ── FASE 1: VALIDACIÓN (sin escrituras) ──────────────────
     cluster_name = extract_csv_value(row, "cluster_name", config)
     if not cluster_name:
         raise RowSkipCondition("Falta 'cluster_name'. Requerido para Virtual Machine.")
 
     node_cfg = config.node_types.get_config(NodeType.VIRTUAL_MACHINE)
-
-    # Resolvemos los campos base
-    base, caches = _resolve_base_node(
+    base = _prepare_base_node(
         NodeType.VIRTUAL_MACHINE,
-        endpoints,
         row,
         config,
         site,
-        caches,
+        caches.device_roles,
         node_cfg.native_mappings,
         node_cfg.custom_mappings,
-        dry_run,
     )
-
     machine_name = base["machine_name"]
     uuid = base["inventory_uuid"]
     payload = base["payload"]
 
-    # Cluster.
+    # ── FASE 2: IDENTIDAD (solo lectura) ─────────────────────
+    existing = _resolve_existing_object(
+        endpoints.virtual_machines,
+        machine_name,
+        uuid,
+        csv_counts,
+        config,
+        get_netbox_object_id(site),
+    )
+
+    # ── FASE 3: ESCRITURAS (dependencias y nodo) ─────────────
+    payload, caches = _resolve_common_dependencies(
+        endpoints, row, payload, caches, config, dry_run
+    )
+
+    # Cluster (garantizado no vacío por la validación de la fase 1).
     cluster_id, caches.clusters = _resolve_cluster(
         endpoints.clusters,
         row,
@@ -3837,13 +3840,9 @@ def sync_vm(
         dry_run,
         config,
     )
+    payload["cluster"] = cluster_id
 
-    if cluster_id is not None:
-        payload["cluster"] = cluster_id
-    else:
-        raise RowSkipCondition(f"Falló la resolución del cluster '{cluster_name}'.")
-
-    # Device del hipervisor host (acotado a site y cacheado).
+    # Device del hipervisor host (acotado a site y cacheado; solo lectura).
     host_dev_id, caches.host_devices = _resolve_host_device(
         endpoints.devices,
         row,
@@ -3855,16 +3854,9 @@ def sync_vm(
     if host_dev_id is not None:
         payload["device"] = host_dev_id
 
-    # ── GET o CREATE/UPDATE ──────────────────────────────────
-    sync_res = _validate_sync(
-        endpoints.virtual_machines,
-        payload,
-        machine_name,
-        uuid,
-        csv_counts,
-        config,
-        get_netbox_object_id(site),
-        dry_run,
+    # ── CREATE / UPDATE / UNCHANGED ──────────────────────────
+    sync_res = _execute_sync(
+        endpoints.virtual_machines, payload, existing, machine_name, uuid, dry_run
     )
     return sync_res, caches
 

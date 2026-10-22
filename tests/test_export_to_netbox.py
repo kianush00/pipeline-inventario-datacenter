@@ -32,7 +32,6 @@ from export_to_netbox import (
     CustomFieldConfig,
     DeviceRoleConfig,
     DeviceTypeAttributes,
-    DeviceTypeAttrsMap,
     DeviceTypeKey,
     Endpoint,
     FieldMappingConfig,
@@ -109,7 +108,6 @@ from export_to_netbox import (
     _validate_csv_headers,
     _validate_interface_ip,
     _validate_select_choice,
-    _validate_sync,
     apply_cast,
     apply_update,
     build_payload,
@@ -145,6 +143,7 @@ from export_to_netbox import (
     precompute_device_type_attributes,
     process_interfaces_and_ips,
     rekey_interfaces_cache,
+    select_device_type_attributes,
     slugify,
     sync_device,
     sync_vm,
@@ -1477,6 +1476,21 @@ class TestResolveExistingObject:
         endpoint.filter.assert_not_called()
 
 
+def _sync_node(
+    endpoint: Endpoint,
+    payload: dict[str, Any],
+    name: str,
+    uuid: str,
+    counts: CsvIdentityCounts,
+    config: NetBoxMappingConfig,
+    site_id: int,
+    dry_run: bool,
+) -> SyncResult:
+    """Fases 2 y 3 de la sincronización de un nodo: resolver identidad y ejecutar."""
+    existing = _resolve_existing_object(endpoint, name, uuid, counts, config, site_id)
+    return _execute_sync(endpoint, payload, existing, name, uuid, dry_run)
+
+
 class _FakeNodeEndpoint:
     """Endpoint en memoria con estado, para validar el flujo completo de identidad."""
 
@@ -1529,7 +1543,7 @@ class TestValidateSyncDuplicatedUuid:
 
         for run in range(2):
             statuses = [
-                _validate_sync(
+                _sync_node(
                     cast(Endpoint, endpoint),
                     self._payload(name, uuid),
                     name,
@@ -1569,7 +1583,7 @@ class TestValidateSyncMultiSite:
         endpoint.create(**self._payload("SRV-01", "uuid-other", self.OTHER_SITE_ID))
         counts = _counts({"SRV-01": 1}, {"uuid-mine": 1})
 
-        result = _validate_sync(
+        result = _sync_node(
             cast(Endpoint, endpoint),
             self._payload("SRV-01", "uuid-mine", SITE_ID),
             "SRV-01",
@@ -1593,7 +1607,7 @@ class TestValidateSyncMultiSite:
         endpoint.create(**self._payload("SRV-01", "uuid-1", self.OTHER_SITE_ID))
 
         with pytest.raises(RowSkipCondition, match="otro Site"):
-            _validate_sync(
+            _sync_node(
                 cast(Endpoint, endpoint),
                 self._payload("SRV-01", "uuid-1", SITE_ID),
                 "SRV-01",
@@ -2814,8 +2828,10 @@ class TestSyncDeviceTypeAttributes:
         existing.update.assert_called_once_with({"u_height": 1.5, "part_number": "PN2"})
 
 
-class TestResolveDeviceTypeUHeight:
-    """Verifica qué atributos recibe ensure_device_type desde _resolve_device_type."""
+class TestSelectDeviceTypeAttributes:
+    """Qué atributos se sincronizan en el DeviceType a partir de la fila."""
+
+    KEY = DeviceTypeKey("Dell", "R740")
 
     @staticmethod
     def _row(config: NetBoxMappingConfig, height: str, pn: str = "") -> CsvRow:
@@ -2824,13 +2840,40 @@ class TestResolveDeviceTypeUHeight:
             config.csv_columns["part_number"].source: pn,
         }
 
-    @staticmethod
-    def _resolve(
-        config: NetBoxMappingConfig,
-        row: CsvRow,
-        attrs: DeviceTypeAttrsMap,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> MagicMock:
+    def test_fractional_u_height(self, config: NetBoxMappingConfig) -> None:
+        attrs = select_device_type_attributes(
+            self._row(config, "1.5"), self.KEY, {}, config
+        )
+        assert attrs == DeviceTypeAttributes(1.5, None)
+
+    def test_empty_u_height_is_not_informed(self, config: NetBoxMappingConfig) -> None:
+        """Una altura vacía ya no se convierte en 1.0: se conserva la del tipo existente."""
+        attrs = select_device_type_attributes(
+            self._row(config, ""), self.KEY, {}, config
+        )
+        assert attrs == DeviceTypeAttributes(None, None)
+
+    def test_consolidated_attributes_take_precedence_over_row(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        consolidated = {self.KEY: DeviceTypeAttributes(2.0, "PN-A")}
+        attrs = select_device_type_attributes(
+            self._row(config, "1", "PN-B"), self.KEY, consolidated, config
+        )
+        assert attrs == DeviceTypeAttributes(2.0, "PN-A")
+
+    def test_invalid_row_value_is_a_row_error_even_if_consolidated(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        consolidated = {self.KEY: DeviceTypeAttributes(2.0, "PN-A")}
+        with pytest.raises(RowValidationError, match="height_u"):
+            select_device_type_attributes(
+                self._row(config, "1.25"), self.KEY, consolidated, config
+            )
+
+    def test_resolve_device_type_forwards_attributes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(
             export_to_netbox,
             "ensure_manufacturer",
@@ -2838,43 +2881,16 @@ class TestResolveDeviceTypeUHeight:
         )
         mock_ensure = MagicMock(return_value=(MockNetBoxRecord(id=5), {}))
         monkeypatch.setattr(export_to_netbox, "ensure_device_type", mock_ensure)
-        _resolve_device_type(
-            MagicMock(), row, "Dell", "R740", attrs, CacheStore(), config, False
+
+        device_type_id, _ = _resolve_device_type(
+            MagicMock(), self.KEY, DeviceTypeAttributes(2.0, None), CacheStore(), False
         )
-        return mock_ensure
 
-    def test_fractional_u_height(
-        self, config: NetBoxMappingConfig, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        mock_ensure = self._resolve(config, self._row(config, "1.5"), {}, monkeypatch)
-        assert mock_ensure.call_args.args[3] == DeviceTypeAttributes(1.5, None)
-
-    def test_empty_u_height_is_not_informed(
-        self, config: NetBoxMappingConfig, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Una altura vacía ya no se convierte en 1.0: se conserva la del tipo existente."""
-        mock_ensure = self._resolve(config, self._row(config, ""), {}, monkeypatch)
-        assert mock_ensure.call_args.args[3] == DeviceTypeAttributes(None, None)
-
-    def test_consolidated_attributes_take_precedence_over_row(
-        self, config: NetBoxMappingConfig, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        consolidated = {
-            DeviceTypeKey("Dell", "R740"): DeviceTypeAttributes(2.0, "PN-A")
-        }
-        mock_ensure = self._resolve(
-            config, self._row(config, "1", "PN-B"), consolidated, monkeypatch
+        assert device_type_id == 5
+        assert mock_ensure.call_args.args[2:4] == (
+            "R740",
+            DeviceTypeAttributes(2.0, None),
         )
-        assert mock_ensure.call_args.args[3] == DeviceTypeAttributes(2.0, "PN-A")
-
-    def test_invalid_row_value_is_a_row_error_even_if_consolidated(
-        self, config: NetBoxMappingConfig, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        consolidated = {
-            DeviceTypeKey("Dell", "R740"): DeviceTypeAttributes(2.0, "PN-A")
-        }
-        with pytest.raises(RowValidationError, match="height_u"):
-            self._resolve(config, self._row(config, "1.25"), consolidated, monkeypatch)
 
 
 class TestParseDeviceTypeAttributes:
@@ -3263,57 +3279,30 @@ class TestSyncSkips:
                 dry_run=False,
             )
 
-    @patch("export_to_netbox._resolve_cluster", return_value=(None, MagicMock()))
-    @patch("export_to_netbox._resolve_base_node")
-    def test_sync_vm_skips_unresolvable_cluster(
-        self, mock_base_node: MagicMock, mock_resolve_cluster: MagicMock
-    ) -> None:
-        row = {"machine_name": "vm1", "cluster_name": "Cluster-X"}
 
-        mock_config = MagicMock()
-        mock_config.is_empty.return_value = False
-        mock_config.csv_columns = {
-            "rack_location": MagicMock(source="rack_location"),
-            "cluster_name": MagicMock(source="cluster_name", map=None),
-            "machine_name": MagicMock(source="machine_name", map=None),
-            "inventory_uuid": MagicMock(source="inventory_uuid", map=None),
-        }
-
-        mock_base_node.return_value = (
-            {
-                "machine_name": "vm1",
-                "inventory_uuid": "1234",
-                "machine_type": "vm",
-                "payload": {},
-            },
-            MagicMock(),
-        )
-
-        with pytest.raises(
-            RowSkipCondition, match="Falló la resolución del cluster 'Cluster-X'"
-        ):
-            sync_vm(
-                endpoints=MagicMock(),
-                row=row,
-                config=mock_config,
-                site=MagicMock(),
-                cluster_type_map={},
-                fallback_cluster_type=MagicMock(),
-                caches=MagicMock(),
-                csv_counts=_counts(),
-                dry_run=False,
-            )
+def _keep_payload(*args: Any) -> tuple[Any, Any]:
+    """Doble de `_resolve_common_dependencies`: devuelve el payload y la caché sin tocar."""
+    return args[2], args[3]
 
 
 class TestSyncDevice:
-    @patch("export_to_netbox._resolve_base_node")
+    @patch("export_to_netbox._prepare_base_node")
     @patch("export_to_netbox._resolve_cluster")
     @patch("export_to_netbox.ensure_rack")
     @patch("export_to_netbox._resolve_device_type")
-    @patch("export_to_netbox._validate_sync")
+    @patch("export_to_netbox._execute_sync")
+    @patch("export_to_netbox._resolve_existing_object", return_value=[])
+    @patch("export_to_netbox._resolve_common_dependencies", side_effect=_keep_payload)
+    @patch(
+        "export_to_netbox.select_device_type_attributes",
+        return_value=DeviceTypeAttributes(None, None),
+    )
     def test_sync_device_assigns_front_face(
         self,
-        mock_validate_sync: MagicMock,
+        mock_select_attrs: MagicMock,
+        mock_common_deps: MagicMock,
+        mock_resolve_existing: MagicMock,
+        mock_execute_sync: MagicMock,
         mock_device_type: MagicMock,
         mock_ensure_rack: MagicMock,
         mock_cluster: MagicMock,
@@ -3333,17 +3322,14 @@ class TestSyncDevice:
         }
 
         mock_caches = MagicMock()
-        mock_base_node.return_value = (
-            {
-                "machine_name": "srv1",
-                "inventory_uuid": "1234",
-                "machine_type": "server",
-                "payload": {"position": 10},  # NetBox API exige face si hay position
-            },
-            mock_caches,
-        )
+        mock_base_node.return_value = {
+            "machine_name": "srv1",
+            "inventory_uuid": "1234",
+            "machine_type": "server",
+            "payload": {"position": 10},  # NetBox API exige face si hay position
+        }
         mock_device_type.return_value = (1, mock_caches)
-        mock_validate_sync.return_value = SyncResult(SyncStatus.CREATED, 1, MagicMock())
+        mock_execute_sync.return_value = SyncResult(SyncStatus.CREATED, 1, MagicMock())
 
         _, returned_caches = sync_device(
             endpoints=MagicMock(),
@@ -3359,7 +3345,7 @@ class TestSyncDevice:
         )
 
         # Validar que payload haya sido inyectado con 'face' = 'front'
-        payload_passed = mock_validate_sync.call_args[0][1]
+        payload_passed = mock_execute_sync.call_args[0][1]
         assert payload_passed["face"] == "front"
         assert payload_passed["position"] == 10
         assert returned_caches is mock_caches
@@ -3377,16 +3363,18 @@ class TestNodeLogFormat:
 
         with (
             patch(
-                "export_to_netbox._resolve_base_node",
-                return_value=(
-                    {
-                        "machine_name": "hv-01",
-                        "inventory_uuid": "u1",
-                        "machine_type": "hypervisor",
-                        "payload": {},
-                    },
-                    mock_caches,
-                ),
+                "export_to_netbox._prepare_base_node",
+                return_value={
+                    "machine_name": "hv-01",
+                    "inventory_uuid": "u1",
+                    "machine_type": "hypervisor",
+                    "payload": {},
+                },
+            ),
+            patch("export_to_netbox._resolve_existing_object", return_value=[]),
+            patch(
+                "export_to_netbox._resolve_common_dependencies",
+                side_effect=_keep_payload,
             ),
             patch(
                 "export_to_netbox._resolve_cluster", return_value=(None, mock_caches)
@@ -3395,7 +3383,7 @@ class TestNodeLogFormat:
                 "export_to_netbox._resolve_device_type", return_value=(1, mock_caches)
             ),
             patch(
-                "export_to_netbox._validate_sync",
+                "export_to_netbox._execute_sync",
                 return_value=SyncResult(SyncStatus.CREATED, 1, MagicMock()),
             ),
             caplog.at_level(logging.INFO),
@@ -4080,12 +4068,16 @@ class TestEnsureTaxonomyQACases:
 
 
 class TestSyncVM:
-    @patch("export_to_netbox._resolve_base_node")
+    @patch("export_to_netbox._prepare_base_node")
     @patch("export_to_netbox._resolve_cluster")
-    @patch("export_to_netbox._validate_sync")
+    @patch("export_to_netbox._execute_sync")
+    @patch("export_to_netbox._resolve_existing_object", return_value=[])
+    @patch("export_to_netbox._resolve_common_dependencies", side_effect=_keep_payload)
     def test_sync_vm_cache_propagation(
         self,
-        mock_validate_sync: MagicMock,
+        mock_common_deps: MagicMock,
+        mock_resolve_existing: MagicMock,
+        mock_execute_sync: MagicMock,
         mock_cluster: MagicMock,
         mock_base_node: MagicMock,
     ) -> None:
@@ -4101,17 +4093,14 @@ class TestSyncVM:
         }
 
         mock_caches = MagicMock()
-        mock_base_node.return_value = (
-            {
-                "machine_name": "vm1",
-                "inventory_uuid": "1234",
-                "machine_type": "vm",
-                "payload": {},
-            },
-            mock_caches,
-        )
+        mock_base_node.return_value = {
+            "machine_name": "vm1",
+            "inventory_uuid": "1234",
+            "machine_type": "vm",
+            "payload": {},
+        }
         mock_cluster.return_value = (1, mock_caches.clusters)
-        mock_validate_sync.return_value = (SyncStatus.CREATED, 1, MagicMock())
+        mock_execute_sync.return_value = (SyncStatus.CREATED, 1, MagicMock())
 
         _, returned_caches = sync_vm(
             endpoints=MagicMock(),
@@ -5411,3 +5400,165 @@ class TestKeepOrphanInterfaceFailSafe:
         iface.delete.assert_not_called()
         assert metrics.pruned_interfaces == 0
         assert "no se pudo verificar" in caplog.text
+
+
+# ============================================================
+# SINCRONIZACIÓN EN TRES FASES: validar → identidad → escribir
+# ============================================================
+
+
+class TestNoWritesBeforeRowIsAccepted:
+    """
+    Una fila que termina en SKIP (identidad) o en ERROR (datos inválidos) no debe dejar
+    dependencias escritas en NetBox: Platform, Location, Rack, Cluster, Manufacturer
+    ni DeviceType.
+    """
+
+    DEPENDENCY_ENDPOINTS = (
+        "platforms",
+        "locations",
+        "racks",
+        "clusters",
+        "manufacturers",
+        "device_types",
+    )
+
+    @staticmethod
+    def _row(config: NetBoxMappingConfig, **overrides: str) -> CsvRow:
+        cols = {k: v.source for k, v in config.csv_columns.items()}
+        values = {
+            "machine_name": "srv-01",
+            "machine_type": "Dedicada",
+            "inventory_uuid": "",
+            "os": "Ubuntu",
+            "manufacturer": "Dell",
+            "model": "R640",
+            "rack": "Rack-A1",
+            "rack_location": "Fila A",
+            "cluster_name": "Cluster-1",
+        } | overrides
+        return {cols[alias]: value for alias, value in values.items()}
+
+    @staticmethod
+    def _endpoints(nodes_by_name: list[Any]) -> MagicMock:
+        """Endpoints sin dependencias existentes; `filter` de nodos devuelve `nodes_by_name`."""
+        endpoints = MagicMock()
+        for endpoint in (endpoints.devices, endpoints.virtual_machines):
+            endpoint.url = "http://nb/api/dcim/devices/"
+            endpoint.filter.side_effect = lambda **kw: (
+                [] if "cf_inventory_uuid" in kw else nodes_by_name
+            )
+        endpoints.virtual_machines.url = (
+            "http://nb/api/virtualization/virtual-machines/"
+        )
+        for name in TestNoWritesBeforeRowIsAccepted.DEPENDENCY_ENDPOINTS:
+            getattr(endpoints, name).filter.return_value = []
+        return endpoints
+
+    def _assert_no_dependency_writes(self, endpoints: MagicMock) -> None:
+        for name in self.DEPENDENCY_ENDPOINTS:
+            endpoint = getattr(endpoints, name)
+            assert not endpoint.create.called, f"se creó un objeto en '{name}'"
+
+    def _sync_device(
+        self, endpoints: MagicMock, row: CsvRow, config: NetBoxMappingConfig
+    ) -> SyncResult:
+        caches = CacheStore(device_roles={"others": MockNetBoxRecord(id=9)})
+        result, _ = sync_device(
+            endpoints,
+            row,
+            config,
+            MockNetBoxRecord(id=SITE_ID),
+            {},
+            {},
+            MockNetBoxRecord(id=3),
+            caches,
+            _counts({"srv-01": 1}),
+            False,
+        )
+        return result
+
+    def test_device_skipped_by_ambiguous_name_writes_nothing(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        endpoints = self._endpoints([_node(1, ""), _node(2, "")])  # nombre ambiguo
+
+        with pytest.raises(RowSkipCondition):
+            self._sync_device(endpoints, self._row(config), config)
+
+        self._assert_no_dependency_writes(endpoints)
+        endpoints.devices.create.assert_not_called()
+
+    def test_vm_skipped_by_uuid_of_other_site_writes_nothing(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        endpoints = self._endpoints([])
+        foreign = MockNetBoxRecord.model_validate(
+            {
+                "id": 4,
+                "custom_fields": {"inventory_uuid": "uuid-1"},
+                "site": SimpleNamespace(id=SITE_ID + 1),
+            }
+        )
+        endpoints.virtual_machines.filter.side_effect = lambda **kw: (
+            [foreign] if "cf_inventory_uuid" in kw else []
+        )
+        caches = CacheStore(device_roles={"others": MockNetBoxRecord(id=9)})
+        row = self._row(config, machine_type="VM", inventory_uuid="uuid-1")
+
+        with pytest.raises(RowSkipCondition, match="otro Site"):
+            sync_vm(
+                endpoints,
+                row,
+                config,
+                MockNetBoxRecord(id=SITE_ID),
+                {},
+                MockNetBoxRecord(id=3),
+                caches,
+                _counts({"srv-01": 1}, {"uuid-1": 1}),
+                False,
+            )
+
+        self._assert_no_dependency_writes(endpoints)
+
+    @pytest.mark.parametrize(
+        ("overrides", "match"),
+        [
+            ({"status": "Inexistente"}, "Estado|status"),
+            ({"height_u": "1.25"}, "height_u"),
+        ],
+    )
+    def test_invalid_row_data_writes_nothing(
+        self, config: NetBoxMappingConfig, overrides: dict[str, str], match: str
+    ) -> None:
+        endpoints = self._endpoints([])
+
+        with pytest.raises(RowValidationError, match=match):
+            self._sync_device(endpoints, self._row(config, **overrides), config)
+
+        self._assert_no_dependency_writes(endpoints)
+        endpoints.devices.create.assert_not_called()
+
+    def test_valid_row_still_creates_dependencies_and_node(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        endpoints = self._endpoints([])
+        endpoints.devices.create.return_value = MockNetBoxRecord(id=50)
+        for name in self.DEPENDENCY_ENDPOINTS:
+            getattr(endpoints, name).create.return_value = MagicMock(id=60)
+
+        result = self._sync_device(endpoints, self._row(config), config)
+
+        assert result.status == SyncStatus.CREATED
+        for name in (
+            "platforms",
+            "locations",
+            "racks",
+            "manufacturers",
+            "device_types",
+        ):
+            assert getattr(endpoints, name).create.called, name
+        payload = endpoints.devices.create.call_args.kwargs
+        assert {"platform", "rack", "device_type", "role", "status", "site"} <= set(
+            payload
+        )
