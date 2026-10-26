@@ -5,110 +5,65 @@ trigger: always_on
 
 # Contexto del Proyecto
 
-Estás trabajando en el **Datacenter Inventory Pipeline**, una canalización ETL (Extract, Transform, Load) automatizada e idempotente. Su propósito es recolectar, consolidar y sincronizar infraestructura de servidores físicos y máquinas virtuales desde Rundeck y hojas de cálculo maestras (CSV/ODS/XLSX) directamente hacia **NetBox v4.6+**.
+**Datacenter Inventory Pipeline**: ETL idempotente que recolecta servidores físicos y VMs desde Rundeck y hojas de cálculo maestras (CSV/ODS/XLSX) y los sincroniza con **NetBox v4.6+**.
 
-El flujo consta de:
+Flujo:
 
-1. Colección de datos (Rundeck -> `collectors/asset_information.sh`).
+1. Colección (Rundeck -> `collectors/asset_information.sh`).
 2. Parseo (`parse_job_output.py`).
 3. Preparación del maestro (`prepare_master_inventory.py`).
-4. Mezcla/Consolidación usando un UUID único como llave (`merge_inventories.py`).
-5. Exportación idempotente hacia NetBox mediante la API REST (`export_to_netbox.py` y `config/netbox_mapping.yaml`).
+4. Consolidación usando un UUID único como llave (`merge_inventories.py`).
+5. Exportación idempotente a NetBox vía API REST (`export_to_netbox.py` + `config/netbox_mapping.yaml`).
 
-Los módulos Python viven en el paquete `src/inventory_pipeline/` (src layout, instalado con `pip install -e .`); el orquestador `run_pipeline.py` (comando `inventory-pipeline`) ejecuta las etapas 2 a 5 en orden con fail-fast, leyendo las entradas desde `input/` y escribiendo los artefactos en `output/`. Las rutas por defecto se centralizan en `paths.py`.
+Los módulos Python viven en `src/inventory_pipeline/` (src layout, `pip install -e .`). El orquestador `run_pipeline.py` (comando `inventory-pipeline`) ejecuta las etapas 2 a 5 con fail-fast, lee de `input/` y escribe en `output/`. Las rutas por defecto se centralizan en `paths.py`. La arquitectura y los contratos de datos están documentados en `docs/`.
 
-Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes principios de ingeniería de software a nivel profesional:
+## 1. Tipado
 
-## 1. Tipado Fuerte y Estático (Python)
+- El código (incluidos los tests) debe pasar Pyright sin advertencias. `Any` solo cuando no exista alternativa razonable.
+- Modela estructuras y payloads con las construcciones que ya usa el proyecto (`NamedTuple`, `TypedDict`, `dataclass`, modelos Pydantic). Reutiliza los tipos ya declarados antes de crear nuevos.
 
-- Todo el código Python debe estar fuertemente tipado utilizando las anotaciones del módulo `typing` nativo.
-- Evita a toda costa el uso injustificado de `Any`, salvo que sea estrictamente necesario.
-- Utiliza elementos como `TypeAlias`, `TypedDict`, `NamedTuple`, `dataclasses` y Modelos Pydantic (`BaseModel`) para definir estructuras de datos complejas o payloads de APIs, garantizando una semántica clara.
-- **Reutilización de tipos existentes:** Antes de importar o definir nuevos tipos de datos, evalúa y prioriza siempre el uso de clases ya declaradas en el archivo de trabajo. No introduzcas tipos redundantes o alternativos provenientes de librerías externas de forma innecesaria.
-- Asegúrate de que el código base esté diseñado para pasar verificadores de tipo estáticos sin advertencias (Pylance/MyPy/Pyright).
+## 2. Diseño
 
-## 2. Calidad de Código, Semántica y Consistencia Arquitectónica (Clean Code)
+- **Sin side-effects ocultos:** no mutes argumentos recibidos (cachés, dicts, listas). Si una función produce estado nuevo, lo retorna explícitamente.
+- **Consistencia:** replica los patrones existentes del módulo (manejo de excepciones, estructura de control, utilidades). Si una transformación, parseo o validación se repite, extráela a una utilidad reutilizable en vez de duplicarla.
+- **Errores:** nunca falles en silencio; registra con `logging`, con contexto y el nivel adecuado.
+- **Escala:** asume miles de nodos/filas. Evita costes cuadráticos; usa dicts/sets para búsquedas. Prefiere fail-fast y early returns.
 
-- Prioriza la legibilidad, la intención y la robustez profesional sobre la brevedad o soluciones rápidas.
-- **Funciones Puras y Ausencia de Side-Effects:** Al diseñar funciones (especialmente en procesos ETL), evita mutar silenciosamente argumentos pasados por referencia (como cachés, diccionarios o listas). Las funciones deben ser lo más "puras" posibles. Si modifican estado o estructuras de datos, deben retornar explícitamente la estructura modificada para hacer el flujo predecible, facilitar el testing unitario y evitar bugs por efectos colaterales.
-- **Cero atajos o parches forzados:** Toda modificación debe ser limpia, cuidadosa y respetar estrictamente los patrones de diseño y convenciones ya establecidas en el código base.
-- **Consistencia de patrones arquitectónicos:** Al implementar nueva lógica o procedimientos, no reinventes patrones, convenciones ni estructuras de flujo desde cero. Imita y replica los patrones de diseño y flujo ya consolidados en el archivo (ej. el manejo de excepciones, la estructura de las condiciones if-else, etc.), garantizando uniformidad estética y conceptual en todo el código base.
-- **Reutilización y creación de utilidades:** Prohibido duplicar lógica ad-hoc. Aprovecha siempre las funciones auxiliares (utilidades) existentes en el proyecto. Si introduces código nuevo que resuelva transformaciones, parseos o validaciones comunes no cubiertas actualmente, abstáelo en una nueva función auxiliar reutilizable siguiendo el diseño de los módulos de soporte existentes.
-- Nombra variables, funciones y clases de forma descriptiva, revelando su intención en el modelo de dominio.
-- **Principio de Responsabilidad Única (SRP)**: las funciones deben hacer una sola cosa y hacerla bien.
-- Mantén un manejo de errores robusto. Nunca falles silenciosamente; utiliza logs (`logging`) detallados con contexto y niveles adecuados (INFO, WARNING, ERROR).
+## 3. Idempotencia
 
-## 3. Escalabilidad y Eficiencia
+- Todo lo que escriba en NetBox o en archivos maestros debe ser idempotente: re-ejecutar con la misma entrada no genera duplicados ni cambios de estado.
+- Toda operación de escritura respeta `--dry-run`.
 
-- Diseña algoritmos y estructuras de datos asumiendo que el pipeline procesará **miles de nodos/filas**.
-- Evita operaciones de coste cuadrático iterativas. Usa diccionarios y conjuntos (`sets`) para búsquedas en memoria con coste algorítmico constante.
-- Implementa estrategias de "Fail-Fast" y "Early Returns" para reducir la anidación del código y mejorar la legibilidad.
+## 4. Idioma y Documentación
 
-## 4. Diseño Idempotente
+- Identificadores y documentación técnica (`docs/*.md`) en inglés; comentarios, logs y mensajes al usuario en español.
+- Docstrings en módulos, clases y funciones críticas, explicando el "por qué" de las decisiones de negocio.
+- Si un cambio afecta comportamiento, arquitectura o contratos (p. ej. `netbox_mapping.yaml`), actualiza `docs/` en el mismo cambio.
 
-- Los scripts que modifiquen bases de datos externas (como NetBox) o archivos maestros deben ser estrictamente **idempotentes**. Ejecutar el pipeline múltiples veces con la misma entrada no debe generar duplicados ni alterar el estado esperado.
-- Respeta la bandera `--dry-run` para todas las operaciones destructivas o de escritura.
+## 5. Comunicación
 
-## 5. Documentación y Mantenibilidad
+Directo y técnico, sin preámbulos ni elogios.
 
-- Toda clase, módulo o función crítica debe contar con Docstrings explicativos.
-- No documentes "qué" hace el código línea por línea si es obvio, documenta el "por qué" de las decisiones de negocio.
-- Deja los comentarios y mensajes de usuario/logs en español (tal como el resto del proyecto), pero mantén el código fuente (variables, funciones, clases) y la documentación técnica (`docs/*.md`) en inglés.
-- **Sincronización de Documentación:** Siempre que implementes un cambio funcional, arquitectónico o modifiques contratos (como `netbox_mapping.yaml`), DEBES evaluar proactivamente si la documentación técnica ubicada en el directorio `docs/` requiere ser actualizada para reflejar dichos cambios, y realizar las actualizaciones necesarias en el mismo ciclo.
+## 6. Verificación
 
-## 6. Comunicación y Formato de Respuestas
+Antes de dar un cambio por terminado, ejecuta y deja limpio lo siguiente sobre los archivos modificados (en Windows, los binarios están en `.venv\Scripts\`):
 
-- **Tono directo y profesional:** Ve directo al grano sin preámbulos, saludos, cortesías innecesarias ni felicitaciones (ej. "¡Buena pregunta!", "Excelente código", "Buena intuición", "Excelente observación", etc.).
-- **Enfoque en la solución técnica:** Proporciona explicaciones técnicas concisas, fundamentadas, precisas y profesionales.
-- **Diffs limpios y contextualizados:** Entrega los bloques de código modificados listos para integrarse sin placeholders ambiguos, asegurando total coherencia con el resto del script.
+- **Python:** `.venv/bin/pyright <archivo>`, `.venv/bin/ruff check <archivo> --fix`, `.venv/bin/ruff format <archivo>`.
+- **Bash (`collectors/*.sh`):** `bash -n <script>` y `shellcheck <script>`. Suprime falsos positivos solo con `# shellcheck disable=SCxxxx` y un comentario que lo justifique. Los `.sh` deben quedar con finales de línea LF.
+- **Pipeline:** si hay datos de prueba disponibles, valida con `--dry-run`.
+- **Tests:** `.venv/bin/pytest tests/` al final, siempre.
 
-## 7. Verificación de Calidad, Tipos y Linting Continuo
+## 7. Tests
 
-Antes de dar cualquier modificación por concluida, **como agente DEBES verificar y corregir autónomamente** el código modificado (incluyendo los archivos de test modificados) ejecutando las siguientes herramientas desde el entorno virtual:
+- Cubre el código nuevo y revisa los tests existentes que toca el cambio: actualízalos si su contrato cambió o si quedaron ciegos a nuevos edge cases.
+- No añadas tests redundantes con escenarios ya cubiertos.
+- Todos los `import` van al inicio del archivo de test, nunca dentro de funciones.
 
-1. **Tipado Estático (Pyright):**
-   - Linux/macOS: `.venv/bin/pyright <archivo_modificado>`
-   - Windows: `.\.venv\Scripts\pyright <archivo_modificado>`
-   - Corrige cualquier discrepancia de tipos (`reportGeneralTypeIssues`, argumentos faltantes o `Any` injustificado).
+## 8. Revisión Obligatoria (Skills)
 
-2. **Linting y Estándares de Código (Ruff):**
-   - Ejecuta el linter para detectar errores semánticos, imports en desuso o violaciones de reglas alineadas con SonarQube:
-     - Linux/macOS: `.venv/bin/ruff check <archivo_modificado> --fix`
-     - Windows: `.\.venv\Scripts\ruff check <archivo_modificado> --fix`
+Si el cambio toca lógica de parseo, `netbox_mapping.yaml`, la interacción con la API en `export_to_netbox.py`, o supera ~30 líneas modificadas, no lo des por terminado sin pasar por:
 
-3. **Formateo y Consistencia (Ruff Format):**
-   - Garantiza que la indentación, saltos de línea y longitud cumplan con el estándar PEP 8:
-     - Linux/macOS: `.venv/bin/ruff format <archivo_modificado>`
-     - Windows: `.\.venv\Scripts\ruff format <archivo_modificado>`
+1. `qa-tester` (`.agents/skills/qa-tester/SKILL.md`).
+2. `code-reviewer` (`.agents/skills/code-reviewer/SKILL.md`), sobre el diff final.
 
-4. **Validación en Seco (Dry-Run / Syntax Check):**
-   - Para cambios en `export_to_netbox.py` o scripts del pipeline, ejecuta un chequeo de sintaxis rápida:
-     - Linux/macOS: `.venv/bin/python3 -m py_compile <archivo_modificado>`
-     - Windows: `.\.venv\Scripts\python -m py_compile <archivo_modificado>`
-   - Si se cuenta con datos de prueba o fixtures, verifica la consistencia con el flag `--dry-run` antes de confirmar la solución.
-
-5. **Scripts Bash (`collectors/*.sh`):**
-   - Si el cambio modifica código Bash, **debes** ejecutar las siguientes verificaciones sobre cada script modificado antes de darlo por concluido:
-     - Sintaxis: `bash -n <script_modificado>`
-     - Análisis estático (si `shellcheck` está disponible): `shellcheck <script_modificado>`
-   - Corrige todos los errores y advertencias reportados; si una advertencia de `shellcheck` es un falso positivo, suprímela con una directiva `# shellcheck disable=SCxxxx` y un comentario que explique el motivo.
-   - Mantén los finales de línea LF en los scripts `.sh` (ver `.gitattributes`).
-
-## 8. Cobertura de Pruebas Unitarias (Testing)
-
-- **Ejecución obligatoria:** Al final de todo el proceso (luego de haber realizado implementaciones o refactorizaciones de código), DEBES ejecutar siempre la suite de pruebas ubicada en el directorio `tests/` (por ejemplo, ejecutando `pytest tests/`) para verificar que no has roto ninguna funcionalidad existente.
-- **Creación de nuevos tests:** Cuando generes una nueva implementación de código, debes evaluar crear tus propios tests unitarios para verificar que esa implementación funciona correctamente.
-- **Actualización proactiva de tests existentes:** Tras cada nueva modificación, cambio arquitectónico o refactorización de código existente, **DEBES evaluar proactivamente** si es necesario actualizar o modificar los tests asociados para cubrir los nuevos edge cases introducidos, manteniendo la coherencia de los contratos y asertos originales. Nunca asumas que un test existente sigue siendo válido sin revisarlo.
-- **Visión a largo plazo y No Redundancia:** Agrega las nuevas pruebas unitarias al archivo de tests correspondiente para aumentar la cobertura (test coverage) del código, pero **evita crear tests redundantes**. Antes de escribir un test, revisa los existentes para asegurar que el escenario no esté ya cubierto. Añade nuevas pruebas únicamente si aportan un valor real y son convenientes para la mantenibilidad a largo plazo del proyecto.
-- **Imports en Pruebas:** Todos los `import` necesarios para las pruebas deben declararse al inicio del archivo (ámbito global). Prohibido anidar o colocar imports dentro de las funciones de test.
-
-## 9. Metodología de Revisión Especializada y Cambio de Rol (Skills)
-
-Para prevenir la ceguera de confirmación, **como agente NO debes dar por concluido un cambio sin ejecutar una fase de revisión crítica**:
-
-- **Criterio de Activación Obligatoria:** Si la tarea modifica lógica de parseo, contratos de datos (`netbox_mapping.yaml`), estructuras de base de datos/API en `export_to_netbox.py`, o supera las 30 líneas modificadas, el uso de las skills es **estrictamente obligatorio**.
-- **Mecanismo de Ejecución:**
-  1. **Fase de Implementación:** Desarrolla el código siguiendo los estándares 1 al 8.
-  2. **Fase de QA/Test (`qa-tester`):** Carga y ejecuta las directivas ubicadas en `.agents/skills/qa-tester/` (o invoca el skill correspondiente). Evalúa edge cases (valores nulos, arrays desalineados, fallos de API) y añade los tests unitarios faltantes en `tests/`.
-  3. **Fase de Auditoría de Código (`code-reviewer`):** Carga y ejecuta las directivas ubicadas en `.agents/skills/code-reviewer/`. Audita el diff final bajo una postura adversaria y crítica buscando code smells, tipos frágiles, fugas de memoria o quiebres de consistencia arquitectónica.
-- **Transparencia en la Respuesta:** En el reporte final al usuario, debes incluir explícitamente un bloque que resuma los hallazgos o aprobaciones emitidas tras pasar por los skills de `qa-tester` y `code-reviewer`.
+El reporte final debe incluir un resumen de los hallazgos de ambas revisiones.

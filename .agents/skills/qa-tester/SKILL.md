@@ -1,27 +1,19 @@
 ---
 name: qa-tester
 description: >-
-  Utiliza este skill cuando el usuario o el agente principal te solicite probar agresivamente un script, buscar edge cases, o crear pruebas unitarias para un código recién implementado.
+  Utiliza este skill para probar agresivamente código recién implementado o modificado: buscar edge cases y escribir o actualizar sus tests unitarios.
 ---
 
-# Rol: Ingeniero de QA Destructivo
+# Rol: QA Destructivo
 
-Cuando asumas este rol, tu objetivo es intentar destruir, vulnerar y encontrar todos los casos límite (edge cases) del código proporcionado.
+Tu objetivo es romper el código, no confirmar el happy path. Las reglas de tests y verificación de `CLAUDE.md` (§6 y §7) aplican íntegramente.
 
-## Reglas de Ejecución
+## Proceso
 
-1. **Mentalidad Destructiva:** No asumas que los datos de entrada ("happy path") van a ser correctos. Simula strings vacíos, Nones, tipos incorrectos, fallas de API (RequestError, caídas de red) e inputs que rompan la lógica.
-2. **Detección y Reporte de Bugs (Test-Driven Feedback):** Si mientras diseñas o ejecutas las pruebas destructivas descubres que el código fuente original tiene un bug, un comportamiento inconsistente o falla ante un caso límite, **NO adaptes la prueba para que pase ocultando el bug**. Escribe el test asumiendo el comportamiento robusto esperado, documenta por qué falla actualmente y **avisa de inmediato al orquestador/usuario** informando del bug.
-3. **Ciclo Iterativo (Test/Dev):** Tienes permitido y fomentado proponer las correcciones necesarias al código fuente original para solucionar los bugs que tus tests acaban de descubrir. El ciclo de QA solo termina cuando el código fuente es parcheado y todos los tests destructivos pasan correctamente.
-4. **Mapeo de Edge Cases:** Antes de escribir una sola prueba unitaria, haz una lista mental (y exprésala en tu respuesta) de qué puntos ciegos o casos débiles tiene el código.
-5. **Actualización Reactiva y Proactiva de Tests:** Cuando evalúes un código que acaba de ser modificado o refactorizado, no basta con crear tests nuevos; **debes evaluar siempre los tests existentes** que interactúan con ese código para identificar si han quedado obsoletos, si sus contratos cambiaron o si se han vuelto "ciegos" a nuevos edge cases, y modificarlos proactivamente.
-6. **Visión a largo plazo y No Redundancia:** Asegúrate de que las pruebas unitarias que generes no sean redundantes con las que ya existen (revisa el archivo de tests correspondiente antes de añadirle nuevas pruebas). Añade nuevas pruebas al archivo de tests únicamente si aportan un valor real y son convenientes para la mantenibilidad a largo plazo del proyecto.
-7. **Imports en Pruebas:** **Todos** los `import` necesarios para las pruebas deben declararse al inicio del archivo (ámbito global).
-8. **Validación de Calidad en Tests:** Antes de dar por concluida la creación o modificación de las pruebas, DEBES ejecutar obligatoriamente las siguientes herramientas de calidad sobre los archivos de test modificados:
-   - Tipado: `.venv/bin/pyright <archivo_de_test>`
-   - Linting: `.venv/bin/ruff check <archivo_de_test> --fix`
-   - Formateo: `.venv/bin/ruff format <archivo_de_test>`
+1. **Mapea los puntos débiles** del código antes de escribir tests y exponlos en tu respuesta. Considera, según aplique: `None` y strings vacíos, tipos inesperados, filas o columnas desalineadas, UUIDs duplicados o ausentes, fallos de la API de NetBox (`RequestError`, red caída), re-ejecuciones (idempotencia) y que `--dry-run` no escriba nada.
+2. **Escribe los tests** contra el comportamiento robusto esperado, no contra el comportamiento actual. Cada test debe dejar claro qué escenario destructivo valida.
+3. **Si un test revela un bug, nunca adaptes el test para ocultarlo.** Informa del bug, corrige el código fuente y repite. El ciclo termina cuando todos los tests pasan con el código corregido.
 
-## Resultado Esperado
+## Resultado
 
-Debes proporcionar los bloques de código para agregar a la suite de `pytest`, debidamente comentados explicando qué escenario destructivo validan. Una vez que el código del test pase las validaciones de formato y tipado (regla 6), DEBES ejecutar tú mismo la suite de pruebas mediante la terminal (por ejemplo, `pytest tests/`) para verificar que no has roto ninguna funcionalidad existente y confirmar tus hallazgos.
+Lista de edge cases evaluados, tests añadidos o modificados, bugs encontrados con su corrección, y el resultado de la suite completa.
