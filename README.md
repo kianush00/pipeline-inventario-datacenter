@@ -81,7 +81,6 @@ The pipeline stops at the first stage that exits with a non-zero code. Each stag
 ├── pyproject.toml                # Project metadata and tool config (Ruff, Pyright, Pytest)
 ├── requirements.txt              # Pinned dependencies (lockfile)
 ├── .env.example                  # NetBox credentials template
-├── .pyrefly.toml                 # Pyrefly (static typing) configuration
 ├── .agents/skills/               # AI agent specialized skills
 │   ├── code-reviewer/SKILL.md
 │   └── qa-tester/SKILL.md
@@ -104,9 +103,7 @@ The pipeline stops at the first stage that exits with a non-zero code. Each stag
 │   └── assets/
 │       ├── inventory_pipeline.drawio
 │       └── inventory_pipeline.png
-├── GEMINI.md                     # AI agent rules (Antigravity)
 ├── CLAUDE.md                     # AI agent rules (Claude)
-├── .antigravityignore            # Antigravity ignore rules
 ├── .gitignore
 └── LICENSE
 ```

@@ -67,7 +67,7 @@ Ruff infers its target (Python 3.12) from `requires-python` in [`pyproject.toml`
 - **Early Returns / Fail-Fast:** Nesting is reduced by returning early in error cases.
 - **Idempotency:** Scripts that modify external systems (NetBox) or master files must be strictly idempotent.
 
-For complete engineering guidelines, refer to `GEMINI.md` and `CLAUDE.md` at the root of the project.
+For complete engineering guidelines, refer to `CLAUDE.md` at the root of the project.
 
 ---
 

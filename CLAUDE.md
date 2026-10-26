@@ -66,7 +66,7 @@ Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes prin
 
 Antes de dar cualquier modificación por concluida, **como agente DEBES verificar y corregir autónomamente** el código modificado (incluyendo los archivos de test modificados) ejecutando las siguientes herramientas desde el entorno virtual:
 
-1. **Tipado Estático (Pyright / Pyrefly):**
+1. **Tipado Estático (Pyright):**
    - Linux/macOS: `.venv/bin/pyright <archivo_modificado>`
    - Windows: `.\.venv\Scripts\pyright <archivo_modificado>`
    - Corrige cualquier discrepancia de tipos (`reportGeneralTypeIssues`, argumentos faltantes o `Any` injustificado).

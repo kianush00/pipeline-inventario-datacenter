@@ -83,7 +83,6 @@ dist/
 # =========================
 # Agents
 # =========================
-.antigravity/
 .agents/*
 
 # Permitir exclusivamente el versionado de skills
