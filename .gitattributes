@@ -1,0 +1,3 @@
+# Los scripts de shell se ejecutan en Linux (Rundeck): siempre LF en el
+# checkout, sin importar el core.autocrlf de la máquina que clone el repo.
+*.sh text eol=lf

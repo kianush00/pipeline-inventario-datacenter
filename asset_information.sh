@@ -9,6 +9,7 @@ set -Eeuo pipefail
 export LC_ALL=C
 export LANG=C
 
+# shellcheck disable=SC2154
 trap '
 rc=$?
 printf "[ERROR] Exit Code: %s\n" "$rc"
