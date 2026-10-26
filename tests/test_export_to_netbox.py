@@ -72,6 +72,7 @@ from export_to_netbox import (
     _ensure_custom_field,
     _execute_sync,
     _extract_concat_dot_value,
+    _extract_product_value,
     _extract_raw_source_value,
     _find_by_uuid,
     _get_ip_role,
@@ -646,6 +647,41 @@ class TestExtractConcatDotValue:
         assert result == "Data1. Data2. Data4"
 
 
+class TestExtractProductValue:
+    """QA Tests para _extract_product_value."""
+
+    def test_integer_product_is_normalized(self, config: NetBoxMappingConfig) -> None:
+        """Un producto entero se emite sin decimales para el cast posterior."""
+        row = {"Threads": "16", "Sockets": "2"}
+        assert _extract_product_value(row, ["Threads", "Sockets"], config) == "32"
+
+    def test_decimal_product_with_comma(self, config: NetBoxMappingConfig) -> None:
+        """Respeta la normalización de comas decimales de parse_float."""
+        row = {"A": "1,5", "B": "3"}
+        assert _extract_product_value(row, ["A", "B"], config) == "4.5"
+
+    def test_all_sources_empty(self, config: NetBoxMappingConfig) -> None:
+        """Sin datos en ninguna fuente se delega en la política de defaults."""
+        row = {"Threads": "", "Sockets": "N/A"}
+        assert _extract_product_value(row, ["Threads", "Sockets"], config) == ""
+
+    def test_partial_empty_is_omitted_with_warning(
+        self, config: NetBoxMappingConfig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Un producto parcial sería un total incorrecto: se omite y se advierte."""
+        row = {"Threads": "8"}
+        with caplog.at_level(logging.WARNING):
+            result = _extract_product_value(row, ["Threads", "Sockets"], config)
+        assert result == ""
+        assert "Producto incompleto" in caplog.text
+        assert "Sockets" in caplog.text
+
+    def test_non_numeric_raises(self, config: NetBoxMappingConfig) -> None:
+        row = {"Threads": "ocho", "Sockets": "2"}
+        with pytest.raises(RowValidationError, match="campo product"):
+            _extract_product_value(row, ["Threads", "Sockets"], config)
+
+
 class TestGetNodeTypeFromRow:
     """Verifica la resolución del NodeType desde una fila CSV."""
 
@@ -766,6 +802,11 @@ class TestFieldMappingConfig:
             target="mi_campo", source=["col1", "col2"], transform="concat_dot"
         )
         assert config.source == ["col1", "col2"]
+
+    def test_product_requires_list_source(self) -> None:
+        """El transform product exige explícitamente una lista de fuentes."""
+        with pytest.raises(ValidationError, match="requiere que 'source' sea"):
+            FieldMappingConfig(target="vcpus", source="Threads", transform="product")
 
 
 class TestLoadConfig:
@@ -990,6 +1031,26 @@ class TestResolveFieldValue:
         with pytest.raises(RowValidationError, match="Conflicto"):
             _resolve_field_value(row, field_def, config, is_optional=True)
 
+    def test_product_field_with_cast(self, config: NetBoxMappingConfig) -> None:
+        row = {"Threads": "16", "Sockets": "2"}
+        field_def = FieldMappingConfig(
+            target="vcpus",
+            source=["Threads", "Sockets"],
+            transform="product",
+            cast=CastType.FLOAT,
+        )
+        assert _resolve_field_value(row, field_def, config, is_optional=True) == 32.0
+
+    def test_product_field_partial_empty_is_none(
+        self, config: NetBoxMappingConfig
+    ) -> None:
+        """Un producto incompleto no se envía (None se excluye del payload)."""
+        row = {"Threads": "16", "Sockets": ""}
+        field_def = FieldMappingConfig(
+            target="vcpus", source=["Threads", "Sockets"], transform="product"
+        )
+        assert _resolve_field_value(row, field_def, config, is_optional=True) is None
+
     def test_empty_with_default(self, config: NetBoxMappingConfig) -> None:
         row = {"Col": ""}
         field_def = FieldMappingConfig(target="target", source="Col")
@@ -1074,6 +1135,24 @@ class TestBuildPayload:
         assert "custom_fields" in payload
         assert payload["custom_fields"]["cpu_cores"] == "4"
         assert payload["custom_fields"]["environment"] == "production"
+
+    def test_vm_vcpus_from_real_mapping(self, config: NetBoxMappingConfig) -> None:
+        """Contrato real: vcpus = Threads (por socket) × Sockets.
+
+        Una VM VMware de 4 vSockets × 1 core reporta 1 thread por socket;
+        usar solo la columna por socket registraría vcpus=1.
+        """
+        vm_maps = config.node_types.virtual_machine.native_mappings
+        row = {
+            config.csv_columns["machine_name"].source: "VM-01",
+            config.csv_columns["cores"].source: "1",
+            config.csv_columns["threads"].source: "1",
+            config.csv_columns["sockets"].source: "4",
+        }
+
+        payload = build_payload(row, vm_maps, [], config)
+
+        assert payload["vcpus"] == 4.0
 
 
 class TestResolveNetboxStatus:

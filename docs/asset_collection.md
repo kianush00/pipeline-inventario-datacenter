@@ -43,6 +43,16 @@ The information gathered by the script is categorized into the following areas:
 - RAM (GB)
 - Visible Storage Capacity (GB)
 
+CPU topology is reported **per socket** for both physical hosts and VMs. Each value uses the first source that returns a positive integer:
+
+| Value | 1. `lscpu` | 2. `/proc/cpuinfo` | 3. Last resort |
+| ----- | ---------- | ------------------ | -------------- |
+| Sockets | `Socket(s)` | unique `physical id` | `1` |
+| Cores per socket | `Core(s) per socket` (or `per cluster` on ARM) | `cpu cores` | logical CPUs / sockets |
+| Threads per socket | `Thread(s) per core` × cores per socket | `siblings` | logical CPUs / sockets |
+
+`lscpu` fields are matched by exact name, which tolerates the indented layout of util-linux >= 2.37 and does not mistake `Socket(s) per book` (s390x) for `Socket(s)`. The last-resort split covers VMs whose hypervisor does not expose topology, and assumes one thread per core. System totals are not collected: downstream, the VM `vcpus` field is computed as `threads × sockets` (see the `product` transform in [netbox_mapping.md](netbox_mapping.md)).
+
 **For Physical/Hypervisor nodes:**
 
 - RAID Configuration

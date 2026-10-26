@@ -54,6 +54,13 @@ value_or_na() {
     fi
 }
 
+is_positive_int() {
+    # Comprueba si el valor es un entero estrictamente positivo.
+    # NOTA: no aplicar fuera de condiciones (if), o puede disparar errexit
+    # en script reforzado.
+    [[ "$1" =~ ^[0-9]+$ ]] && (( 10#$1 > 0 ))
+}
+
 with_timeout() {
     # Ejecuta un comando con timeout si la herramienta 'timeout' esta disponible
     if exists timeout; then
@@ -772,74 +779,91 @@ get_hypervisor_os_version() {
 }
 
 ###############################################################################
+# Fuentes de topologia CPU (lscpu / /proc/cpuinfo)
+###############################################################################
+
+get_lscpu_field() {
+    # Devuelve el valor del primer campo de lscpu cuyo nombre coincida
+    # exactamente con alguno de los recibidos ($1, separados por '|').
+    # La coincidencia es exacta (no por prefijo) para no confundir
+    # "Socket(s)" con "Socket(s) per book" (s390x), y tolera la indentacion
+    # jerarquica de util-linux >= 2.37 ("    Core(s) per socket:  16").
+    if ! exists lscpu; then
+        return 0
+    fi
+    lscpu 2>/dev/null | awk -v names="$1" '
+        BEGIN {
+            n = split(names, list, "|")
+            for (i = 1; i <= n; i++) wanted[list[i]] = 1
+        }
+        {
+            sep = index($0, ":")
+            if (sep == 0) next
+            key = substr($0, 1, sep - 1)
+            sub(/^[ \t]+/, "", key); sub(/[ \t]+$/, "", key)
+            if (!(key in wanted)) next
+            value = substr($0, sep + 1)
+            sub(/^[ \t]+/, "", value); sub(/[ \t]+$/, "", value)
+            print value
+            exit
+        }
+    ' || true
+}
+
+get_cpuinfo_field() {
+    # Devuelve el valor de la primera aparicion del campo $1 en /proc/cpuinfo.
+    # En x86 los campos por paquete fisico ("cpu cores", "siblings") se
+    # repiten identicos en cada procesador logico, basta con el primero.
+    if [[ ! -r /proc/cpuinfo ]]; then
+        return 0
+    fi
+    awk -v name="$1" '
+        {
+            sep = index($0, ":")
+            if (sep == 0) next
+            key = substr($0, 1, sep - 1)
+            sub(/[ \t]+$/, "", key)
+            if (key != name) next
+            value = substr($0, sep + 1)
+            sub(/^[ \t]+/, "", value); sub(/[ \t]+$/, "", value)
+            print value
+            exit
+        }
+    ' /proc/cpuinfo 2>/dev/null || true
+}
+
+get_cpu_logical_total() {
+    # Total de CPUs logicas visibles por el sistema operativo.
+    local total
+    total=$(get_lscpu_field "CPU(s)")
+    if ! is_positive_int "$total" && [[ -r /proc/cpuinfo ]]; then
+        total=$(safe_capture grep -c '^processor' /proc/cpuinfo)
+    fi
+    echo "$total"
+}
+
+per_socket_from_total() {
+    # Reparte un total del sistema ($1) entre los sockets ($2). Es el ultimo
+    # recurso cuando no hay topologia expuesta (VMs con CPUID recortado):
+    # si el reparto no es exacto se trunca, y si da 0 no se emite valor
+    # para no reportar una cifra inventada.
+    local total="$1" sockets="$2"
+    if is_positive_int "$total" && is_positive_int "$sockets" && (( total >= sockets )); then
+        echo $(( total / sockets ))
+    fi
+}
+
+###############################################################################
 # Modelo CPU
 ###############################################################################
 
 get_cpu_model() {
-    local model=""
-    if exists lscpu; then
-        model=$(lscpu 2>/dev/null | awk -F': *' '/^Model name/ {print $2; exit}') || true
-    fi
-    if [[ -z "$model" && -r /proc/cpuinfo ]]; then
-        model=$(safe_capture awk -F': ' '/^model name/ {print $2; exit}' /proc/cpuinfo)
+    local model
+    model=$(get_lscpu_field "Model name")
+    if [[ -z "$model" ]]; then
+        model=$(get_cpuinfo_field "model name")
     fi
     echo "$model"
-}
-
-###############################################################################
-# Cores CPU
-###############################################################################
-
-get_cpu_cores() {
-    local cores=""
-    if exists lscpu; then
-        cores=$(
-            lscpu 2>/dev/null | awk -F': *' '
-                /^Core\(s\) per socket/          { cores=$2 }
-                /^(Socket\(s\)|CPU socket\(s\))/ { sockets=$2 }
-                END {
-                    if (cores != "" && sockets != "")
-                        print cores * sockets
-                }
-            '
-        ) || true
-    fi
-    if [[ -z "$cores" && -r /proc/cpuinfo ]]; then
-        cores=$(
-            safe_capture awk '
-                /^physical id/ { socket=$NF }
-                /^core id/     { mapa[socket ":" $NF]=1 }
-                END {
-                    total=0
-                    for (i in mapa) total++
-                    print total
-                }
-            ' /proc/cpuinfo
-        )
-        if [[ -z "$cores" || "$cores" -le 0 ]]; then
-            cores=$(safe_capture grep -c '^processor' /proc/cpuinfo)
-        fi
-    fi
-    echo "$cores"
-}
-
-###############################################################################
-# Threads CPU
-###############################################################################
-
-get_cpu_threads() {
-    local threads=""
-    if exists lscpu; then
-        threads=$(
-            lscpu 2>/dev/null | awk -F': *' '
-                /^CPU\(s\)/ { print $2; exit }
-            '
-        ) || true
-    fi
-    if [[ -z "$threads" && -r /proc/cpuinfo ]]; then
-        threads=$(safe_capture grep -c '^processor' /proc/cpuinfo)
-    fi
-    echo "$threads"
 }
 
 ###############################################################################
@@ -847,21 +871,59 @@ get_cpu_threads() {
 ###############################################################################
 
 get_cpu_sockets() {
-    local sockets=""
-    if exists lscpu; then
-        sockets=$(
-            lscpu 2>/dev/null | awk -F': *' '
-                /^(Socket\(s\)|CPU socket\(s\))/ { print $2; exit }
-            '
-        ) || true
-    fi
-    if [[ -z "$sockets" && -r /proc/cpuinfo ]]; then
+    # Se calcula antes que cores/threads: ambos lo usan como divisor de
+    # ultimo recurso. En ARM lscpu puede reportar "Socket(s): -".
+    local sockets
+    sockets=$(get_lscpu_field "Socket(s)|CPU socket(s)")
+    if ! is_positive_int "$sockets" && [[ -r /proc/cpuinfo ]]; then
         sockets=$(awk -F': ' '/^physical id/ {print $2}' /proc/cpuinfo 2>/dev/null | sort -u | wc -l) || true
-        if [[ -z "$sockets" || "$sockets" -le 0 ]]; then
-            sockets=1
-        fi
+    fi
+    if ! is_positive_int "$sockets"; then
+        sockets=1
     fi
     echo "$sockets"
+}
+
+###############################################################################
+# Cores CPU (por socket)
+###############################################################################
+
+get_cpu_cores() {
+    # Cores fisicos POR SOCKET (contrato de la columna "Cores (por socket)").
+    # $1: sockets detectados, usado solo como divisor de ultimo recurso.
+    local sockets="$1" cores
+    cores=$(get_lscpu_field "Core(s) per socket|Core(s) per cluster")
+    if ! is_positive_int "$cores"; then
+        # x86: "cpu cores" ya es por paquete fisico
+        cores=$(get_cpuinfo_field "cpu cores")
+    fi
+    if ! is_positive_int "$cores"; then
+        # Sin topologia expuesta se asume 1 thread por core (caso tipico de VM)
+        cores=$(per_socket_from_total "$(get_cpu_logical_total)" "$sockets")
+    fi
+    echo "$cores"
+}
+
+###############################################################################
+# Threads CPU (por socket)
+###############################################################################
+
+get_cpu_threads() {
+    # Threads logicos POR SOCKET (contrato de la columna "Threads (por socket)").
+    # $1: sockets detectados, $2: cores por socket ya calculados.
+    local sockets="$1" cores="$2" threads="" threads_per_core
+    threads_per_core=$(get_lscpu_field "Thread(s) per core")
+    if is_positive_int "$threads_per_core" && is_positive_int "$cores"; then
+        threads=$(( threads_per_core * cores ))
+    fi
+    if ! is_positive_int "$threads"; then
+        # x86: "siblings" son las CPUs logicas por paquete fisico
+        threads=$(get_cpuinfo_field "siblings")
+    fi
+    if ! is_positive_int "$threads"; then
+        threads=$(per_socket_from_total "$(get_cpu_logical_total)" "$sockets")
+    fi
+    echo "$threads"
 }
 
 ###############################################################################
@@ -1679,9 +1741,9 @@ BIOS_DATE=$(get_dmi bios-release-date)
 ###############################################################################
 
 CPU_MODELO=$(get_cpu_model)
-CPU_CORES=$(get_cpu_cores)
-CPU_THREADS=$(get_cpu_threads)
 CPU_SOCKETS=$(get_cpu_sockets)
+CPU_CORES=$(get_cpu_cores "$CPU_SOCKETS")
+CPU_THREADS=$(get_cpu_threads "$CPU_SOCKETS" "$CPU_CORES")
 
 ###############################################################################
 # Memoria

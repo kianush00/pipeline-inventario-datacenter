@@ -67,6 +67,7 @@ import csv
 import hashlib
 import ipaddress
 import logging
+import math
 import os
 import random
 import re
@@ -599,7 +600,7 @@ class FieldMappingConfig(BaseModel):
     required: bool = False
     is_unique: bool = False
     cast: CastType | None = None
-    transform: Literal["concat_dot", "coalesce"] | None = None
+    transform: Literal["concat_dot", "coalesce", "product"] | None = None
 
     @model_validator(mode="after")
     def validate_transform_and_source(self) -> "FieldMappingConfig":
@@ -619,9 +620,8 @@ class FieldMappingConfig(BaseModel):
                 f"En 'source' (target '{self.target}'), ningún elemento puede estar vacío."
             )
 
-        if self.transform in ("concat_dot", "coalesce") and not isinstance(
-            self.source, list
-        ):
+        # Transform combina varias columnas, por lo que exige una lista
+        if self.transform and not isinstance(self.source, list):
             raise ValueError(
                 f"El transform '{self.transform}' para target '{self.target}' "
                 "requiere que 'source' sea explícitamente una lista."
@@ -630,7 +630,8 @@ class FieldMappingConfig(BaseModel):
         if isinstance(self.source, list) and not self.transform:
             raise ValueError(
                 f"Si 'source' es una lista (target '{self.target}'), "
-                "debes definir explícitamente un 'transform' (ej. concat_dot, coalesce)."
+                "debes definir explícitamente un 'transform' "
+                "(ej. concat_dot, coalesce, product)."
             )
 
         return self
@@ -2878,6 +2879,48 @@ def _extract_coalesce_value(
     return unique_values[0] if unique_values else ""
 
 
+def _extract_product_value(
+    row: CsvRow,
+    source: list[str],
+    config: NetBoxMappingConfig,
+) -> str:
+    """
+    Resuelve un campo multi-columna como el producto numérico de sus fuentes.
+
+    Permite derivar totales a partir de columnas "por socket" sin duplicar el
+    dato en el inventario (ej. vcpus = Threads (por socket) x Sockets).
+    Si alguna fuente está vacía no se emite un producto parcial, porque sería
+    un total incorrecto: retorna un string vacío para delegar en la política
+    de defaults/opcionales. Lanza RowValidationError si alguna fuente no es
+    numérica.
+    """
+    values = [row.get(s, "").strip() for s in source]
+    empty_sources = [
+        s for s, val in zip(source, values, strict=True) if config.is_empty(val)
+    ]
+
+    if len(empty_sources) == len(source):
+        return ""
+
+    if empty_sources:
+        log.warning(
+            "Producto incompleto: columnas vacías %s de %s. El campo se omite.",
+            empty_sources,
+            source,
+        )
+        return ""
+
+    try:
+        product = math.prod(parse_float(val) for val in values)
+    except ValueError as e:
+        raise RowValidationError(
+            f"Valores inválidos {values} para un campo product "
+            f"provenientes de las columnas {source}. {e}"
+        ) from e
+
+    return str(int(product)) if product.is_integer() else str(product)
+
+
 def _extract_raw_source_value(row: CsvRow, source: str | list[str]) -> str:
     """Extrae el valor crudo de la(s) columna(s) origen, sin transformar."""
     if isinstance(source, list):
@@ -2968,6 +3011,8 @@ def _resolve_field_value(
         raw_value = _extract_concat_dot_value(row, source, config)
     elif isinstance(source, list) and field_def.transform == "coalesce":
         raw_value = _extract_coalesce_value(row, source, config)
+    elif isinstance(source, list) and field_def.transform == "product":
+        raw_value = _extract_product_value(row, source, config)
     else:
         raw_value = _extract_raw_source_value(row, source)
 

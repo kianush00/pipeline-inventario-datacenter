@@ -64,9 +64,9 @@ This table acts as a data dictionary of the fields the script expects to extract
 | `iface_pfx` | `Red IP` | Comma-separated networks, one per interface, aligned by position with `IP`. | `10.0.0.0/24, 192.168.1.0/26` |
 | `iface_mac` | `MAC` | List of MAC addresses corresponding to the interfaces. | `aa:bb:cc:dd:ee:ff` |
 | `cpu_model` | `CPU Modelo` | Commercial name of the processor. | `Intel Xeon Gold 6230` |
-| `cores` | `Cores (por socket)` | Number of physical (Device) or virtual (VM) cores. | `16`, `32` |
-| `threads` | `Threads (por socket)` | Total number of threads of the physical CPU. | `32`, `64` |
-| `sockets` | `Sockets` | Number of sockets or physical CPUs mounted on the motherboard. | `2`, `4` |
+| `cores` | `Cores (por socket)` | Physical (Device) or virtual (VM) cores **per socket**, not the system total. | `16`, `1` |
+| `threads` | `Threads (por socket)` | Logical CPUs (threads) **per socket**, not the system total. | `32`, `1` |
+| `sockets` | `Sockets` | Number of physical sockets (Device) or virtual sockets (VM). The VM `vcpus` total is derived as `threads × sockets`. | `2`, `4` |
 | `ram_gb` | `RAM (GB)` | Total RAM memory expressed in Gigabytes. | `128`, `256` |
 | `disks` | `Discos` | Raw breakdown of the disk configuration. | `2x SSD 512GB, 4x HDD 4TB` |
 | `disk_cap` | `Capacidad visible (GB)` | Total visible storage capacity. | `1024`, `500` |
@@ -231,6 +231,7 @@ Defines how to **extract** data from the CSV and **map** it to fields in the Net
 | ----------- | ---------------- |
 | `concat_dot` | Concatenates a list of values with the separator `.` (dot + space) |
 | `coalesce` | Returns the first non-empty value from a list of sources. Fails-fast if there is a collision. |
+| `product` | Multiplies numeric sources (e.g. VM `vcpus = Threads (por socket) × Sockets`). If every source is empty the field follows the default/optional policy. |
 
 **Note on `cast` and `transform`:** If a mapping defines both a `transform` and a `cast`, they are NOT mutually exclusive. The transformation (combining the source columns) is executed first, and the resulting value is then passed to the specified `cast` function.
 

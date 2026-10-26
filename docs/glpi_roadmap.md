@@ -138,7 +138,7 @@ As in the NetBox exporter, only optional network pruning exists (`--prune-networ
 | `Interfaces`, `IP`, `Red IP`, `MAC` | `NetworkPort` (Ethernet) → `NetworkName` → `IPAddress` (+ optional `IPNetwork`) | 6 |
 | `Rack` + `Posicion (U)` | `Rack` + `Item_Rack` | 7 |
 | `Cluster` + `SO Hipervisor` + `Version SO Hipervisor` | `Cluster` (`ClusterType`, `version`) + `Item_Cluster` (hypervisors) | 8 |
-| `Dispositivo Host` + `Cores` + `RAM (GB)` | `ItemVirtualMachine` on the host (`vcpu`, `ram` in MiB, `uuid`) | 8 |
+| `Dispositivo Host` + `Threads (por socket)` × `Sockets` + `RAM (GB)` | `ItemVirtualMachine` on the host (`vcpu`, `ram` in MiB, `uuid`) | 8 |
 | `Fecha Inicio` + `Fecha Vencimiento` | `Infocom` (`warranty_date`, `warranty_duration` in months) | 9 |
 | `CPU Modelo`, `Cores (por socket)`, `Threads (por socket)`, `Sockets`, `RAM (GB)`, `Capacidad visible (GB)` | `Item_DeviceProcessor`, `Item_DeviceMemory`, `Item_Disk` | 10 |
 | `Rol`, `Entorno`, `Nodo Rundeck`, `Version BIOS`, `Fecha BIOS`, `RAID`, `Discos`, etc. | Fields plugin container | 11 |
@@ -403,7 +403,7 @@ empty_values: [...]
 - **Extracted to the core:** `precompute_cluster_type_map` and its tests.
 - `ClusterType` from `SO Hipervisor`, and `Cluster` by name with `version` from `Version SO Hipervisor` (only when consistent across rows). `Item_Cluster` for hypervisors only.
 - New core cast `int_gib_to_mib` (×1024, see [Verified Assumptions](#verified-assumptions)).
-- `sync_item_virtual_machine(...)`: the host is resolved by name through a host cache, like `host_devices` in NetBox. Fields: `itemtype=Computer`, `items_id=<host>`, `name`, `uuid`, `vcpu ← Cores`, `ram ← RAM (GB) × 1024`. Identity is the UUID, or `(host, name)` when the UUID is empty. A VM that moved to another host has its `items_id` updated instead of being duplicated. A missing host produces a `WARNING`.
+- `sync_item_virtual_machine(...)`: the host is resolved by name through a host cache, like `host_devices` in NetBox. Fields: `itemtype=Computer`, `items_id=<host>`, `name`, `uuid`, `vcpu ← Threads (por socket) × Sockets` (same derivation as NetBox `vcpus`), `ram ← RAM (GB) × 1024`. Identity is the UUID, or `(host, name)` when the UUID is empty. A VM that moved to another host has its `items_id` updated instead of being duplicated. A missing host produces a `WARNING`.
 
 **Tests:** `TestPrecomputeClusterTypeMap` (moved), `TestParseIntGibToMib`, `TestEnsureCluster`, `TestSyncItemCluster` and `TestSyncItemVirtualMachine` (create, host change, no host, empty UUID, dry-run).
 
@@ -419,7 +419,7 @@ empty_values: [...]
 
 ### Phase 10. Hardware components (optional, `components.enabled` in the YAML)
 
-- `DeviceProcessor` (`designation ← CPU Modelo`) with N `Item_DeviceProcessor` instances according to `Sockets`; cores and threads are split per socket. When not divisible, a single instance carries the totals with a `WARNING`.
+- `DeviceProcessor` (`designation ← CPU Modelo`) with N `Item_DeviceProcessor` instances according to `Sockets`; each instance takes `Cores (por socket)` and `Threads (por socket)` as-is, since the collector already reports them per socket.
 - A generic `DeviceMemory` with one `RAM (GB) × 1024` instance. An `Item_Disk` named "Capacidad visible" with `totalsize` in MiB.
 - Reconciliation creates missing instances and removes extra ones, only among non-dynamic instances.
 
