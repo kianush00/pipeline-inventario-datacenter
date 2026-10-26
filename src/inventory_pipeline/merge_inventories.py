@@ -46,7 +46,7 @@ La unión se comporta como un LEFT JOIN:
   inventarios.
 
 Uso:
-    python3 merge_inventories.py \
+    python -m inventory_pipeline.merge_inventories \
         --parsed parsed_job_output.csv \
         --master prepared_master_inventory.csv \
         [--output merged_inventory.csv] \
@@ -57,9 +57,9 @@ Cada opción tiene una forma corta: -p, -m, -o y -l respectivamente.
 Los inventarios se indican con opciones nombradas (y no por posición) para que
 un orden accidental de los archivos no invierta silenciosamente la fusión.
 
-Si no se indica --header-list, se busca un archivo llamado
-"rundeck_header_list.txt" en el mismo directorio que este script. Si no se
-indica --output, se escribe "merged_inventory.csv" en ese mismo directorio.
+Si no se indica --header-list, se usa config/rundeck_header_list.txt. Si no
+se indica --output, se escribe output/merged_inventory.csv (ver
+inventory_pipeline.paths).
 """
 
 import argparse
@@ -70,12 +70,17 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple
 
-from base_inventory import (
+from inventory_pipeline.base_inventory import (
     error,
     is_empty_or_na,
     load_rundeck_header_list,
     split_quoted_csv_line,
     strip_quotes,
+)
+from inventory_pipeline.paths import (
+    DEFAULT_HEADER_LIST_PATH,
+    MERGED_CSV_NAME,
+    OUTPUT_DIR,
 )
 
 # ============================================================
@@ -431,11 +436,10 @@ def parse_cli_paths(argv: Sequence[str]) -> CliPaths:
       con argumentos posicionales, intercambiar los archivos no produce ningún
       error y la fusión se ejecuta al revés sin avisar.
     - La salida y el rundeck_header_list son opcionales y, por defecto, se resuelven
-      en el directorio de este script.
+      en output/ y config/ respectivamente (ver inventory_pipeline.paths).
 
     argparse termina el proceso con un mensaje de uso si falta una opción obligatoria.
     """
-    script_dir = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(
         description="Fusiona un inventario parseado sobre el inventario maestro."
     )
@@ -449,15 +453,15 @@ def parse_cli_paths(argv: Sequence[str]) -> CliPaths:
         "-o",
         "--output",
         type=Path,
-        default=script_dir / "merged_inventory.csv",
-        help="CSV de salida (por defecto merged_inventory.csv junto al script).",
+        default=OUTPUT_DIR / MERGED_CSV_NAME,
+        help=f"CSV de salida (por defecto output/{MERGED_CSV_NAME}).",
     )
     parser.add_argument(
         "-l",
         "--header-list",
         type=Path,
-        default=script_dir / "rundeck_header_list.txt",
-        help="Ruta de rundeck_header_list.txt (por defecto junto al script).",
+        default=DEFAULT_HEADER_LIST_PATH,
+        help="Ruta de rundeck_header_list.txt (por defecto en config/).",
     )
     args = parser.parse_args(argv)
     return CliPaths(

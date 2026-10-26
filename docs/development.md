@@ -12,11 +12,15 @@ The repository includes a comprehensive unit test suite that validates logic, ed
 pytest tests/
 ```
 
-Pytest is configured under `[tool.pytest.ini_options]` in [`pyproject.toml`](../pyproject.toml): `pythonpath = ["."]` lets the tests import the root-level scripts without installing the project, so `pytest` works from the repository root or from inside `tests/`.
+Pytest is configured under `[tool.pytest.ini_options]` in [`pyproject.toml`](../pyproject.toml): `pythonpath = ["src"]` lets the tests import the `inventory_pipeline` package even without the editable install, so `pytest` works from the repository root or from inside `tests/`. Patch targets must use the full module path (e.g. `patch("inventory_pipeline.export_to_netbox.ensure_prefix")`).
 
 ## Project Configuration (`pyproject.toml`)
 
-[`pyproject.toml`](../pyproject.toml) centralizes the project metadata and the development tool configuration (Ruff, Pyright and Pytest). `requires-python` is the single source of the minimum Python version. The project is **not** installable as a package (there is no `[build-system]`), and dependencies remain pinned in [`requirements.txt`](../requirements.txt), which works as the reproducible lockfile.
+[`pyproject.toml`](../pyproject.toml) centralizes the project metadata, packaging and the development tool configuration (Ruff, Pyright and Pytest). `requires-python` is the single source of the minimum Python version.
+
+The project follows the **src layout**: the code lives in `src/inventory_pipeline/` and is installed in editable mode with `pip install -e .`, which also registers the `inventory-pipeline` console command (`[project.scripts]`). Pyright and `python -m inventory_pipeline.<module>` rely on that install to resolve the package. `[project] dependencies` declares the runtime dependencies with lower bounds; exact versions remain pinned in [`requirements.txt`](../requirements.txt), which works as the reproducible lockfile.
+
+Default paths (configuration, inputs, outputs, `.env`) are defined once in `src/inventory_pipeline/paths.py`; do not resolve paths relative to a module's `__file__`.
 
 Before committing new code or deploying changes, make sure all tests pass successfully.
 

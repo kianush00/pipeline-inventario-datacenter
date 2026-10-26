@@ -2,6 +2,12 @@
 # Data / generated files
 # =========================
 
+# Entradas del usuario y artefactos del pipeline (solo se versiona .gitkeep)
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
+
 # CSV/ODS files
 *.csv
 *.csv#

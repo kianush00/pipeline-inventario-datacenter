@@ -11,6 +11,10 @@
 # =========================
 # Datos sensibles de infraestructura
 # =========================
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
 *.csv
 *.csv#
 *.ods

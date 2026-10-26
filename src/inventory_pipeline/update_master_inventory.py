@@ -41,7 +41,7 @@ archivo final mediante os.replace() si todo el proceso terminó sin
 errores.
 
 Uso:
-    python3 update_master_inventory.py \
+    python -m inventory_pipeline.update_master_inventory \
         --merged merged_inventory.csv \
         --master master_inventory.(ods|xlsx) \
         [--output master_inventory_updated.(ods|xlsx)]
@@ -66,9 +66,9 @@ from openpyxl.cell.cell import Cell, MergedCell
 from openpyxl.workbook.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
-from base_inventory import error, strip_quotes
-from merge_inventories import load_csv_data, validate_rows
-from prepare_master_inventory import find_libreoffice
+from inventory_pipeline.base_inventory import error, strip_quotes
+from inventory_pipeline.merge_inventories import load_csv_data, validate_rows
+from inventory_pipeline.prepare_master_inventory import find_libreoffice
 
 SUPPORTED_EXTENSIONS = {".ods", ".xlsx"}
 

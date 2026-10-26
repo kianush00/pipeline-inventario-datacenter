@@ -273,7 +273,7 @@ GLPI_LOCATION_NAME="Datacenter-1"
 
 **Goal:** a runnable `export_to_glpi.py` that reads and validates the CSV, connects, runs the preflight and prints a summary, still without writing Computers.
 
-**Files:** `export_to_glpi.py`, `glpi_mapping.yaml`, `.env.example`, `tests/test_export_to_glpi.py` and `tests/conftest.py` (`glpi_yaml_path` and `glpi_config` fixtures, `GLPI_*` variables in `mock_env_vars`).
+**Files:** `src/inventory_pipeline/export_to_glpi.py`, `config/glpi_mapping.yaml` (its default path is added to `paths.py`), `.env.example`, `tests/test_export_to_glpi.py` and `tests/conftest.py` (`glpi_yaml_path` and `glpi_config` fixtures, `GLPI_*` variables in `mock_env_vars`). Wiring the GLPI export into the orchestrator (`run_pipeline.py`) is a separate decision, outside this phase.
 
 **Components of `export_to_glpi.py`:**
 

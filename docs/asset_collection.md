@@ -1,6 +1,6 @@
 # Rundeck Asset Collection
 
-This document provides detailed information regarding the `asset_information.sh` script, which is executed as part of a Rundeck job across all configured nodes.
+This document provides detailed information regarding the [`collectors/asset_information.sh`](../collectors/asset_information.sh) script, which is executed as part of a Rundeck job across all configured nodes. Its content is pasted into the job as an inline script; Rundeck does not run it from the repository.
 
 The script is responsible for extracting comprehensive details from Linux nodes, covering identity, hardware specifications, network configurations, and operational status. It is designed to be highly compatible across heterogeneous Linux systems, maintaining backward compatibility with older distributions (e.g., CentOS 4), thus ensuring reliable execution across a wide variety of environments.
 
@@ -104,7 +104,7 @@ To ensure successful execution, the target nodes must meet the following baselin
 
 1. **Privilege Escalation:** The script invokes `sudo` in specific scenarios (e.g., reading hardware DMI tables). It strictly assumes that the target nodes are configured to allow the Rundeck user to execute `sudo` non-interactively without prompting for a password.
 2. **Strict Bash Mode:** The script is hardened using `set -Eeuo pipefail`. This strict error handling must be carefully considered when contributing or modifying the codebase to prevent unintended job failures.
-3. **Data Contract Maintenance:** The core maintenance of the script revolves around the `OUTPUT_KEYS` and `OUTPUT_VALUES` bash arrays. There is a strict 1-to-1 positional mapping between these two arrays. Furthermore, the strings defined in `OUTPUT_KEYS` **must** perfectly match the column names defined in `rundeck_header_list.txt`. Any deviation will cause downstream parsing and ETL errors.
+3. **Data Contract Maintenance:** The core maintenance of the script revolves around the `OUTPUT_KEYS` and `OUTPUT_VALUES` bash arrays. There is a strict 1-to-1 positional mapping between these two arrays. Furthermore, the strings defined in `OUTPUT_KEYS` **must** perfectly match the column names defined in `config/rundeck_header_list.txt`. Any deviation will cause downstream parsing and ETL errors.
 
 ---
 
@@ -118,10 +118,10 @@ To extract the collected data for the next stage of the ETL pipeline, follow the
 4. Click on the **"Log Output"** button (blue icon on the left).
 5. Click on the **"Execution Log"** button (icon on the right) and select **"View text"**.
 6. Download the page (save the file with a `.log` extension).
-7. Pass the downloaded `.log` file as an argument to the parser script:
+7. Copy the downloaded `.log` file into `input/` and run the pipeline (see [Usage & Configuration](usage_and_config.md#orchestrated-run-recommended)):
 
    ```bash
-   python3 parse_job_output.py raw_output.log
+   inventory-pipeline
    ```
 
-   > **Note:** Always verify that the `rundeck_header_list.txt` file is up-to-date and its defined column names exactly match the target headers of the master inventory before parsing.
+   > **Note:** Always verify that the `config/rundeck_header_list.txt` file is up-to-date and its defined column names exactly match the target headers of the master inventory before parsing.

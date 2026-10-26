@@ -1,6 +1,10 @@
 # pyproject.toml
 # ==============
 
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "pipeline-inventario"
 version = "0.1.0"
@@ -9,9 +13,26 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
+# Dependencias de runtime; requirements.txt fija las versiones exactas (lock).
+dependencies = [
+    "openpyxl>=3.1",
+    "pydantic>=2.0",
+    "pynetbox>=7.0",
+    "PyYAML>=6.0",
+    "requests>=2.31",
+    "urllib3>=2.0",
+]
+
+[project.scripts]
+inventory-pipeline = "inventory_pipeline.run_pipeline:main"
+
+# ── Empaquetado (src layout) ────────────────────────────────
+[tool.setuptools.packages.find]
+where = ["src"]
 
 # ── Ruff (linter y formateador) ─────────────────────────────
 [tool.ruff]
+src = ["src", "tests"]
 
 # ── Pyright (tipado estático) ───────────────────────────────
 [tool.pyright]
@@ -21,5 +42,5 @@ pythonVersion = "3.12"
 
 # ── Pytest ──────────────────────────────────────────────────
 [tool.pytest.ini_options]
-pythonpath = ["."]
+pythonpath = ["src"]
 testpaths = ["tests"]

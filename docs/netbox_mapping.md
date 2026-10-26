@@ -1,6 +1,6 @@
 # NetBox Mapping Contract (`netbox_mapping.yaml`)
 
-This document describes in depth the declarative contract that governs the synchronization between `merged_inventory.csv` and NetBox. The [`netbox_mapping.yaml`](../netbox_mapping.yaml) file is the **single source of truth** for this mapping.
+This document describes in depth the declarative contract that governs the synchronization between `merged_inventory.csv` and NetBox. The [`netbox_mapping.yaml`](../config/netbox_mapping.yaml) file is the **single source of truth** for this mapping.
 
 ---
 

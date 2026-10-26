@@ -3,8 +3,8 @@ export_to_netbox.py
 ===================
 Exporta el inventario fusionado (merged_inventory.csv) a NetBox 4.6+.
 
-Variables de entorno (también se leen desde un archivo .env junto al script;
-las ya definidas en el entorno tienen prioridad):
+Variables de entorno (también se leen desde el archivo .env de la raíz del
+proyecto; las ya definidas en el entorno tienen prioridad):
     NETBOX_URL        → https://netbox.miempresa.com
     NETBOX_TOKEN      → token con permisos write sobre
                         dcim, virtualization, ipam, extras, core
@@ -12,7 +12,11 @@ las ya definidas en el entorno tienen prioridad):
     NETBOX_SITE_NAME  → nombre del Site único (lo referencia netbox_mapping.yaml)
 
 Uso:
-    python3 export_to_netbox.py merged_inventory.csv [netbox_mapping.yaml] [opciones]
+    python -m inventory_pipeline.export_to_netbox merged_inventory.csv \
+        [netbox_mapping.yaml] [opciones]
+
+Si no se indica el mapping, se usa config/netbox_mapping.yaml (ver
+inventory_pipeline.paths).
 
 Opciones:
     --dry-run               Muestra las operaciones que se ejecutarían sin
@@ -106,6 +110,8 @@ from pynetbox.core.api import Api
 from pynetbox.core.endpoint import Endpoint
 from pynetbox.core.query import RequestError
 from pynetbox.core.response import Record
+
+from inventory_pipeline.paths import DEFAULT_MAPPING_PATH, DOTENV_PATH
 
 # ============================================================
 # LOGGER
@@ -1273,7 +1279,7 @@ def resolve_mapping_path(args_mapping: str | None) -> Path:
     """Resuelve la ruta del archivo de configuración YAML."""
     if args_mapping:
         return Path(args_mapping)
-    return Path(__file__).resolve().parent / "netbox_mapping.yaml"
+    return DEFAULT_MAPPING_PATH
 
 
 def count_machine_names(
@@ -1358,7 +1364,7 @@ def load_dotenv(env_path: Path | None = None) -> None:
     No sobrescribe variables que ya estén definidas en el entorno.
     """
     if env_path is None:
-        env_path = Path(__file__).resolve().parent / ".env"
+        env_path = DOTENV_PATH
 
     if not env_path.is_file():
         return
@@ -5459,7 +5465,7 @@ def main() -> None:
         type=Path,
         nargs="?",
         default=None,
-        help="Ruta a netbox_mapping.yaml (por defecto: junto al script).",
+        help="Ruta a netbox_mapping.yaml (por defecto: config/netbox_mapping.yaml).",
     )
     parser.add_argument(
         "--dry-run",

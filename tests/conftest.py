@@ -4,19 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from export_to_netbox import (
+from inventory_pipeline.export_to_netbox import (
     MockNetBoxRecord,
     NetBoxMappingConfig,
     load_config,
 )
-
-# ============================================================
-# RUTAS
-# ============================================================
-
-REPO_ROOT: Path = Path(__file__).resolve().parent.parent
-"""Raíz del repositorio, un nivel arriba de tests/."""
-
+from inventory_pipeline.paths import DEFAULT_MAPPING_PATH
 
 # ============================================================
 # CONFIGURACIÓN YAML REAL
@@ -26,7 +19,7 @@ REPO_ROOT: Path = Path(__file__).resolve().parent.parent
 @pytest.fixture(scope="session")
 def yaml_path() -> Path:
     """Ruta al archivo YAML real del proyecto."""
-    path = REPO_ROOT / "netbox_mapping.yaml"
+    path = DEFAULT_MAPPING_PATH
     assert path.exists(), f"No se encontró el archivo YAML en {path}"
     return path
 

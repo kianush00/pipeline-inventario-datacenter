@@ -1,6 +1,6 @@
 # Usage and Configuration
 
-This document describes how to configure the environment, the required variables, and how to execute each stage of the pipeline.
+This document describes how to configure the environment, the required variables, and how to execute the pipeline, either end to end with the orchestrator or one stage at a time.
 
 ---
 
@@ -24,7 +24,10 @@ python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements.txt
+python3 -m pip install -e .
 ```
+
+The editable install (`-e .`) registers the `inventory_pipeline` package from `src/` and the `inventory-pipeline` console command. It is required: the stages import each other as `inventory_pipeline.<module>`.
 
 Activate the environment again when a new terminal is opened:
 
@@ -42,7 +45,7 @@ deactivate
 
 ## NetBox Configuration
 
-The exporter requires the following environment variables:
+The exporter requires the following environment variables. They can also be defined in a `.env` file at the repository root (see [`.env.example`](../.env.example)); variables already set in the environment take precedence:
 
 ```bash
 export NETBOX_URL="https://netbox.example.com"
@@ -50,7 +53,7 @@ export NETBOX_TOKEN="<write-enabled-token>"
 export NETBOX_VERIFY_SSL="true"
 ```
 
-The default `netbox_mapping.yaml` expects the Site name via the environment:
+The default `config/netbox_mapping.yaml` expects the Site name via the environment:
 
 ```bash
 export NETBOX_SITE_NAME="Main Datacenter"
@@ -68,26 +71,62 @@ export NETBOX_SITE_NAME="Main Datacenter"
 
 ## Pipeline Execution
 
-Run the stages from the root of the repository with the virtual environment active:
+### Orchestrated Run (recommended)
+
+1. Copy the raw Rundeck job output (`*.log`) and the master spreadsheet (`*.ods` or `*.xlsx`) into `input/`. The contents of `input/` and `output/` are git-ignored.
+2. Run the orchestrator with the virtual environment active:
+
+```bash
+inventory-pipeline [--update-master] [--prune-network-orphans] [--yes] [--verbose]
+```
+
+The orchestrator (`src/inventory_pipeline/run_pipeline.py`) runs each stage as a subprocess and **stops at the first stage that exits with a non-zero code**, propagating that code:
+
+| # | Stage | Output |
+| - | ----- | ------ |
+| 1 | `parse_job_output` | `output/parsed_job_output.csv` |
+| 2 | `prepare_master_inventory` | `output/prepared_master_inventory.csv` |
+| 3 | `merge_inventories` | `output/merged_inventory.csv` |
+| 4 | `export_to_netbox --dry-run` | NetBox preview (no writes) |
+| — | Confirmation: `¿Aplicar los cambios en NetBox? [s/N]` | — |
+| 5 | `export_to_netbox` | Changes applied to NetBox |
+| 6 | `update_master_inventory` (only with `--update-master`) | `output/<master>_updated.<ext>` |
+
+| Option | Description |
+| ------ | ----------- |
+| `--job-log PATH` | Rundeck job output. Defaults to the **only** `*.log` in `input/` |
+| `--master PATH` | Master spreadsheet. Defaults to the **only** `*.ods`/`*.xlsx` in `input/` |
+| `--update-master` | Writes the updated master copy at the end, only if the real export succeeded, so it always reflects a cycle consistent with NetBox |
+| `--prune-network-orphans` | Passed to **both** exports, so the dry-run previews exactly what the real run deletes |
+| `-y`, `--yes` | Applies the changes without the interactive confirmation. **Required** when stdin is not a terminal; without it the pipeline aborts before running any stage instead of guessing |
+| `--verbose` | DEBUG logs in the orchestrator and the exporter |
+
+Input discovery fails fast when `input/` holds zero or more than one candidate of a kind (hidden files such as `.gitkeep` and LibreOffice `.~lock.*#` files are ignored), so an outdated spreadsheet is never processed by accident. The original master in `input/` is never modified.
+
+Exit codes: `0` (completed, or changes declined at the confirmation), `1` (orchestrator error: missing/ambiguous inputs, or no terminal without `--yes`), the code of the first failed stage, `130` (interrupted with Ctrl+C).
+
+### Running a Single Stage
+
+Each stage can still be run on its own from the repository root. Default paths resolve to `config/` and `output/` (see `src/inventory_pipeline/paths.py`):
 
 ```bash
 # 1. Parse the Rundeck job output
-python3 parse_job_output.py job_output.log [parsed_job_output.csv]
+python -m inventory_pipeline.parse_job_output input/job_output.log [output/parsed_job_output.csv]
 
 # 2. Prepare the master spreadsheet
-python3 prepare_master_inventory.py master_inventory.ods [prepared_master_inventory.csv]
+python -m inventory_pipeline.prepare_master_inventory input/master_inventory.ods [output/prepared_master_inventory.csv]
 
 # 3. Consolidate the parsed inventory with the master
-python3 merge_inventories.py --parsed parsed_job_output.csv --master prepared_master_inventory.csv [--output merged_inventory.csv]
+python -m inventory_pipeline.merge_inventories --parsed output/parsed_job_output.csv --master output/prepared_master_inventory.csv [--output output/merged_inventory.csv]
 
-# 4. (Optional) Update a copy of the master sheet
-python3 update_master_inventory.py --merged merged_inventory.csv --master master_inventory.ods [--output master_inventory_updated.ods]
+# 4. Preview the synchronization with NetBox
+python -m inventory_pipeline.export_to_netbox output/merged_inventory.csv --dry-run
 
-# 5. Preview the synchronization with NetBox
-python3 export_to_netbox.py merged_inventory.csv --dry-run
+# 5. Apply the synchronization to NetBox
+python -m inventory_pipeline.export_to_netbox output/merged_inventory.csv
 
-# 6. Apply the synchronization to NetBox
-python3 export_to_netbox.py merged_inventory.csv
+# 6. (Optional) Update a copy of the master sheet
+python -m inventory_pipeline.update_master_inventory --merged output/merged_inventory.csv --master input/master_inventory.ods [--output output/master_inventory_updated.ods]
 ```
 
 ### Merge Options
@@ -98,8 +137,8 @@ python3 export_to_netbox.py merged_inventory.csv
 | ------ | -------- | ----------- |
 | `-p`, `--parsed` | Yes | Parsed inventory CSV (`parsed_job_output.csv`) |
 | `-m`, `--master` | Yes | Prepared master inventory CSV (`prepared_master_inventory.csv`) |
-| `-o`, `--output` | No | Output CSV. Defaults to `merged_inventory.csv` next to the script |
-| `-l`, `--header-list` | No | Path to `rundeck_header_list.txt`. Defaults to the file next to the script |
+| `-o`, `--output` | No | Output CSV. Defaults to `output/merged_inventory.csv` |
+| `-l`, `--header-list` | No | Path to `rundeck_header_list.txt`. Defaults to `config/rundeck_header_list.txt` |
 
 ### Master Update Options
 
@@ -121,22 +160,22 @@ To model nodes that genuinely share an IP, a NetBox administrator must change Ne
 
 ### Additional Exporter Options
 
-Each script supports optional paths for its input and output files as described in its help text. The mapping path is optional; by default, `export_to_netbox.py` loads `netbox_mapping.yaml` from the script's directory. A custom mapping can be provided as the second positional argument:
+Each script supports optional paths for its input and output files as described in its help text. The mapping path is optional; by default, `export_to_netbox` loads `config/netbox_mapping.yaml`. A custom mapping can be provided as the second positional argument:
 
 ```bash
-python3 export_to_netbox.py merged_inventory.csv [custom_netbox_mapping.yaml] --dry-run
+python -m inventory_pipeline.export_to_netbox output/merged_inventory.csv [custom_netbox_mapping.yaml] --dry-run
 ```
 
 Use `--verbose` to enable DEBUG logging:
 
 ```bash
-python3 export_to_netbox.py merged_inventory.csv --dry-run --verbose
+python -m inventory_pipeline.export_to_netbox output/merged_inventory.csv --dry-run --verbose
 ```
 
 To automatically delete interfaces and MAC addresses, and unassign IP addresses from NetBox that no longer exist in the CSV (network pruning), use the `--prune-network-orphans` flag. This action is opt-in and destructive. Use with `--dry-run` first to see what would be deleted/unassigned:
 
 ```bash
-python3 export_to_netbox.py merged_inventory.csv --prune-network-orphans --dry-run
+python -m inventory_pipeline.export_to_netbox output/merged_inventory.csv --prune-network-orphans --dry-run
 ```
 
 IP addresses with a **role** assigned in NetBox (e.g. `secondary`, `vip`, `vrrp`, `loopback`) are never unassigned: the exporter creates IPs without a role, so a role marks an address curated manually, and the CSV holds a single IP per interface. An orphan interface hosting such an IP is kept (with a `WARNING`), because deleting an interface in NetBox also deletes its IPs; its other IPs and MACs are still pruned.

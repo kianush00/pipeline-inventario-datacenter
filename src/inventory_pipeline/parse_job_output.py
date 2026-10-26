@@ -33,13 +33,14 @@ exactamente en rundeck_header_list.txt provoca un error fatal y el script
 termina con código de salida 1.
 
 Uso:
-    python3 parse_job_output.py \
+    python -m inventory_pipeline.parse_job_output \
         job_output.log \
         [parsed_job_output.csv] \
-        [rundeck_header_list.txt] \
+        [rundeck_header_list.txt]
 
-Si no se indica la ruta de rundeck_header_list.txt, se busca un archivo
-llamado "rundeck_header_list.txt" en el mismo directorio que este script.
+Si no se indica la salida, se escribe output/parsed_job_output.csv. Si no se
+indica la ruta de rundeck_header_list.txt, se usa config/rundeck_header_list.txt
+(ver inventory_pipeline.paths).
 """
 
 import os
@@ -47,12 +48,17 @@ import sys
 import tempfile
 from pathlib import Path
 
-from base_inventory import (
+from inventory_pipeline.base_inventory import (
     error,
     load_rundeck_header_list,
     split_quoted_csv_line,
     strip_quotes,
     usage,
+)
+from inventory_pipeline.paths import (
+    DEFAULT_HEADER_LIST_PATH,
+    OUTPUT_DIR,
+    PARSED_CSV_NAME,
 )
 
 
@@ -127,14 +133,10 @@ def main() -> None:
 
     input_path = Path(sys.argv[1])
     output_path = (
-        Path(sys.argv[2])
-        if len(sys.argv) >= 3
-        else Path(__file__).resolve().parent / "parsed_job_output.csv"
+        Path(sys.argv[2]) if len(sys.argv) >= 3 else OUTPUT_DIR / PARSED_CSV_NAME
     )
     rundeck_header_list_path = (
-        Path(sys.argv[3])
-        if len(sys.argv) >= 4
-        else Path(__file__).resolve().parent / "rundeck_header_list.txt"
+        Path(sys.argv[3]) if len(sys.argv) >= 4 else DEFAULT_HEADER_LIST_PATH
     )
 
     if not input_path.is_file():

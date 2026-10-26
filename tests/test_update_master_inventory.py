@@ -9,7 +9,7 @@ from openpyxl import Workbook
 from openpyxl.cell.cell import Cell, MergedCell
 from openpyxl.worksheet.worksheet import Worksheet
 
-from update_master_inventory import (
+from inventory_pipeline.update_master_inventory import (
     CliArguments,
     coerce_for_cell,
     column_letter,
@@ -240,9 +240,9 @@ class TestMainUpdateMasterInventory:
         master_xlsx.touch()
         return merged_csv, master_xlsx, output_xlsx
 
-    @patch("update_master_inventory.load_csv_data")
-    @patch("update_master_inventory.validate_rows")
-    @patch("update_master_inventory.update_xlsx", return_value={})
+    @patch("inventory_pipeline.update_master_inventory.load_csv_data")
+    @patch("inventory_pipeline.update_master_inventory.validate_rows")
+    @patch("inventory_pipeline.update_master_inventory.update_xlsx", return_value={})
     def test_main_happy_path_xlsx(
         self,
         mock_update: MagicMock,
@@ -332,9 +332,9 @@ class TestMainUpdateMasterInventory:
         ):
             main()
 
-    @patch("update_master_inventory.load_csv_data")
-    @patch("update_master_inventory.validate_rows")
-    @patch("update_master_inventory.update_xlsx")
+    @patch("inventory_pipeline.update_master_inventory.load_csv_data")
+    @patch("inventory_pipeline.update_master_inventory.validate_rows")
+    @patch("inventory_pipeline.update_master_inventory.update_xlsx")
     def test_main_temp_file_cleanup_on_failure(
         self,
         mock_update: MagicMock,

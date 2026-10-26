@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from prepare_master_inventory import (
+from inventory_pipeline.prepare_master_inventory import (
     convert_spreadsheet_to_csv,
     find_libreoffice,
     find_real_header,
@@ -229,9 +229,10 @@ class TestMainPrepareMasterInventory:
             main()
 
     @patch(
-        "prepare_master_inventory.find_libreoffice", return_value="dummy_libreoffice"
+        "inventory_pipeline.prepare_master_inventory.find_libreoffice",
+        return_value="dummy_libreoffice",
     )
-    @patch("prepare_master_inventory.convert_spreadsheet_to_csv")
+    @patch("inventory_pipeline.prepare_master_inventory.convert_spreadsheet_to_csv")
     def test_main_clean_temp_file_on_failure(
         self,
         mock_convert: MagicMock,
@@ -265,9 +266,10 @@ class TestMainPrepareMasterInventory:
         assert len(tmp_files) == 0
 
     @patch(
-        "prepare_master_inventory.find_libreoffice", return_value="dummy_libreoffice"
+        "inventory_pipeline.prepare_master_inventory.find_libreoffice",
+        return_value="dummy_libreoffice",
     )
-    @patch("prepare_master_inventory.convert_spreadsheet_to_csv")
+    @patch("inventory_pipeline.prepare_master_inventory.convert_spreadsheet_to_csv")
     def test_main_happy_path(
         self,
         mock_convert: MagicMock,

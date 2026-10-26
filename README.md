@@ -18,10 +18,10 @@ This project is intentionally designed and optimized for small to medium-sized d
 
 ## Key Features
 
-* **Automated Data Collection:** Leverages Rundeck and shell collection agents (`asset_information.sh`) to query live OS, CPU, RAM, BIOS, network interfaces, and storage data.
+* **Automated Data Collection:** Leverages Rundeck and shell collection agents (`collectors/asset_information.sh`) to query live OS, CPU, RAM, BIOS, network interfaces, and storage data.
 * **Master Spreadsheet Integration:** Processes `.ods` or `.xlsx` files seamlessly using LibreOffice, preserving manual metadata and extra columns.
 * **Controlled Merging:** Uses unique machine UUIDs as merge keys with configurable column update flags (`0`: preserve master, `1`: allow update, `2`: merge key).
-* **NetBox Synchronization:** Idempotent export stage powered by `pynetbox` with dry-run capabilities (`--dry-run`), mapping custom fields, roles, sites, interfaces, and IP allocations via a decoupled YAML contract (`netbox_mapping.yaml`).
+* **NetBox Synchronization:** Idempotent export stage powered by `pynetbox` with dry-run capabilities (`--dry-run`), mapping custom fields, roles, sites, interfaces, and IP allocations via a decoupled YAML contract (`config/netbox_mapping.yaml`).
 * **Strict Validation & Data Quality:** Atomic output handling, header contract checks, and rejection of malformed or duplicate keys.
 
 ---
@@ -32,19 +32,15 @@ This project is intentionally designed and optimized for small to medium-sized d
 # Setup
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e .            # installs the package and the `inventory-pipeline` command
 
-# Parse job output
-python3 parse_job_output.py job_output.log [parsed_job_output.csv]
-# Prepare master inventory
-python3 prepare_master_inventory.py master_inventory.ods [prepared_master_inventory.csv]
-# Merge inventories
-python3 merge_inventories.py --parsed parsed_job_output.csv --master prepared_master_inventory.csv [--output merged_inventory.csv]
-# Update master inventory
-python3 update_master_inventory.py --merged merged_inventory.csv --master master_inventory.ods [--output master_inventory_updated.ods]
-# Export to NetBox
-python3 export_to_netbox.py merged_inventory.csv --dry-run --prune-network-orphans
-python3 export_to_netbox.py merged_inventory.csv --prune-network-orphans
+# Drop the Rundeck job output (*.log) and the master spreadsheet (*.ods/*.xlsx) into input/
+inventory-pipeline                       # parse → prepare → merge → dry-run → confirm → export
+inventory-pipeline --update-master       # ...and write output/<master>_updated.<ext> at the end
+inventory-pipeline --prune-network-orphans --yes   # unattended, with network pruning
 ```
+
+The pipeline stops at the first stage that exits with a non-zero code. Each stage can still be run on its own with `python -m inventory_pipeline.<module>` (see [Usage & Configuration](docs/usage_and_config.md)).
 
 ---
 
@@ -53,7 +49,7 @@ python3 export_to_netbox.py merged_inventory.csv --prune-network-orphans
 | Document | Description |
 | ---------- | ------------- |
 | [Architecture](docs/architecture.md) | Data flow, merge model, UUID normalization, and idempotency design |
-| [Components](docs/components.md) | Technical reference for each pipeline script |
+| [Components](docs/components.md) | Technical reference for the orchestrator and each pipeline stage |
 | [Asset Collection](docs/asset_collection.md) | Rundeck collection script (`asset_information.sh`): collected data and compatibility notes |
 | [NetBox Mapping](docs/netbox_mapping.md) | Full specification of `netbox_mapping.yaml` (DDL, DML, casts, transforms) |
 | [GLPI Roadmap](docs/glpi_roadmap.md) | Phased plan for the GLPI 11 export stage (`export_to_glpi.py`): decisions, data model, requirements |
@@ -66,15 +62,22 @@ python3 export_to_netbox.py merged_inventory.csv --prune-network-orphans
 
 ```text
 .
-├── asset_information.sh          # Rundeck collection agent (Bash)
-├── parse_job_output.py           # Raw output → normalized CSV
-├── prepare_master_inventory.py   # Spreadsheet → clean CSV
-├── merge_inventories.py          # CSV consolidation by UUID
-├── update_master_inventory.py    # Write-back to spreadsheet copy
-├── export_to_netbox.py           # Idempotent NetBox synchronization
-├── base_inventory.py             # Shared utilities module
-├── netbox_mapping.yaml           # NetBox mapping contract
-├── rundeck_header_list.txt       # Column schema and merge flags
+├── src/inventory_pipeline/       # Python package (src layout)
+│   ├── run_pipeline.py           # Orchestrator: runs every stage, fail-fast (`inventory-pipeline`)
+│   ├── parse_job_output.py       # Raw output → normalized CSV
+│   ├── prepare_master_inventory.py # Spreadsheet → clean CSV
+│   ├── merge_inventories.py      # CSV consolidation by UUID
+│   ├── export_to_netbox.py       # Idempotent NetBox synchronization
+│   ├── update_master_inventory.py # Write-back to spreadsheet copy
+│   ├── base_inventory.py         # Shared utilities module
+│   └── paths.py                  # Default project paths (config/, input/, output/, .env)
+├── config/
+│   ├── netbox_mapping.yaml       # NetBox mapping contract
+│   └── rundeck_header_list.txt   # Column schema and merge flags
+├── collectors/
+│   └── asset_information.sh      # Rundeck collection agent (Bash, pasted into the job)
+├── input/                        # Pipeline inputs (git-ignored, except .gitkeep)
+├── output/                       # Generated artifacts (git-ignored, except .gitkeep)
 ├── pyproject.toml                # Project metadata and tool config (Ruff, Pyright, Pytest)
 ├── requirements.txt              # Pinned dependencies (lockfile)
 ├── .env.example                  # NetBox credentials template
@@ -88,7 +91,8 @@ python3 export_to_netbox.py merged_inventory.csv --prune-network-orphans
 │   ├── test_prepare_master_inventory.py
 │   ├── test_merge_inventories.py
 │   ├── test_update_master_inventory.py
-│   └── test_export_to_netbox.py
+│   ├── test_export_to_netbox.py
+│   └── test_run_pipeline.py
 ├── docs/                         # Project documentation
 │   ├── architecture.md
 │   ├── components.md

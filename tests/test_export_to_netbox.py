@@ -15,8 +15,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pynetbox.core.query import RequestError  # type: ignore
 
-import export_to_netbox
-from export_to_netbox import (
+from inventory_pipeline import export_to_netbox
+from inventory_pipeline.export_to_netbox import (
     DEFAULT_DEVICE_TYPE_U_HEIGHT,
     CacheStore,
     CastType,
@@ -2535,8 +2535,8 @@ class TestEnsureRack:
         ):
             ensure_rack(endpoint, "Rack1", site_mock, cache, dry_run=False)
 
-    @patch("export_to_netbox._sync_rack_location")
-    @patch("export_to_netbox.get_or_create_cached")
+    @patch("inventory_pipeline.export_to_netbox._sync_rack_location")
+    @patch("inventory_pipeline.export_to_netbox.get_or_create_cached")
     def test_ensure_rack_calls_sync_location(
         self, mock_get: MagicMock, mock_sync_loc: MagicMock
     ) -> None:
@@ -2553,8 +2553,8 @@ class TestEnsureRack:
 
         mock_sync_loc.assert_called_once_with(mock_rack, "Rack1", 99, False)
 
-    @patch("export_to_netbox._sync_rack_location")
-    @patch("export_to_netbox.get_or_create_cached")
+    @patch("inventory_pipeline.export_to_netbox._sync_rack_location")
+    @patch("inventory_pipeline.export_to_netbox.get_or_create_cached")
     def test_ensure_rack_without_location(
         self, mock_get: MagicMock, mock_sync_loc: MagicMock
     ) -> None:
@@ -2635,7 +2635,7 @@ class TestSyncRackLocation:
 class TestEnsureLocation:
     """Verifica que ensure_location cree o recupere localizaciones correctamente."""
 
-    @patch("export_to_netbox.get_or_create_cached")
+    @patch("inventory_pipeline.export_to_netbox.get_or_create_cached")
     def test_ensure_location_calls_get_or_create(self, mock_get: MagicMock) -> None:
         endpoint = MagicMock()
         site_mock = MockNetBoxRecord(id=10, name="Site1")
@@ -2780,8 +2780,8 @@ class TestResolveCluster:
         config.map_value_by_source.side_effect = lambda s, v, strict: v
         return config
 
-    @patch("export_to_netbox.extract_csv_value")
-    @patch("export_to_netbox.ensure_cluster")
+    @patch("inventory_pipeline.export_to_netbox.extract_csv_value")
+    @patch("inventory_pipeline.export_to_netbox.ensure_cluster")
     def test_cluster_name_present_os_empty(
         self,
         mock_ensure_cluster: MagicMock,
@@ -2824,7 +2824,7 @@ class TestResolveCluster:
             False,
         )
 
-    @patch("export_to_netbox.extract_csv_value")
+    @patch("inventory_pipeline.export_to_netbox.extract_csv_value")
     def test_cluster_name_empty_os_present(
         self, mock_extract: MagicMock, mock_endpoints: MagicMock, mock_config: MagicMock
     ) -> None:
@@ -2855,7 +2855,7 @@ class TestResolveCluster:
         assert cluster_id is None
         assert cache == {}
 
-    @patch("export_to_netbox.extract_csv_value")
+    @patch("inventory_pipeline.export_to_netbox.extract_csv_value")
     def test_both_empty(
         self, mock_extract: MagicMock, mock_endpoints: MagicMock, mock_config: MagicMock
     ) -> None:
@@ -3365,15 +3365,20 @@ def _keep_payload(*args: Any) -> tuple[Any, Any]:
 
 
 class TestSyncDevice:
-    @patch("export_to_netbox._prepare_base_node")
-    @patch("export_to_netbox._resolve_cluster")
-    @patch("export_to_netbox.ensure_rack")
-    @patch("export_to_netbox._resolve_device_type")
-    @patch("export_to_netbox._execute_sync")
-    @patch("export_to_netbox._resolve_existing_object", return_value=[])
-    @patch("export_to_netbox._resolve_common_dependencies", side_effect=_keep_payload)
+    @patch("inventory_pipeline.export_to_netbox._prepare_base_node")
+    @patch("inventory_pipeline.export_to_netbox._resolve_cluster")
+    @patch("inventory_pipeline.export_to_netbox.ensure_rack")
+    @patch("inventory_pipeline.export_to_netbox._resolve_device_type")
+    @patch("inventory_pipeline.export_to_netbox._execute_sync")
     @patch(
-        "export_to_netbox.select_device_type_attributes",
+        "inventory_pipeline.export_to_netbox._resolve_existing_object", return_value=[]
+    )
+    @patch(
+        "inventory_pipeline.export_to_netbox._resolve_common_dependencies",
+        side_effect=_keep_payload,
+    )
+    @patch(
+        "inventory_pipeline.export_to_netbox.select_device_type_attributes",
         return_value=DeviceTypeAttributes(None, None),
     )
     def test_sync_device_assigns_front_face(
@@ -3442,7 +3447,7 @@ class TestNodeLogFormat:
 
         with (
             patch(
-                "export_to_netbox._prepare_base_node",
+                "inventory_pipeline.export_to_netbox._prepare_base_node",
                 return_value={
                     "machine_name": "hv-01",
                     "inventory_uuid": "u1",
@@ -3450,19 +3455,24 @@ class TestNodeLogFormat:
                     "payload": {},
                 },
             ),
-            patch("export_to_netbox._resolve_existing_object", return_value=[]),
             patch(
-                "export_to_netbox._resolve_common_dependencies",
+                "inventory_pipeline.export_to_netbox._resolve_existing_object",
+                return_value=[],
+            ),
+            patch(
+                "inventory_pipeline.export_to_netbox._resolve_common_dependencies",
                 side_effect=_keep_payload,
             ),
             patch(
-                "export_to_netbox._resolve_cluster", return_value=(None, mock_caches)
+                "inventory_pipeline.export_to_netbox._resolve_cluster",
+                return_value=(None, mock_caches),
             ),
             patch(
-                "export_to_netbox._resolve_device_type", return_value=(1, mock_caches)
+                "inventory_pipeline.export_to_netbox._resolve_device_type",
+                return_value=(1, mock_caches),
             ),
             patch(
-                "export_to_netbox._execute_sync",
+                "inventory_pipeline.export_to_netbox._execute_sync",
                 return_value=SyncResult(SyncStatus.CREATED, 1, MagicMock()),
             ),
             caplog.at_level(logging.INFO),
@@ -3495,7 +3505,10 @@ class TestNodeLogFormat:
         config.csv_columns = {"host_device": MagicMock(source="Host")}
 
         with (
-            patch("export_to_netbox.extract_csv_value", return_value="hv-02"),
+            patch(
+                "inventory_pipeline.export_to_netbox.extract_csv_value",
+                return_value="hv-02",
+            ),
             caplog.at_level(logging.WARNING),
         ):
             dev_id, _ = _resolve_host_device(
@@ -3775,22 +3788,33 @@ class TestInvalidMachineTypeDoesNotAbortPipeline:
             sys, "argv", ["export_to_netbox.py", str(tmp_path / "in.csv")]
         )
         with (
-            patch("export_to_netbox.load_config", return_value=config),
             patch(
-                "export_to_netbox.read_and_validate_csv",
+                "inventory_pipeline.export_to_netbox.load_config", return_value=config
+            ),
+            patch(
+                "inventory_pipeline.export_to_netbox.read_and_validate_csv",
                 return_value=CsvData(rows, list(range(2, 2 + len(rows)))),
             ),
-            patch("export_to_netbox.load_env", return_value=("u", "t", True)),
-            patch("export_to_netbox.build_nb_client"),
-            patch("export_to_netbox.build_netbox_endpoints"),
-            patch("export_to_netbox.ensure_custom_fields"),
-            patch("export_to_netbox.ensure_site"),
             patch(
-                "export_to_netbox.ensure_dynamic_cluster_types",
+                "inventory_pipeline.export_to_netbox.load_env",
+                return_value=("u", "t", True),
+            ),
+            patch("inventory_pipeline.export_to_netbox.build_nb_client"),
+            patch("inventory_pipeline.export_to_netbox.build_netbox_endpoints"),
+            patch("inventory_pipeline.export_to_netbox.ensure_custom_fields"),
+            patch("inventory_pipeline.export_to_netbox.ensure_site"),
+            patch(
+                "inventory_pipeline.export_to_netbox.ensure_dynamic_cluster_types",
                 return_value=(MagicMock(), {}),
             ),
-            patch("export_to_netbox.ensure_all_device_roles", return_value=({}, {})),
-            patch("export_to_netbox._sync_row", side_effect=fake_sync_row),
+            patch(
+                "inventory_pipeline.export_to_netbox.ensure_all_device_roles",
+                return_value=({}, {}),
+            ),
+            patch(
+                "inventory_pipeline.export_to_netbox._sync_row",
+                side_effect=fake_sync_row,
+            ),
             pytest.raises(SystemExit) as exit_info,
         ):
             main()
@@ -3822,22 +3846,33 @@ class TestInvalidMachineTypeDoesNotAbortPipeline:
             sys, "argv", ["export_to_netbox.py", str(tmp_path / "in.csv")]
         )
         with (
-            patch("export_to_netbox.load_config", return_value=config),
             patch(
-                "export_to_netbox.read_and_validate_csv",
+                "inventory_pipeline.export_to_netbox.load_config", return_value=config
+            ),
+            patch(
+                "inventory_pipeline.export_to_netbox.read_and_validate_csv",
                 return_value=CsvData(rows, [2, 3]),
             ),
-            patch("export_to_netbox.load_env", return_value=("u", "t", True)),
-            patch("export_to_netbox.build_nb_client"),
-            patch("export_to_netbox.build_netbox_endpoints"),
-            patch("export_to_netbox.ensure_custom_fields"),
-            patch("export_to_netbox.ensure_site"),
             patch(
-                "export_to_netbox.ensure_dynamic_cluster_types",
+                "inventory_pipeline.export_to_netbox.load_env",
+                return_value=("u", "t", True),
+            ),
+            patch("inventory_pipeline.export_to_netbox.build_nb_client"),
+            patch("inventory_pipeline.export_to_netbox.build_netbox_endpoints"),
+            patch("inventory_pipeline.export_to_netbox.ensure_custom_fields"),
+            patch("inventory_pipeline.export_to_netbox.ensure_site"),
+            patch(
+                "inventory_pipeline.export_to_netbox.ensure_dynamic_cluster_types",
                 return_value=(MagicMock(), {}),
             ),
-            patch("export_to_netbox.ensure_all_device_roles", return_value=({}, {})),
-            patch("export_to_netbox._sync_row", side_effect=fake_sync_row),
+            patch(
+                "inventory_pipeline.export_to_netbox.ensure_all_device_roles",
+                return_value=({}, {}),
+            ),
+            patch(
+                "inventory_pipeline.export_to_netbox._sync_row",
+                side_effect=fake_sync_row,
+            ),
             pytest.raises(SystemExit),
         ):
             main()
@@ -3865,22 +3900,33 @@ class TestInvalidMachineTypeDoesNotAbortPipeline:
             return counts, args[-4]
 
         with (
-            patch("export_to_netbox.load_config", return_value=config),
             patch(
-                "export_to_netbox.read_and_validate_csv",
+                "inventory_pipeline.export_to_netbox.load_config", return_value=config
+            ),
+            patch(
+                "inventory_pipeline.export_to_netbox.read_and_validate_csv",
                 return_value=CsvData(rows, [2], rejected_rows=1),
             ),
-            patch("export_to_netbox.load_env", return_value=("u", "t", True)),
-            patch("export_to_netbox.build_nb_client"),
-            patch("export_to_netbox.build_netbox_endpoints"),
-            patch("export_to_netbox.ensure_custom_fields"),
-            patch("export_to_netbox.ensure_site"),
             patch(
-                "export_to_netbox.ensure_dynamic_cluster_types",
+                "inventory_pipeline.export_to_netbox.load_env",
+                return_value=("u", "t", True),
+            ),
+            patch("inventory_pipeline.export_to_netbox.build_nb_client"),
+            patch("inventory_pipeline.export_to_netbox.build_netbox_endpoints"),
+            patch("inventory_pipeline.export_to_netbox.ensure_custom_fields"),
+            patch("inventory_pipeline.export_to_netbox.ensure_site"),
+            patch(
+                "inventory_pipeline.export_to_netbox.ensure_dynamic_cluster_types",
                 return_value=(MagicMock(), {}),
             ),
-            patch("export_to_netbox.ensure_all_device_roles", return_value=({}, {})),
-            patch("export_to_netbox._sync_row", side_effect=fake_sync_row),
+            patch(
+                "inventory_pipeline.export_to_netbox.ensure_all_device_roles",
+                return_value=({}, {}),
+            ),
+            patch(
+                "inventory_pipeline.export_to_netbox._sync_row",
+                side_effect=fake_sync_row,
+            ),
             pytest.raises(SystemExit) as exit_info,
         ):
             main()
@@ -3989,7 +4035,10 @@ class TestEnsureTaxonomyQACases:
         ]
 
         with (
-            patch("export_to_netbox.extract_csv_value", side_effect=mock_extract),
+            patch(
+                "inventory_pipeline.export_to_netbox.extract_csv_value",
+                side_effect=mock_extract,
+            ),
             pytest.raises(
                 ConfigValidationError, match="Conflicto de SO en el clúster 'Cluster-X'"
             ),
@@ -4017,7 +4066,7 @@ class TestEnsureTaxonomyQACases:
         ):
             _sync_single_device_role(endpoints, role_def, {}, dry_run=False)
 
-    @patch("export_to_netbox.get_or_create_cached")
+    @patch("inventory_pipeline.export_to_netbox.get_or_create_cached")
     def test_sync_single_device_role_cache_and_update(
         self, mock_get_or_create: MagicMock
     ) -> None:
@@ -4044,7 +4093,7 @@ class TestEnsureTaxonomyQACases:
         assert returned_obj is mock_obj
         assert returned_cache["accessswitch"] is mock_obj
 
-    @patch("export_to_netbox.get_or_create_cached")
+    @patch("inventory_pipeline.export_to_netbox.get_or_create_cached")
     def test_sync_single_device_role_cache_and_update_to_false(
         self, mock_get_or_create: MagicMock
     ) -> None:
@@ -4147,11 +4196,16 @@ class TestEnsureTaxonomyQACases:
 
 
 class TestSyncVM:
-    @patch("export_to_netbox._prepare_base_node")
-    @patch("export_to_netbox._resolve_cluster")
-    @patch("export_to_netbox._execute_sync")
-    @patch("export_to_netbox._resolve_existing_object", return_value=[])
-    @patch("export_to_netbox._resolve_common_dependencies", side_effect=_keep_payload)
+    @patch("inventory_pipeline.export_to_netbox._prepare_base_node")
+    @patch("inventory_pipeline.export_to_netbox._resolve_cluster")
+    @patch("inventory_pipeline.export_to_netbox._execute_sync")
+    @patch(
+        "inventory_pipeline.export_to_netbox._resolve_existing_object", return_value=[]
+    )
+    @patch(
+        "inventory_pipeline.export_to_netbox._resolve_common_dependencies",
+        side_effect=_keep_payload,
+    )
     def test_sync_vm_cache_propagation(
         self,
         mock_common_deps: MagicMock,
@@ -4197,9 +4251,9 @@ class TestSyncVM:
 
 
 class TestProcessInterfacesAndIps:
-    @patch("export_to_netbox._sync_interfaces_for_object")
-    @patch("export_to_netbox._assign_primary_ipv4")
-    @patch("export_to_netbox._assign_primary_mac")
+    @patch("inventory_pipeline.export_to_netbox._sync_interfaces_for_object")
+    @patch("inventory_pipeline.export_to_netbox._assign_primary_ipv4")
+    @patch("inventory_pipeline.export_to_netbox._assign_primary_mac")
     def test_pure_returns_correct_deltas(
         self,
         mock_assign_mac: MagicMock,
@@ -4350,9 +4404,9 @@ class TestAssignIpAssignedElsewhere:
 
 
 class TestSyncSingleInterface:
-    @patch("export_to_netbox._upsert_interface_record")
-    @patch("export_to_netbox._assign_ip")
-    @patch("export_to_netbox._assign_mac")
+    @patch("inventory_pipeline.export_to_netbox._upsert_interface_record")
+    @patch("inventory_pipeline.export_to_netbox._assign_ip")
+    @patch("inventory_pipeline.export_to_netbox._assign_mac")
     def test_sync_single_interface_returns_cache(
         self,
         mock_assign_mac: MagicMock,
@@ -4404,9 +4458,9 @@ class TestSyncSingleInterface:
 
 
 class TestSyncSingleInterfaceSkippedIp:
-    @patch("export_to_netbox._upsert_interface_record")
-    @patch("export_to_netbox._assign_ip", return_value=(None, False))
-    @patch("export_to_netbox._assign_mac")
+    @patch("inventory_pipeline.export_to_netbox._upsert_interface_record")
+    @patch("inventory_pipeline.export_to_netbox._assign_ip", return_value=(None, False))
+    @patch("inventory_pipeline.export_to_netbox._assign_mac")
     def test_skipped_ip_does_not_block_mac_nor_count_as_error(
         self,
         mock_assign_mac: MagicMock,
@@ -4456,14 +4510,16 @@ class TestSyncSingleInterfacePrefix:
         parent = MagicMock()
         with (
             patch(
-                "export_to_netbox._upsert_interface_record",
+                "inventory_pipeline.export_to_netbox._upsert_interface_record",
                 return_value=(MagicMock(), False),
             ),
             patch(
-                "export_to_netbox.ensure_prefix", return_value=(MagicMock(), True)
+                "inventory_pipeline.export_to_netbox.ensure_prefix",
+                return_value=(MagicMock(), True),
             ) as ensure_prefix,
             patch(
-                "export_to_netbox._assign_ip", return_value=(MagicMock(), False)
+                "inventory_pipeline.export_to_netbox._assign_ip",
+                return_value=(MagicMock(), False),
             ) as assign_ip,
         ):
             parent.attach_mock(ensure_prefix, "ensure_prefix")
@@ -4760,10 +4816,10 @@ class TestSyncRowEdgeCases:
     de escalación de contadores y el manejo de excepciones.
     """
 
-    @patch("export_to_netbox.extract_csv_value")
-    @patch("export_to_netbox._process_node_sync")
-    @patch("export_to_netbox.parse_row_interfaces")
-    @patch("export_to_netbox.process_interfaces_and_ips")
+    @patch("inventory_pipeline.export_to_netbox.extract_csv_value")
+    @patch("inventory_pipeline.export_to_netbox._process_node_sync")
+    @patch("inventory_pipeline.export_to_netbox.parse_row_interfaces")
+    @patch("inventory_pipeline.export_to_netbox.process_interfaces_and_ips")
     def test_sync_row_no_escalation_on_error(
         self,
         mock_process_interfaces: MagicMock,
@@ -4814,10 +4870,10 @@ class TestSyncRowEdgeCases:
         # Los errores de interfaz deben sumarse
         assert counts[SyncStatus.ERROR] == 2
 
-    @patch("export_to_netbox.extract_csv_value")
-    @patch("export_to_netbox._process_node_sync")
-    @patch("export_to_netbox.parse_row_interfaces")
-    @patch("export_to_netbox.process_interfaces_and_ips")
+    @patch("inventory_pipeline.export_to_netbox.extract_csv_value")
+    @patch("inventory_pipeline.export_to_netbox._process_node_sync")
+    @patch("inventory_pipeline.export_to_netbox.parse_row_interfaces")
+    @patch("inventory_pipeline.export_to_netbox.process_interfaces_and_ips")
     def test_sync_row_escalation_success(
         self,
         mock_process_interfaces: MagicMock,

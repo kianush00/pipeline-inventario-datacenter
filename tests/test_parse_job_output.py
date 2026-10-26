@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from parse_job_output import csv_field, main, parse_key_value_field
+from inventory_pipeline.parse_job_output import csv_field, main, parse_key_value_field
 
 
 class TestCsvField:

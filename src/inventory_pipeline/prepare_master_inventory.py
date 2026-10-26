@@ -27,13 +27,14 @@ LibreOffice se utiliza para convertir el archivo de entrada a CSV
 antes de realizar las validaciones y el procesamiento.
 
 Uso:
-    python3 prepare_master_inventory.py \
+    python -m inventory_pipeline.prepare_master_inventory \
         master_inventory.(ods|xlsx) \
         [prepared_master_inventory.csv] \
         [rundeck_header_list.txt]
 
-Si no se indica la ruta de rundeck_header_list.txt, se busca un archivo
-llamado "rundeck_header_list.txt" en el mismo directorio que este script.
+Si no se indica la salida, se escribe output/prepared_master_inventory.csv.
+Si no se indica la ruta de rundeck_header_list.txt, se usa
+config/rundeck_header_list.txt (ver inventory_pipeline.paths).
 """
 
 import csv
@@ -44,11 +45,16 @@ import sys
 import tempfile
 from pathlib import Path
 
-from base_inventory import (
+from inventory_pipeline.base_inventory import (
     clean_value,
     error,
     load_rundeck_header_list,
     usage,
+)
+from inventory_pipeline.paths import (
+    DEFAULT_HEADER_LIST_PATH,
+    OUTPUT_DIR,
+    PREPARED_CSV_NAME,
 )
 
 # ============================================================
@@ -405,9 +411,7 @@ def main() -> None:
     # Resolver ruta de salida.
     # --------------------------------------------------------
     output_path = (
-        Path(sys.argv[2])
-        if len(sys.argv) >= 3
-        else Path(__file__).resolve().parent / "prepared_master_inventory.csv"
+        Path(sys.argv[2]) if len(sys.argv) >= 3 else OUTPUT_DIR / PREPARED_CSV_NAME
     )
 
     # --------------------------------------------------------
@@ -427,9 +431,7 @@ def main() -> None:
     # Resolver ruta de rundeck_header_list.txt.
     # --------------------------------------------------------
     rundeck_header_list_path = (
-        Path(sys.argv[3])
-        if len(sys.argv) >= 4
-        else Path(__file__).resolve().parent / "rundeck_header_list.txt"
+        Path(sys.argv[3]) if len(sys.argv) >= 4 else DEFAULT_HEADER_LIST_PATH
     )
 
     rundeck_header_list = load_rundeck_header_list(rundeck_header_list_path)

@@ -22,6 +22,12 @@ Rundeck (Nodes) → Shell Script → Log → Parser → Parsed CSV
 
 The diagram source file (`inventory_pipeline.drawio`) is located in `docs/assets/`.
 
+### Orchestration
+
+The orchestrator `inventory_pipeline.run_pipeline` (console command `inventory-pipeline`) executes the stages in order, reading the job output and the master spreadsheet from `input/` and writing every artifact to `output/`. It is **fail-fast**: the first stage that exits with a non-zero code stops the pipeline and its code becomes the pipeline's exit code. The export always runs twice: first with `--dry-run`, then (after an interactive confirmation, or `--yes`) for real. The optional master write-back (`--update-master`) runs last and only after a successful real export, so the updated copy always matches what NetBox holds.
+
+Stages run as subprocesses rather than in-process calls: each stage terminates through `sys.exit()` on validation errors, and the exporter configures logging at module level. Isolating them keeps each stage's behavior identical to a manual run.
+
 ---
 
 ## UUID Merge Model
@@ -30,7 +36,7 @@ The **inventory UUID** (`inventory_uuid`) is the master key that connects all st
 
 ### Merge Rules (Consolidation)
 
-The [`rundeck_header_list.txt`](../rundeck_header_list.txt) file defines the column contract and update rules using numeric flags:
+The [`rundeck_header_list.txt`](../config/rundeck_header_list.txt) file defines the column contract and update rules using numeric flags:
 
 | Flag | Behavior | Example |
 | ------ | --------------- | --------- |

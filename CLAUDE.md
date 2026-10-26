@@ -9,11 +9,13 @@ Estás trabajando en el **Datacenter Inventory Pipeline**, una canalización ETL
 
 El flujo consta de:
 
-1. Colección de datos (Rundeck -> `asset_information.sh`).
+1. Colección de datos (Rundeck -> `collectors/asset_information.sh`).
 2. Parseo (`parse_job_output.py`).
 3. Preparación del maestro (`prepare_master_inventory.py`).
 4. Mezcla/Consolidación usando un UUID único como llave (`merge_inventories.py`).
-5. Exportación idempotente hacia NetBox mediante la API REST (`export_to_netbox.py` y `netbox_mapping.yaml`).
+5. Exportación idempotente hacia NetBox mediante la API REST (`export_to_netbox.py` y `config/netbox_mapping.yaml`).
+
+Los módulos Python viven en el paquete `src/inventory_pipeline/` (src layout, instalado con `pip install -e .`); el orquestador `run_pipeline.py` (comando `inventory-pipeline`) ejecuta las etapas 2 a 5 en orden con fail-fast, leyendo las entradas desde `input/` y escribiendo los artefactos en `output/`. Las rutas por defecto se centralizan en `paths.py`.
 
 Al asistir en este proyecto, DEBES adherirte estrictamente a los siguientes principios de ingeniería de software a nivel profesional:
 

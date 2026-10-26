@@ -5,8 +5,8 @@ from typing import ClassVar
 
 import pytest
 
-import merge_inventories
-from merge_inventories import (
+from inventory_pipeline import merge_inventories
+from inventory_pipeline.merge_inventories import (
     CliPaths,
     LoadedInventory,
     MergePlan,
@@ -24,6 +24,11 @@ from merge_inventories import (
     resolve_positions,
     validate_rows,
     warn_if_no_keys_match,
+)
+from inventory_pipeline.paths import (
+    DEFAULT_HEADER_LIST_PATH,
+    MERGED_CSV_NAME,
+    OUTPUT_DIR,
 )
 
 
@@ -526,14 +531,13 @@ class TestMainEndToEnd:
 class TestParseCliPaths:
     """Valida el parseo de argumentos nombrados y sus valores por defecto."""
 
-    def test_defaults_point_to_script_directory(self) -> None:
+    def test_defaults_point_to_project_output_and_config(self) -> None:
         paths = parse_cli_paths(["--parsed", "parsed.csv", "--master", "master.csv"])
-        script_dir = Path(merge_inventories.__file__).resolve().parent
         assert paths == CliPaths(
             Path("parsed.csv"),
             Path("master.csv"),
-            script_dir / "merged_inventory.csv",
-            script_dir / "rundeck_header_list.txt",
+            OUTPUT_DIR / MERGED_CSV_NAME,
+            DEFAULT_HEADER_LIST_PATH,
         )
 
     def test_explicit_output_and_header_list(self) -> None:
