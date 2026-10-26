@@ -87,6 +87,13 @@ Antes de dar cualquier modificación por concluida, **como agente DEBES verifica
      - Windows: `.\.venv\Scripts\python -m py_compile <archivo_modificado>`
    - Si se cuenta con datos de prueba o fixtures, verifica la consistencia con el flag `--dry-run` antes de confirmar la solución.
 
+5. **Scripts Bash (`collectors/*.sh`):**
+   - Si el cambio modifica código Bash, **debes** ejecutar las siguientes verificaciones sobre cada script modificado antes de darlo por concluido:
+     - Sintaxis: `bash -n <script_modificado>`
+     - Análisis estático (si `shellcheck` está disponible): `shellcheck <script_modificado>`
+   - Corrige todos los errores y advertencias reportados; si una advertencia de `shellcheck` es un falso positivo, suprímela con una directiva `# shellcheck disable=SCxxxx` y un comentario que explique el motivo.
+   - Mantén los finales de línea LF en los scripts `.sh` (ver `.gitattributes`).
+
 ## 8. Cobertura de Pruebas Unitarias (Testing)
 
 - **Ejecución obligatoria:** Al final de todo el proceso (luego de haber realizado implementaciones o refactorizaciones de código), DEBES ejecutar siempre la suite de pruebas ubicada en el directorio `tests/` (por ejemplo, ejecutando `pytest tests/`) para verificar que no has roto ninguna funcionalidad existente.

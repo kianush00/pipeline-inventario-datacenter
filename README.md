@@ -31,8 +31,8 @@ This project is intentionally designed and optimized for small to medium-sized d
 ```bash
 # Setup
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-pip install -e .            # installs the package and the `inventory-pipeline` command
+python3 -m pip install --upgrade pip && python3 -m pip install -r requirements.txt
+python3 -m pip install -e .         # installs the package and the `inventory-pipeline` command
 
 # Drop the Rundeck job output (*.log) and the master spreadsheet (*.ods/*.xlsx) into input/
 inventory-pipeline                       # parse → prepare → merge → dry-run → confirm → export
@@ -62,29 +62,29 @@ The pipeline stops at the first stage that exits with a non-zero code. Each stag
 
 ```text
 .
-├── src/inventory_pipeline/       # Python package (src layout)
-│   ├── run_pipeline.py           # Orchestrator: runs every stage, fail-fast (`inventory-pipeline`)
-│   ├── parse_job_output.py       # Raw output → normalized CSV
+├── src/inventory_pipeline/         # Python package (src layout)
+│   ├── run_pipeline.py             # Orchestrator: runs every stage, fail-fast (`inventory-pipeline`)
+│   ├── parse_job_output.py         # Raw output → normalized CSV
 │   ├── prepare_master_inventory.py # Spreadsheet → clean CSV
-│   ├── merge_inventories.py      # CSV consolidation by UUID
-│   ├── export_to_netbox.py       # Idempotent NetBox synchronization
-│   ├── update_master_inventory.py # Write-back to spreadsheet copy
-│   ├── base_inventory.py         # Shared utilities module
-│   └── paths.py                  # Default project paths (config/, input/, output/, .env)
+│   ├── merge_inventories.py        # CSV consolidation by UUID
+│   ├── export_to_netbox.py         # Idempotent NetBox synchronization
+│   ├── update_master_inventory.py  # Write-back to spreadsheet copy
+│   ├── base_inventory.py           # Shared utilities module
+│   └── paths.py                    # Default project paths (config/, input/, output/, .env)
 ├── config/
-│   ├── netbox_mapping.yaml       # NetBox mapping contract
-│   └── rundeck_header_list.txt   # Column schema and merge flags
+│   ├── netbox_mapping.yaml      # NetBox mapping contract
+│   └── rundeck_header_list.txt  # Column schema and merge flags
 ├── collectors/
-│   └── asset_information.sh      # Rundeck collection agent (Bash, pasted into the job)
-├── input/                        # Pipeline inputs (git-ignored, except .gitkeep)
-├── output/                       # Generated artifacts (git-ignored, except .gitkeep)
-├── pyproject.toml                # Project metadata and tool config (Ruff, Pyright, Pytest)
-├── requirements.txt              # Pinned dependencies (lockfile)
-├── .env.example                  # NetBox credentials template
-├── .agents/skills/               # AI agent specialized skills
+│   └── asset_information.sh     # Rundeck collection agent (Bash, pasted into the job)
+├── input/                       # Pipeline inputs (git-ignored, except .gitkeep)
+├── output/                      # Generated artifacts (git-ignored, except .gitkeep)
+├── pyproject.toml               # Project metadata and tool config (Ruff, Pyright, Pytest)
+├── requirements.txt             # Pinned dependencies (lockfile)
+├── .env.example                 # NetBox credentials template
+├── .agents/skills/              # AI agent specialized skills
 │   ├── code-reviewer/SKILL.md
 │   └── qa-tester/SKILL.md
-├── tests/                        # Unit test suite (pytest)
+├── tests/                       # Unit test suite (pytest)
 │   ├── conftest.py
 │   ├── test_parse_job_output.py
 │   ├── test_prepare_master_inventory.py
@@ -92,7 +92,7 @@ The pipeline stops at the first stage that exits with a non-zero code. Each stag
 │   ├── test_update_master_inventory.py
 │   ├── test_export_to_netbox.py
 │   └── test_run_pipeline.py
-├── docs/                         # Project documentation
+├── docs/                        # Project documentation
 │   ├── architecture.md
 │   ├── components.md
 │   ├── asset_collection.md
@@ -103,7 +103,7 @@ The pipeline stops at the first stage that exits with a non-zero code. Each stag
 │   └── assets/
 │       ├── inventory_pipeline.drawio
 │       └── inventory_pipeline.png
-├── CLAUDE.md                     # AI agent rules (Claude)
+├── CLAUDE.md                    # AI agent rules (Claude)
 ├── .gitignore
 └── LICENSE
 ```
