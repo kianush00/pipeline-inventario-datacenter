@@ -74,7 +74,9 @@ Converts the raw Rundeck output into a normalized CSV.
 | **Input** | Rundeck output `.log` file |
 | **Output** | `output/parsed_job_output.csv` (default) |
 | **Validations** | Validates keys against `rundeck_header_list.txt`, rejects malformed or duplicate fields |
-| **Missing values** | Filled with `N/A` |
+| **Flag `0` columns** | Left empty in the output (the master value is the source of truth) |
+| **Missing values** | Flag `1`/`2` columns absent from a line are filled with `N/A` |
+| **Unknown keys** | A key that is not in `rundeck_header_list.txt` is fatal (exit code `1`) |
 | **Invalid lines** | Silently ignored |
 
 ---
@@ -91,6 +93,7 @@ Accepts a master spreadsheet (ODS or XLSX) and converts it to a clean CSV for th
 | **Output** | `output/prepared_master_inventory.csv` (default) |
 | **External dependency** | LibreOffice (for ODS/XLSX → CSV conversion) |
 | **Behavior** | Locates and validates the actual header, preserves additional columns |
+| **Header detection** | The master may have a grouped category row above the header. The first row containing every `rundeck_header_list.txt` name exactly once is the real header; earlier rows are discarded. Column order is irrelevant |
 
 ---
 
@@ -106,8 +109,9 @@ Overlays the parsed inventory onto the prepared master using the column marked w
 | **Output** | `--output`/`-o merged_inventory.csv` (optional; defaults to `output/merged_inventory.csv`) |
 | **Column schema** | `--header-list`/`-l rundeck_header_list.txt` (optional; defaults to `config/rundeck_header_list.txt`) |
 | **Preservation** | Keeps all extra rows and columns from the master |
-| **Update** | Only updates fields with flag `1` |
-| **Security** | Never overwrites the merge key. Excludes rows with invalid or duplicate keys |
+| **Update** | Only updates fields with flag `1`, and only with parsed values that are not empty or `N/A` |
+| **Join semantics** | Left join on the master: every master row is kept. A master row whose key is empty/`N/A`, duplicated, or absent from the parsed inventory is kept **unmerged** |
+| **Security** | Never overwrites the merge key. Parsed rows with an invalid or duplicated key are not merged |
 | **Argument-order checks** | The inventories are named options (not positional) so swapping the files cannot silently invert the merge. Additionally, aborts if the parsed inventory has columns beyond `rundeck_header_list` (it is likely the master, i.e. swapped arguments); warns if no master key matches the parsed inventory |
 
 ---
@@ -122,6 +126,9 @@ Writes the consolidated values back to a copy of the original master spreadsheet
 | --------- | --------- |
 | **Input** | `--merged`/`-i merged_inventory.csv` + `--master`/`-m` original master spreadsheet (required named options) |
 | **Output** | `--output`/`-o` updated copy of the master spreadsheet (same extension; defaults to `<master>_updated.<ext>`) |
+| **Validation** | Aborts unless the master holds a row identical (names and positions) to the merged CSV header, and the number of data rows below it equals the merged CSV's. Positional row correspondence is never assumed |
+| **Writes** | Only the cells whose value changed (numeric formatting differences such as `16` vs `16.0` are not changes). `.xlsx` is edited in place with `openpyxl`; `.ods` goes through an `.ods` → `.xlsx` → `.ods` LibreOffice round trip |
+| **Atomicity** | Works on a temporary file and replaces the output with `os.replace()` only on success |
 | **Security** | The original master spreadsheet is **never** modified |
 | **Dependency** | LibreOffice (for ODS files) |
 
@@ -143,15 +150,17 @@ Downstream ETL stage. Reads the consolidated CSV and creates or updates Devices 
 
 **Synchronized entities:**
 
-- Sites, Cluster Types, Manufacturers, Device Types
-- Platforms, Racks, Clusters, Device Roles
-- Custom Fields, Interfaces, Prefixes, IP Addresses
-- Automatic primary IPv4 assignment (when exactly one IP exists)
+- Sites, Manufacturers, Device Types
+- Cluster Types (one per distinct hypervisor OS, plus the YAML default as fallback), Clusters
+- Platforms, Locations, Racks, Device Roles
+- Custom Fields and their Choice Sets, Interfaces, MAC Addresses, Prefixes, IP Addresses
+- Automatic primary IPv4 and primary MAC assignment (when the node has exactly one IPv4 candidate)
+- Interface renames and, with `--prune-network-orphans`, removal of network orphans
 
 **Exit codes:**
 
-- `0`: No errors at the row level.
-- `1`: At least one row produced an error.
+- `0`: No errors.
+- `1`: At least one error (row, interface or discarded CSV record), or the run aborted on a configuration or NetBox API error.
 
 ---
 
@@ -159,7 +168,7 @@ Downstream ETL stage. Reads the consolidated CSV and creates or updates Devices 
 
 ### `base_inventory.py`
 
-Shared module that provides common utilities reused by the pipeline scripts (argument parsing, configuration file reading, transversal validations).
+Shared helpers reused by the stages: `error`/`usage` (abort with exit code `1`), `load_rundeck_header_list` (parses and validates `rundeck_header_list.txt`), quote-aware CSV line splitting (`split_quoted_csv_line`, `strip_quotes`) and value cleaning (`clean_value`, `is_empty_or_na`).
 
 ### `paths.py`
 

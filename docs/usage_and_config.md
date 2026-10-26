@@ -11,7 +11,7 @@ This document describes how to configure the environment, the required variables
 - LibreOffice available as `libreoffice` or `soffice` in `PATH` (for ODS/XLSX conversion and ODS updates)
 - NetBox 4.6 or higher (for the export stage)
 
-Python dependencies are pinned in [`requirements.txt`](../requirements.txt). The NetBox exporter uses `pynetbox`, `PyYAML`, `requests`, and `urllib3`; spreadsheet processing uses `openpyxl`.
+Python dependencies are pinned in [`requirements.txt`](../requirements.txt). The NetBox exporter uses `pynetbox`, `pydantic`, `PyYAML`, `requests`, and `urllib3`; spreadsheet processing uses `openpyxl`.
 
 ---
 

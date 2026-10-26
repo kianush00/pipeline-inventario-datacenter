@@ -4017,10 +4017,6 @@ class TestEnsureTaxonomyQACases:
 
         config.extract_csv_value = mock_extract
 
-        mock_machine_type_col = MagicMock()
-        mock_machine_type_col.cluster_host_types = ["hypervisor"]
-        config.csv_columns = {"machine_type": mock_machine_type_col}
-
         rows = [
             {
                 "machine_type": "hypervisor",

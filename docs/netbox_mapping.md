@@ -12,7 +12,7 @@ The YAML is organized into the following sections:
 | --------- | ----------- |
 | `csv_columns` | Glossary of CSV columns consumed by the exporter |
 | `site` | Definition of the single NetBox Site |
-| `cluster_type` | Default ClusterType for VM grouping |
+| `cluster_type` | Fallback ClusterType for clusters without hypervisor OS information |
 | `device_roles` | Canonical list of device roles |
 | `custom_field_definitions` | DDL schema of the Custom Fields in NetBox |
 | `node_types` | DML mapping of native and custom fields by node type |
@@ -28,9 +28,9 @@ Each entry defines a semantic key used by the Python script with the following s
 | ---------- | ----------- | ------------- |
 | `source` | Yes | Exact text name of the column in the CSV. Can include a YAML anchor (`&col_id`) to reuse it in lower sections. |
 | `required` | No | If `true`, the **presence of the header** in the CSV is mandatory. The script aborts if it is missing. Does not validate that the cell value is filled. |
-| `map` | No | Diccionario de traducción de valores puramente enfocado en normalizar el CSV hacia valores aceptados por NetBox (ej. `"Dedicada" → "dedicated"`). Se recomienda incluir mapeos de identidad (e.g., `"active" → "active"`) para soportar CSVs que ya contengan los valores nativos de NetBox en inglés. |
-| `cluster_host_types` | No | Lista de strings (valores normalizados por el `map`, si existe) que indican que el dispositivo actúa como un hipervisor (host de cluster). |
-| `virtual_machine_types` | No | Lista de strings (valores normalizados por el `map`, si existe) que indican que la fila corresponde a una Máquina Virtual en lugar de a un Servidor Físico. |
+| `map` | No | Value translation dictionary used solely to normalize CSV values into values accepted by NetBox (e.g., `"Dedicada" → "dedicated"`). Including identity mappings (e.g., `"active" → "active"`) is recommended so that CSVs already containing native English NetBox values are supported. |
+
+The `machine_type` entry **must** define a `map`. Its normalized values drive the node classification, which is fixed in the exporter: `vm` is a Virtual Machine, `hypervisor` is a physical Device that also acts as a cluster host, and any other mapped value (e.g. `dedicated`) is a physical Device. A value missing from the map rejects the row.
 
 ### Expected Cell Format
 
@@ -80,7 +80,7 @@ This table acts as a data dictionary of the fields the script expects to extract
 | `inventory_uuid` | `UUID` | Unique and deterministic identifier of the node (ideally extracted from DMI or virtual system). Uniqueness is enforced at export time: a UUID repeated in the CSV or in NetBox is not used to identify the node and the row falls back to name resolution (see [architecture](architecture.md#netbox-synchronization-flow)). | `564d...e2f1` |
 | `bios_ver` | `Version BIOS` | Current BIOS/UEFI firmware version. | `2.14.0` |
 | `bios_date` | `Fecha BIOS` | Release or update date of the BIOS. | `2023-01-15` |
-| `status` | `Estado` | Lifecycle status (active, offline, decommissioning). | `Active`, `Offline`, `Decommissioning` |
+| `status` | `Estado` | Lifecycle status. Accepts the Spanish labels mapped in the YAML or the native NetBox values (`active`, `planned`, `staged`, `failed`, `inventory`, `decommissioning`, `offline`). If empty, the node type default applies (`inventory` for Devices, `staged` for VMs). | `Activo`, `Offline`, `Decommissioning` |
 | `environment` | `Entorno` | Deployment environment (Production, QA, Development). | `Production`, `Development` |
 | `rundeck_node` | `Nodo Rundeck` | Indicates if the node was discovered via Rundeck (boolean). | `Yes`, `No` |
 | `notes` | `Notas` | Extensive notes or additional audit metadata (flexible placement). | `Replace disks in Q3` |
@@ -136,7 +136,9 @@ The slug is automatically generated from the name to avoid errors with spaces an
 
 ## Cluster Type (`cluster_type`)
 
-VMs are grouped into Clusters whose name matches the value of the `Cluster` field in the CSV. The `cluster_type` is created automatically if it does not exist.
+Nodes are grouped into Clusters whose name matches the value of the `Cluster` field in the CSV. Each Cluster gets a ClusterType named after the hypervisor OS (`SO Hipervisor`) reported by the `hypervisor` rows of that cluster; these ClusterTypes are created dynamically, one per distinct OS. Two hypervisors of the same cluster reporting different OS abort the run with a configuration error.
+
+The `cluster_type.default` entry is the **fallback** for clusters with no hypervisor OS information. It is always ensured in NetBox (created if missing).
 
 ```yaml
 cluster_type:
@@ -171,8 +173,8 @@ This section **defines the structure** of the Custom Fields in the NetBox databa
 | `name` | Yes | Internal name (slug) of the custom field in NetBox |
 | `label` | Yes | Descriptive name shown in the web interface |
 | `type` | Yes | Data type (see supported types table) |
-| `required` | Yes | If `true`, the field is mandatory in the NetBox DDL schema |
 | `object_types` | Yes | List of NetBox models it applies to (e.g., `dcim.device`) |
+| `required` | No | If `true`, the field is mandatory in the NetBox DDL schema (default: `false`) |
 | `default` | No | Default value at the database level |
 | `choice_set` | No | Valid values. Mandatory if `type` is `select` or `multiselect` |
 | `filter_logic` | No | NetBox filter behavior: `loose` (NetBox default, partial match), `exact` or `disabled`. Applied only when the Custom Field is created; `inventory_uuid` uses `exact` |
@@ -210,8 +212,7 @@ Defines how to **extract** data from the CSV and **map** it to fields in the Net
 | `required` | No | If `true`, the value cannot be empty (fail-fast if missing) |
 | `is_unique` | No | If `true`, an empty string is sanitized to `null` to avoid UNIQUE violations |
 | `cast` | No | Type conversion function |
-| `transform` | No | Structure operation (e.g., `concat_dot`) |
-| `map` | No | Translation dictionary declared in the YAML |
+| `transform` | No | Structure operation (e.g., `concat_dot`). Required when `source` is a list |
 
 ### Available Cast Functions
 
