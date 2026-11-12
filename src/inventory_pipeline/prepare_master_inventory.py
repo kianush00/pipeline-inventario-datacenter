@@ -1,40 +1,40 @@
 """
 prepare_master_inventory.py
 ============================
-Convierte un inventario maestro en formato ODS/XLSX a CSV limpio,
-validando que las columnas definidas en rundeck_header_list.txt aparezcan
-en el header del archivo de entrada con sus nombres exactos.
+Converts a master inventory in ODS/XLSX format into a clean CSV,
+validating that the columns defined in rundeck_header_list.txt appear
+in the header of the input file with their exact names.
 
-El orden de las columnas definidas en rundeck_header_list.txt NO es
-relevante. Pueden existir columnas adicionales en el archivo de
-entrada; éstas se conservan sin tocar.
+The order of the columns defined in rundeck_header_list.txt is NOT
+relevant. The input file may contain additional columns;
+these are kept untouched.
 
-El script permite que el archivo de entrada tenga una fila inicial
-de categorías agrupadas sobre el header real. Si una fila contiene
-todos los nombres definidos en rundeck_header_list.txt exactamente una vez,
-esa fila se considera el header real y las filas anteriores se
-descartan.
+The script allows the input file to have an initial row of
+grouped categories above the real header. If a row contains
+all the names defined in rundeck_header_list.txt exactly once,
+that row is considered the real header and the previous rows are
+discarded.
 
-Si no existe una fila de categorías, la primera fila que contenga
-todos los nombres definidos en rundeck_header_list.txt se considera
-directamente el header real.
+If there is no category row, the first row that contains
+all the names defined in rundeck_header_list.txt is considered
+the real header directly.
 
-Formatos de entrada soportados:
+Supported input formats:
     .ods
     .xlsx
 
-LibreOffice se utiliza para convertir el archivo de entrada a CSV
-antes de realizar las validaciones y el procesamiento.
+LibreOffice is used to convert the input file to CSV
+before performing the validations and the processing.
 
-Uso:
+Usage:
     python -m inventory_pipeline.prepare_master_inventory \
         master_inventory.(ods|xlsx) \
         [prepared_master_inventory.csv] \
         [rundeck_header_list.txt]
 
-Si no se indica la salida, se escribe output/prepared_master_inventory.csv.
-Si no se indica la ruta de rundeck_header_list.txt, se usa
-config/rundeck_header_list.txt (ver inventory_pipeline.paths).
+If the output is not given, output/prepared_master_inventory.csv is written.
+If the rundeck_header_list.txt path is not given,
+config/rundeck_header_list.txt is used (see inventory_pipeline.paths).
 """
 
 import csv
@@ -58,7 +58,7 @@ from inventory_pipeline.paths import (
 )
 
 # ============================================================
-# BUSCAR LIBREOFFICE
+# FIND LIBREOFFICE
 # ============================================================
 
 
@@ -68,13 +68,13 @@ def find_libreoffice() -> str:
         if path:
             return path
     error(
-        "No se encontró LibreOffice.\nSe necesita 'libreoffice' o 'soffice' en el PATH."
+        "LibreOffice was not found.\n'libreoffice' or 'soffice' is required in the PATH."
     )
     return ""
 
 
 # ============================================================
-# CONVERTIR PLANILLA A CSV
+# CONVERT SPREADSHEET TO CSV
 # ============================================================
 
 
@@ -84,7 +84,7 @@ def convert_spreadsheet_to_csv(
     temporary_directory: Path,
 ) -> Path:
     print()
-    print("Convirtiendo archivo de entrada a CSV...")
+    print("Converting input file to CSV...")
 
     command = [
         libreoffice,
@@ -105,7 +105,7 @@ def convert_spreadsheet_to_csv(
 
     if result.returncode != 0:
         error(
-            "LibreOffice no pudo convertir el archivo de entrada.\n\n"
+            "LibreOffice could not convert the input file.\n\n"
             f"stdout:\n{result.stdout}\n\n"
             f"stderr:\n{result.stderr}"
         )
@@ -114,15 +114,15 @@ def convert_spreadsheet_to_csv(
 
     if not converted_csv.is_file():
         error(
-            "LibreOffice terminó sin error, pero no se encontró "
-            f"el CSV generado:\n  {converted_csv}"
+            "LibreOffice finished without error, but the generated "
+            f"CSV was not found:\n  {converted_csv}"
         )
 
     return converted_csv
 
 
 # ============================================================
-# BUSCAR HEADER REAL
+# FIND REAL HEADER
 # ============================================================
 
 
@@ -131,16 +131,16 @@ def find_real_header(
     rundeck_header_list: list[tuple[str, int]],
 ) -> tuple[int, list[str]]:
     """
-    Busca la primera fila que contenga todos los nombres definidos
-    en rundeck_header_list.txt exactamente una vez.
+    Finds the first row that contains all the names defined
+    in rundeck_header_list.txt exactly once.
 
-    Puede haber columnas adicionales que no estén definidas en
+    There may be additional columns that are not defined in
     rundeck_header_list.txt.
 
-    Retorna:
-        (índice_0based_de_la_fila, header)
+    Returns:
+        (0based_row_index, header)
 
-    Si ninguna fila contiene todos los nombres requeridos, aborta.
+    If no row contains all the required names, it aborts.
     """
     required_names = [name for name, _flag in rundeck_header_list]
     required_set = set(required_names)
@@ -155,24 +155,24 @@ def find_real_header(
 
         if duplicated_required:
             error(
-                "La fila candidata a header contiene columnas "
-                "definidas en rundeck_header_list.txt duplicadas:\n"
+                "The candidate header row contains duplicate columns "
+                "defined in rundeck_header_list.txt:\n"
                 + "\n".join(f"  - {name}" for name in duplicated_required)
-                + f"\nFila del CSV temporal: {row_index + 1}"
+                + f"\nRow of the temporary CSV: {row_index + 1}"
             )
 
         return row_index, row
 
     error(
-        "No se encontró ninguna fila que contenga todos los "
-        "nombres de columnas definidos en rundeck_header_list.txt "
-        "exactamente una vez."
+        "No row was found that contains all the "
+        "column names defined in rundeck_header_list.txt "
+        "exactly once."
     )
     return -1, []
 
 
 # ============================================================
-# VALIDAR HEADER Y PROCESAR CSV
+# VALIDATE HEADER AND PROCESS CSV
 # ============================================================
 
 
@@ -182,28 +182,28 @@ def process_csv(
     rundeck_header_list: list[tuple[str, int]],
 ) -> None:
     """
-    Lee el CSV generado por LibreOffice, detecta el header real
-    mediante rundeck_header_list.txt y escribe el CSV de salida limpio.
+    Reads the CSV generated by LibreOffice, detects the real header
+    through rundeck_header_list.txt and writes the clean output CSV.
 
-    Reglas de validación del header:
-    - Puede existir una fila inicial de categorías agrupadas.
-    - La fila real se identifica buscando todos los nombres de
-      rundeck_header_list.txt exactamente.
-    - El orden de los nombres NO importa.
-    - Todos los nombres definidos en rundeck_header_list.txt deben aparecer
-      exactamente una vez en el header real.
-    - Pueden existir columnas adicionales no definidas en
-      rundeck_header_list.txt; éstas se conservan.
-    - Las columnas sin nombre se reportan como un problema.
-    - No se permiten columnas duplicadas en el header real.
-    - El FLAG asociado a cada columna de rundeck_header_list.txt no afecta
-      este proceso.
+    Header validation rules:
+    - There may be an initial row of grouped categories.
+    - The real row is identified by looking for all the names of
+      rundeck_header_list.txt exactly.
+    - The order of the names does NOT matter.
+    - All the names defined in rundeck_header_list.txt must appear
+      exactly once in the real header.
+    - There may be additional columns not defined in
+      rundeck_header_list.txt; these are kept.
+    - Unnamed columns are reported as a problem.
+    - Duplicate columns are not allowed in the real header.
+    - The FLAG associated with each rundeck_header_list.txt column does
+      not affect this process.
     """
     print()
-    print("Procesando CSV...")
+    print("Processing CSV...")
 
     # --------------------------------------------------------
-    # Leer todas las filas del CSV.
+    # Read all the rows of the CSV.
     # --------------------------------------------------------
     try:
         file = source_csv.open(
@@ -213,9 +213,9 @@ def process_csv(
         )
     except OSError as exc:
         error(
-            f"No se pudo abrir el CSV generado por LibreOffice:\n"
+            f"Could not open the CSV generated by LibreOffice:\n"
             f"  {source_csv}\n"
-            f"Motivo: {exc}"
+            f"Reason: {exc}"
         )
 
     try:
@@ -228,30 +228,30 @@ def process_csv(
             rows = list(reader)
     except UnicodeDecodeError as exc:
         error(
-            f"El CSV generado por LibreOffice contiene "
-            f"datos con una codificación inválida:\n"
+            f"The CSV generated by LibreOffice contains "
+            f"data with an invalid encoding:\n"
             f"  {source_csv}\n"
-            f"Motivo: {exc}"
+            f"Reason: {exc}"
         )
     except csv.Error as exc:
         error(
-            f"Error al interpretar el formato CSV generado "
-            f"por LibreOffice:\n"
+            f"Error while interpreting the CSV format generated "
+            f"by LibreOffice:\n"
             f"  {source_csv}\n"
-            f"Motivo: {exc}"
+            f"Reason: {exc}"
         )
 
     # --------------------------------------------------------
-    # Validar cantidad mínima de filas.
+    # Validate the minimum number of rows.
     # --------------------------------------------------------
     if not rows:
-        error("El inventario no contiene ninguna fila.")
+        error("The inventory does not contain any rows.")
 
     # --------------------------------------------------------
-    # Buscar el header real.
+    # Find the real header.
     #
-    # No se asume que la primera fila sea el header.
-    # Puede existir una fila previa de categorías.
+    # The first row is not assumed to be the header.
+    # There may be a previous category row.
     # --------------------------------------------------------
     header_row_index, source_header = find_real_header(
         rows,
@@ -260,15 +260,15 @@ def process_csv(
 
     discarded_rows = header_row_index
 
-    print(f"Fila del header real en el CSV temporal: {header_row_index + 1}")
+    print(f"Row of the real header in the temporary CSV: {header_row_index + 1}")
 
     if discarded_rows > 0:
-        print(f"Filas descartadas antes del header: {discarded_rows}")
+        print(f"Rows discarded before the header: {discarded_rows}")
 
-    print(f"Columnas encontradas en el inventario maestro: {len(source_header)}")
+    print(f"Columns found in the master inventory: {len(source_header)}")
 
     # --------------------------------------------------------
-    # Validar columnas sin nombre.
+    # Validate unnamed columns.
     # --------------------------------------------------------
     unnamed_columns = [
         index + 1 for index, name in enumerate(source_header) if name == ""
@@ -276,13 +276,13 @@ def process_csv(
 
     if unnamed_columns:
         error(
-            "El header del inventario maestro contiene "
-            "columnas sin nombre en las siguientes posiciones:\n"
-            + "\n".join(f"  - posición {position}" for position in unnamed_columns)
+            "The master inventory header contains "
+            "unnamed columns at the following positions:\n"
+            + "\n".join(f"  - position {position}" for position in unnamed_columns)
         )
 
     # --------------------------------------------------------
-    # Validar que no existan columnas duplicadas en el header.
+    # Validate that there are no duplicate columns in the header.
     # --------------------------------------------------------
     seen_headers: set[str] = set()
     duplicated_headers: list[str] = []
@@ -294,20 +294,19 @@ def process_csv(
 
     if duplicated_headers:
         error(
-            "El header del inventario maestro contiene columnas "
-            "duplicadas:\n" + "\n".join(f"  - {name}" for name in duplicated_headers)
+            "The master inventory header contains duplicate "
+            "columns:\n" + "\n".join(f"  - {name}" for name in duplicated_headers)
         )
 
     print(
-        f"Columnas de rundeck_header_list.txt encontradas en el archivo: "
-        f"{len(rundeck_header_list)}"
+        f"rundeck_header_list.txt columns found in the file: {len(rundeck_header_list)}"
     )
 
     # --------------------------------------------------------
-    # Escribir CSV de salida.
+    # Write the output CSV.
     #
-    # Se conserva el header real y todas las columnas adicionales.
-    # Las filas anteriores al header real se descartan.
+    # The real header and all the additional columns are kept.
+    # The rows before the real header are discarded.
     # --------------------------------------------------------
     try:
         with output_csv.open(
@@ -326,12 +325,12 @@ def process_csv(
             writer.writerow([clean_value(v) for v in source_header])
 
             # ------------------------------------------------
-            # Los datos comienzan inmediatamente después del
-            # header real.
+            # The data starts immediately after the
+            # real header.
             #
-            # La numeración se deriva de header_row_index, por
-            # lo que corresponde siempre a la fila original del
-            # CSV generado por LibreOffice.
+            # The numbering is derived from header_row_index, so
+            # it always corresponds to the original row of the
+            # CSV generated by LibreOffice.
             # ------------------------------------------------
             for row_index in range(
                 header_row_index + 1,
@@ -342,17 +341,17 @@ def process_csv(
 
                 if len(row) != len(source_header):
                     error(
-                        f"La fila {row_number} contiene "
-                        f"{len(row)} columnas, pero se esperaban "
-                        f"{len(source_header)}."
+                        f"Row {row_number} contains "
+                        f"{len(row)} columns, but "
+                        f"{len(source_header)} were expected."
                     )
 
                 writer.writerow([clean_value(v) for v in row])
 
     except OSError as exc:
-        error(f"No se pudo escribir el CSV de salida:\n  {output_csv}\nMotivo: {exc}")
+        error(f"Could not write the output CSV:\n  {output_csv}\nReason: {exc}")
     except csv.Error as exc:
-        error(f"Error al escribir el CSV de salida:\n  {output_csv}\nMotivo: {exc}")
+        error(f"Error while writing the output CSV:\n  {output_csv}\nReason: {exc}")
 
 
 # ============================================================
@@ -363,7 +362,7 @@ def process_csv(
 def main() -> None:
     if len(sys.argv) < 2:
         usage(
-            f"Uso: {sys.argv[0]} "
+            f"Usage: {sys.argv[0]} "
             "master_inventory.(ods|xlsx) "
             "[prepared_master_inventory.csv] "
             "[rundeck_header_list.txt]"
@@ -371,27 +370,27 @@ def main() -> None:
 
     if len(sys.argv) > 4:
         usage(
-            f"Cantidad de argumentos inválida.\n"
-            f"Uso: {sys.argv[0]} "
+            f"Invalid number of arguments.\n"
+            f"Usage: {sys.argv[0]} "
             "master_inventory.(ods|xlsx) "
             "[prepared_master_inventory.csv] "
             "[rundeck_header_list.txt]"
         )
 
     # --------------------------------------------------------
-    # Validar archivo de entrada.
+    # Validate the input file.
     # --------------------------------------------------------
     input_path = Path(sys.argv[1])
 
     if not input_path.is_file():
-        error(f"No existe el archivo de entrada:\n  {input_path}")
+        error(f"The input file does not exist:\n  {input_path}")
 
     supported_extensions = {".ods", ".xlsx"}
 
     if input_path.suffix.lower() not in supported_extensions:
         error(
-            "El archivo de entrada debe ser un archivo ODS "
-            "(.ods) o Excel (.xlsx):\n"
+            "The input file must be an ODS (.ods) "
+            "or Excel (.xlsx) file:\n"
             f"  {input_path}"
         )
 
@@ -399,36 +398,34 @@ def main() -> None:
         input_size = input_path.stat().st_size
     except OSError as exc:
         error(
-            "No se pudo obtener el tamaño del archivo de entrada:\n"
-            f"  {input_path}\n"
-            f"Motivo: {exc}"
+            f"Could not get the size of the input file:\n  {input_path}\nReason: {exc}"
         )
 
     if input_size == 0:
-        error(f"El archivo de entrada está vacío (0 bytes):\n  {input_path}")
+        error(f"The input file is empty (0 bytes):\n  {input_path}")
 
     # --------------------------------------------------------
-    # Resolver ruta de salida.
+    # Resolve the output path.
     # --------------------------------------------------------
     output_path = (
         Path(sys.argv[2]) if len(sys.argv) >= 3 else OUTPUT_DIR / PREPARED_CSV_NAME
     )
 
     # --------------------------------------------------------
-    # Validar colisión entre archivo de entrada y salida.
+    # Validate collision between the input and output files.
     # --------------------------------------------------------
     resolved_input = input_path.resolve()
     resolved_output = output_path.resolve()
 
     if resolved_input == resolved_output:
         error(
-            "El archivo de salida no puede ser el mismo archivo "
-            "que el archivo de entrada:\n"
+            "The output file cannot be the same file "
+            "as the input file:\n"
             f"  {output_path}"
         )
 
     # --------------------------------------------------------
-    # Resolver ruta de rundeck_header_list.txt.
+    # Resolve the rundeck_header_list.txt path.
     # --------------------------------------------------------
     rundeck_header_list_path = (
         Path(sys.argv[3]) if len(sys.argv) >= 4 else DEFAULT_HEADER_LIST_PATH
@@ -437,23 +434,23 @@ def main() -> None:
     rundeck_header_list = load_rundeck_header_list(rundeck_header_list_path)
 
     # --------------------------------------------------------
-    # Información.
+    # Information.
     # --------------------------------------------------------
     print()
-    print(f"Archivo de entrada       : {input_path}")
+    print(f"Input file                       : {input_path}")
     print(f"rundeck_header_list.txt          : {rundeck_header_list_path}")
-    print(f"Columnas en rundeck_header_list  : {len(rundeck_header_list)}")
-    print(f"CSV de salida            : {output_path}")
+    print(f"Columns in rundeck_header_list   : {len(rundeck_header_list)}")
+    print(f"Output CSV                       : {output_path}")
 
     # --------------------------------------------------------
-    # Buscar LibreOffice.
+    # Find LibreOffice.
     # --------------------------------------------------------
     libreoffice = find_libreoffice()
 
     # --------------------------------------------------------
-    # Convertir y procesar.
+    # Convert and process.
     # --------------------------------------------------------
-    with tempfile.TemporaryDirectory(prefix="inventario_") as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix="inventory_") as tmp_dir:
         tmp_path = Path(tmp_dir)
 
         converted_csv = convert_spreadsheet_to_csv(
@@ -462,14 +459,14 @@ def main() -> None:
             tmp_path,
         )
 
-        print(f"CSV temporal generado    : {converted_csv.name}")
+        print(f"Temporary CSV generated          : {converted_csv.name}")
 
         # ----------------------------------------------------
-        # Crear un segundo archivo temporal en el mismo
-        # directorio que la salida definitiva.
+        # Create a second temporary file in the same
+        # directory as the final output.
         #
-        # Esto permite reemplazar el archivo final mediante
-        # os.replace() de forma atómica.
+        # This allows replacing the final file through
+        # os.replace() atomically.
         # ----------------------------------------------------
         temporary_output_path: Path | None = None
 
@@ -492,9 +489,9 @@ def main() -> None:
             )
 
             # ------------------------------------------------
-            # El archivo temporal solo reemplaza la salida
-            # definitiva si todo el procesamiento terminó
-            # correctamente.
+            # The temporary file only replaces the final
+            # output if all the processing finished
+            # successfully.
             # ------------------------------------------------
             os.replace(
                 temporary_output_path,
@@ -504,8 +501,8 @@ def main() -> None:
 
         finally:
             # ------------------------------------------------
-            # Si el proceso falló antes del reemplazo, eliminar
-            # el archivo temporal para no dejar residuos.
+            # If the process failed before the replacement, remove
+            # the temporary file so no leftovers remain.
             # ------------------------------------------------
             if temporary_output_path is not None:
                 try:
@@ -514,13 +511,13 @@ def main() -> None:
                     pass
 
     # --------------------------------------------------------
-    # Resultado.
+    # Result.
     # --------------------------------------------------------
     print()
-    print("[OK] Proceso completado.")
+    print("[OK] Process completed.")
     print()
-    print(f"Archivo original : {input_path}")
-    print(f"CSV generado     : {output_path}")
+    print(f"Original file : {input_path}")
+    print(f"Generated CSV : {output_path}")
 
 
 if __name__ == "__main__":

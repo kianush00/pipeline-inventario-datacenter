@@ -1,9 +1,9 @@
-"""Pruebas de integridad de las rutas por defecto definidas en paths.py.
+"""Integrity tests for the default paths defined in paths.py.
 
-Protegen contra refactors que muevan paths.py (rompiendo el cálculo de
-PROJECT_ROOT con parents[2]) o renombren los archivos versionados de config/.
-input/ y output/ no se exige que existan: están ignorados por git y el
-orquestador crea output/ al ejecutarse.
+They protect against refactors that move paths.py (breaking the
+PROJECT_ROOT computation with parents[2]) or rename the versioned files in config/.
+input/ and output/ are not required to exist: they are git-ignored and the
+orchestrator creates output/ when it runs.
 """
 
 from pathlib import Path
@@ -22,7 +22,7 @@ from inventory_pipeline.paths import (
 
 
 def test_project_root_is_repository_root() -> None:
-    """PROJECT_ROOT debe apuntar a la raíz del repo, no a src/ ni al paquete."""
+    """PROJECT_ROOT must point to the repo root, not to src/ or the package."""
     assert (PROJECT_ROOT / "pyproject.toml").is_file()
     assert (PROJECT_ROOT / "src" / "inventory_pipeline" / "paths.py").is_file()
 
@@ -33,8 +33,8 @@ def test_project_root_is_repository_root() -> None:
     ids=["netbox_mapping", "rundeck_header_list"],
 )
 def test_versioned_config_files_exist(versioned_file: Path) -> None:
-    """Los archivos de configuración versionados deben existir en config/."""
-    assert versioned_file.is_file(), f"No existe el archivo esperado: {versioned_file}"
+    """The versioned configuration files must exist in config/."""
+    assert versioned_file.is_file(), f"Expected file does not exist: {versioned_file}"
     assert versioned_file.parent == CONFIG_DIR
 
 
@@ -46,5 +46,5 @@ def test_versioned_config_files_exist(versioned_file: Path) -> None:
 def test_default_paths_are_direct_children_of_project_root(
     project_path: Path,
 ) -> None:
-    """Las rutas por defecto cuelgan directamente de la raíz del repo, aunque aún no existan."""
+    """The default paths hang directly off the repo root, even if they do not exist yet."""
     assert project_path.parent == PROJECT_ROOT

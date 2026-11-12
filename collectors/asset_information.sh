@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 ###############################################################################
-# INVENTARIO DATACENTER
+# DATACENTER INVENTORY
 ###############################################################################
 
 set -Eeuo pipefail
@@ -13,8 +13,8 @@ export LANG=C
 trap '
 rc=$?
 printf "[ERROR] Exit Code: %s\n" "$rc"
-printf "[ERROR] Linea    : %s\n" "$LINENO"
-printf "[ERROR] Comando  : %s\n" "$BASH_COMMAND"
+printf "[ERROR] Line     : %s\n" "$LINENO"
+printf "[ERROR] Command  : %s\n" "$BASH_COMMAND"
 exit "$rc"
 ' ERR
 
@@ -31,7 +31,7 @@ case "$OUTPUT_FORMAT" in
     text|raw-csv)
         ;;
     *)
-        echo "[ERROR] Formato de salida no valido: $OUTPUT_FORMAT" >&2
+        echo "[ERROR] Invalid output format: $OUTPUT_FORMAT" >&2
         exit 1
         ;;
 esac
@@ -39,12 +39,12 @@ esac
 
 
 ###############################################################################
-# Funciones auxiliares
+# Helper functions
 ###############################################################################
 
 value_or_na() {
-    # Normaliza el texto (elimina saltos de linea, tabulaciones y espacios 
-    # extra) y devuelve "N/A" si la cadena queda vacia.
+    # Normalizes the text (removes line breaks, tabs and extra
+    # spaces) and returns "N/A" if the string ends up empty.
     local cleaned
     cleaned=$(printf '%s\n' "$1" | tr '\t\r\n' '   ' | sed 's/  */ /g; s/^ *//; s/ *$//')
 
@@ -56,14 +56,14 @@ value_or_na() {
 }
 
 is_positive_int() {
-    # Comprueba si el valor es un entero estrictamente positivo.
-    # NOTA: no aplicar fuera de condiciones (if), o puede disparar errexit
-    # en script reforzado.
+    # Checks whether the value is a strictly positive integer.
+    # NOTE: do not use outside conditions (if), or it may trigger errexit
+    # in a hardened script.
     [[ "$1" =~ ^[0-9]+$ ]] && (( 10#$1 > 0 ))
 }
 
 with_timeout() {
-    # Ejecuta un comando con timeout si la herramienta 'timeout' esta disponible
+    # Runs a command with a timeout if the 'timeout' tool is available
     if exists timeout; then
         timeout 15 "$@"
     else
@@ -72,34 +72,34 @@ with_timeout() {
 }
 
 safe_capture() {
-    # Ejecuta un comando, captura su stdout, y nunca dispara errexit si falla.
-    # NOTA: no aplicar dentro de pipes, solamente aplicar a comandos unicos que
-    # puedan propagar algun codigo de error.
+    # Runs a command, captures its stdout, and never triggers errexit if it fails.
+    # NOTE: do not use inside pipes, only apply to single commands that
+    # may propagate some error code.
     "$@" 2>/dev/null || true
 }
 
 exists() {
-    # Comprueba si un comando existe (desde el PATH del usuario)
-    # NOTA: no aplicar fuera de condiciones (if), o puede disparar errexit
-    # en script reforzado.
+    # Checks whether a command exists (from the user's PATH)
+    # NOTE: do not use outside conditions (if), or it may trigger errexit
+    # in a hardened script.
     command -v "$1" >/dev/null 2>&1
 }
 
 find_command_user() {
-    # Busca un comando en PATH o en rutas conocidas, verificando que sea
-    # ejecutable POR EL USUARIO ACTUAL (sin sudo). Usar para comandos que el
-    # script invoca directamente, sin pasar por sudo.
+    # Looks for a command in PATH or in known paths, verifying that it is
+    # executable BY THE CURRENT USER (without sudo). Use for commands that the
+    # script invokes directly, without going through sudo.
     local cmd="$1"
     local path
     
-    # 1) Atajo rapido: PATH del usuario actual
+    # 1) Quick shortcut: PATH of the current user
     path=$(safe_capture command -v "$cmd")
     if [[ -n "$path" ]]; then
         echo "$path"
         return 0
     fi
     
-    # 2) Rutas conocidas por FS
+    # 2) Known FS paths
     local dirs="/sbin /usr/sbin /bin /usr/bin /usr/local/sbin /usr/local/bin"
     local dir
     for dir in $dirs; do
@@ -112,14 +112,14 @@ find_command_user() {
 }
 
 find_command_privileged() {
-    # Busca un comando en rutas conocidas para uso EXCLUSIVO via sudo.
-    # Primero intenta resolverlo por PATH (command -v), como atajo rapido para
-    # el caso comun (binario con permisos normales, ej. 0755). Si no aparece
-    # ahi, cae a una busqueda por EXISTENCIA (-f), no por -x, en rutas
-    # conocidas (esto es lo que cubre el caso de binarios 0700 root-only,
-    # donde el usuario Rundeck no tiene bit de ejecucion pero sudo si podra
-    # ejecutarlos). La responsabilidad de que el usuario Rundeck pueda invocar
-    # estos binarios recae en sudoers (NOPASSWD), no en los permisos del archivo.
+    # Looks for a command in known paths for EXCLUSIVE use via sudo.
+    # It first tries to resolve it through PATH (command -v), as a quick shortcut for
+    # the common case (binary with regular permissions, e.g. 0755). If it does not show up
+    # there, it falls back to a search by EXISTENCE (-f), not by -x, in known
+    # paths (this is what covers the case of 0700 root-only binaries,
+    # where the Rundeck user has no execute bit but sudo will be able to
+    # run them). The responsibility for the Rundeck user being able to invoke
+    # these binaries lies with sudoers (NOPASSWD), not with the file permissions.
     if ! exists sudo; then
         return 0
     fi
@@ -128,17 +128,17 @@ find_command_privileged() {
     shift
     local path
     
-    # 1) Atajo rapido: PATH del usuario actual (cubre el caso 0755 comun)
+    # 1) Quick shortcut: PATH of the current user (covers the common 0755 case)
     path=$(safe_capture command -v "$cmd")
     if [[ -n "$path" ]]; then
         echo "$path"
         return 0
     fi
     
-    # 2) Rutas conocidas por FS: chequeo de EXISTENCIA, no de -x
-    #    (permite detectar binarios 0700 root-only que solo sudo puede correr)
+    # 2) Known FS paths: EXISTENCE check, not -x
+    #    (allows detecting 0700 root-only binaries that only sudo can run)
     local dirs="/sbin /usr/sbin /bin /usr/bin /usr/local/sbin /usr/local/bin"
-    # Rutas extra especificas, si se pasan como argumentos adicionales
+    # Specific extra paths, if passed as additional arguments
     local dir
     for dir in $dirs "$@"; do
         if [[ -f "$dir/$cmd" ]]; then
@@ -150,9 +150,9 @@ find_command_privileged() {
 }
 
 ###############################################################################
-# VARIABLES GLOBALES
-# Comandos que el usuario Rundeck no reconoce desde su PATH, por lo tanto
-# debe identificar su ruta absoluta
+# GLOBAL VARIABLES
+# Commands that the Rundeck user does not recognize from its PATH, so
+# their absolute path must be identified
 ###############################################################################
 
 IP_CMD=$(find_command_user ip)
@@ -164,7 +164,7 @@ ROUTE_CMD=$(find_command_user route)
 LSBRELEASE_CMD=$(find_command_user lsb_release)
 
 ###############################################################################
-# Leer archivo ubicado en /sys
+# Read a file located in /sys
 ###############################################################################
 
 read_sysfs() {
@@ -180,7 +180,7 @@ read_sysfs() {
 }
 
 ###############################################################################
-# Normalizar fabricante
+# Normalize manufacturer
 ###############################################################################
 
 normalize_manufacturer() {
@@ -209,7 +209,7 @@ normalize_manufacturer() {
 }
 
 ###############################################################################
-# Obtener informacion especifica via DMI (sysfs con fallback a dmidecode)
+# Get specific information via DMI (sysfs with fallback to dmidecode)
 ###############################################################################
 
 get_dmi() {
@@ -250,17 +250,17 @@ get_dmi() {
             ;;
     esac
 
-    # Leer archivo sysfs
+    # Read the sysfs file
     if [[ -e "$sysfs_file" ]]; then
         value=$(read_sysfs "$sysfs_file")
     fi
 
-    # Leer salida de dmidecode
+    # Read the dmidecode output
     if [[ -z "$value" && -n "$DMIDECODE_CMD" ]]; then
         value=$(safe_capture sudo "$DMIDECODE_CMD" -s "$field")
     fi
 
-    # En caso de que $1 sea marca, normalizar
+    # If $1 is the manufacturer, normalize it
     if [[ "$field" == "system-manufacturer" ]]; then
         value=$(normalize_manufacturer "$value")
     fi
@@ -269,7 +269,7 @@ get_dmi() {
 }
 
 ###############################################################################
-# Obtener y validar el numero de serie del sistema desde SMBIOS.
+# Get and validate the system serial number from SMBIOS.
 ###############################################################################
 get_system_serial() {
     local serial
@@ -287,14 +287,14 @@ get_system_serial() {
 }
 
 ###############################################################################
-# Obtener el Part Number (P/N) o SKU Number del sistema físico.
+# Get the Part Number (P/N) or SKU Number of the physical system.
 ###############################################################################
 get_part_number() {
     local pn
 
     pn=$(get_dmi system-sku-number)
 
-    # Fallback para kernels antiguos o dmidecode desactualizados que no soportan product_sku
+    # Fallback for old kernels or outdated dmidecode versions that do not support product_sku
     if [[ -z "$pn" && -n "$DMIDECODE_CMD" ]]; then
         pn=$(safe_capture sudo "$DMIDECODE_CMD" -t 1 -t 2 -t 3 | awk '
             /SKU Number|Part Number/ {
@@ -308,7 +308,7 @@ get_part_number() {
         ')
     fi
 
-    # Limpieza final de espacios o saltos de linea
+    # Final cleanup of spaces or line breaks
     if [[ -n "$pn" ]]; then
         echo "$pn" | sed 's/^[ \t]*//;s/[ \t]*$//'
     else
@@ -317,31 +317,31 @@ get_part_number() {
 }
 
 ###############################################################################
-# Obtener y validar el UUID del sistema, con fallbacks para hardware antiguo.
+# Get and validate the system UUID, with fallbacks for old hardware.
 ###############################################################################
 get_system_uuid() {
     local uuid
     uuid=$(get_dmi system-uuid)
 
-    # Convertir a minusculas de forma compatible con bash 3.0
+    # Convert to lowercase in a bash 3.0 compatible way
     if [[ -n "$uuid" ]]; then
         uuid=$(echo "$uuid" | tr '[:upper:]' '[:lower:]')
     fi
 
-    # Filtrar valores invalidos devueltos por DMI defectuosos
+    # Filter invalid values returned by faulty DMI implementations
     case "$uuid" in
         ""|"not settable"|"not present"|"none"|"unknown"|"to be filled by o.e.m."|"03000200-0400-0500-0006-000700080009"|"00000000-0000-0000-0000-000000000000"|"ffffffff-ffff-ffff-ffff-ffffffffffff")
             uuid=""
             ;;
     esac
 
-    # Si es valido, retornarlo
+    # If it is valid, return it
     if [[ -n "$uuid" ]]; then
         echo "$uuid"
         return
     fi
 
-    # Fallback 1: dbus machine-id (presente en CentOS 4+)
+    # Fallback 1: dbus machine-id (present in CentOS 4+)
     if [[ -r /var/lib/dbus/machine-id ]]; then
         uuid=$(safe_capture cat /var/lib/dbus/machine-id)
         if [[ -n "$uuid" && ${#uuid} -eq 32 ]]; then
@@ -350,7 +350,7 @@ get_system_uuid() {
         fi
     fi
 
-    # Fallback 2: systemd machine-id (distros modernas)
+    # Fallback 2: systemd machine-id (modern distros)
     if [[ -r /etc/machine-id ]]; then
         uuid=$(safe_capture cat /etc/machine-id)
         if [[ -n "$uuid" && ${#uuid} -eq 32 ]]; then
@@ -359,8 +359,8 @@ get_system_uuid() {
         fi
     fi
 
-    # Fallback 3: Generacion de un UUID seudo-estable basado en MAC y Hostname
-    # md5sum esta en coreutils, awk es mandatorio.
+    # Fallback 3: Generation of a pseudo-stable UUID based on MAC and Hostname
+    # md5sum is in coreutils, awk is mandatory.
     local mac
     mac=$(get_mac_address)
     local hostname
@@ -376,12 +376,12 @@ get_system_uuid() {
 }
 
 ###############################################################################
-# Deteccion tipo de maquina
+# Machine type detection
 ###############################################################################
 
 is_vm_signature() {
-    # Recibe una cadena en minusculas y determina si contiene alguna
-    # firma conocida de hipervisor/VM (manufacturer, product name, bios vendor, etc).
+    # Receives a lowercase string and determines whether it contains any
+    # known hypervisor/VM signature (manufacturer, product name, bios vendor, etc).
     local str="$1"
     case "$str" in
         *virtualbox*|*vmware*|*kvm*|*qemu*|*bochs*|*hyper-v*|*hyperv*| \
@@ -395,26 +395,26 @@ is_vm_signature() {
 }
 
 is_kvm_hypervisor() {
-    # 1. Validacion de socket (Bash builtin): ultra rapido, sin forks ni subprocesos.
+    # 1. Socket validation (Bash builtin): ultra fast, without forks or subprocesses.
     if [[ -S /var/run/libvirt/libvirt-sock || -S /run/libvirt/libvirt-sock ]]; then
         return 0
     fi
 
-    # 2. Validacion de demonio systemd (1 subproceso): muy rapido, detecta libvirtd activo.
+    # 2. systemd daemon validation (1 subprocess): very fast, detects an active libvirtd.
     if exists systemctl && systemctl is-active --quiet libvirtd 2>/dev/null; then
         return 0
     fi
 
-    # 3. KVM/libvirt tradicional via comando (2 subprocesos + riesgo de timeout/permisos).
+    # 3. Traditional KVM/libvirt via command (2 subprocesses + timeout/permissions risk).
     if exists virsh && with_timeout virsh -c qemu:///system list --all >/dev/null 2>&1; then
         return 0
     fi
 
-    # 4. Busqueda de procesos en crudo (2 subprocesos): atrapa KVMs sin libvirt.
+    # 4. Raw process search (2 subprocesses): catches KVMs without libvirt.
     # shellcheck disable=SC2009
-    # Se usa grep >/dev/null (no -q) para consumir toda la salida de ps: con pipefail,
-    # un grep -q que cierra el pipe antes de tiempo puede dar 141 (SIGPIPE) a ps y
-    # producir un falso negativo.
+    # grep >/dev/null (not -q) is used to consume the whole output of ps: with pipefail,
+    # a grep -q that closes the pipe early can give ps a 141 (SIGPIPE) and
+    # produce a false negative.
     if ps -e -o comm= 2>/dev/null | grep '^qemu-system-' >/dev/null; then
         return 0
     fi
@@ -423,9 +423,9 @@ is_kvm_hypervisor() {
 }
 
 is_hypervisor() {
-    # NOTA: si el sistema no tiene el comando timeout (coreutils viejo) y 
-    # virsh/xl cuelgan por un daemon no responsivo, el script podria quedarse 
-    # colgado indefinidamente. Riesgo bajo en la practica.
+    # NOTE: if the system lacks the timeout command (old coreutils) and
+    # virsh/xl hang because of an unresponsive daemon, the script could stay
+    # hung indefinitely. Low risk in practice.
     
     # Proxmox VE
     if [[ -n "$PVEVERSION_CMD" ]]; then
@@ -456,12 +456,12 @@ is_hypervisor() {
 }
 
 detect_guest_type() {
-    # Imprime "VM" o "Contenedor" si el sistema corre virtualizado/contenerizado;
-    # no imprime nada si no se detecta virtualizacion (equipo fisico).
-    # Debe evaluarse ANTES que is_hypervisor: un guest puede exponer sockets
-    # libvirt, procesos qemu, etc. (nested virt, herramientas) y no es un host fisico.
+    # Prints "VM" or "Container" if the system runs virtualized/containerized;
+    # prints nothing if no virtualization is detected (physical machine).
+    # It must be evaluated BEFORE is_hypervisor: a guest can expose libvirt
+    # sockets, qemu processes, etc. (nested virt, tools) and is not a physical host.
 
-    # Deteccion de VM/contenedor mediante systemd (resultado autoritativo)
+    # VM/container detection through systemd (authoritative result)
     if exists systemd-detect-virt; then
         local virt
         virt=$(safe_capture systemd-detect-virt)
@@ -472,7 +472,7 @@ detect_guest_type() {
 
         case "$virt" in
             docker|podman|container-other|lxc|lxc-libvirt|openvz|systemd-nspawn)
-                echo "Contenedor"
+                echo "Container"
                 ;;
             *)
                 echo "VM"
@@ -481,18 +481,18 @@ detect_guest_type() {
         return 0
     fi
 
-    # Contenedores sin systemd
+    # Containers without systemd
     if [[ -f /.dockerenv || -f /run/.containerenv ]]; then
-        echo "Contenedor"
+        echo "Container"
         return 0
     fi
 
     if grep -qa '\(docker\|lxc\|container\|kubepods\)' /proc/1/cgroup 2>/dev/null; then
-        echo "Contenedor"
+        echo "Container"
         return 0
     fi
 
-    # Deteccion de VM mediante DMI (sysfs con fallback a dmidecode via get_dmi)
+    # VM detection through DMI (sysfs with fallback to dmidecode via get_dmi)
     if [[ -r /sys/class/dmi/id/product_name || -n "$DMIDECODE_CMD" ]]; then
         local product_name sys_vendor bios_vendor
         product_name=$(get_dmi system-product-name | tr '[:upper:]' '[:lower:]')
@@ -505,14 +505,14 @@ detect_guest_type() {
         return 0
     fi
 
-    # Ultimo recurso: flag del CPU
+    # Last resort: CPU flag
     if grep -qi hypervisor /proc/cpuinfo 2>/dev/null; then
         echo "VM"
     fi
 }
 
 get_machine_type() {
-    # Prioridad: guest (VM/Contenedor) > Hipervisor > Dedicada
+    # Priority: guest (VM/Container) > Hypervisor > Dedicated
     local guest_type
     guest_type=$(detect_guest_type)
 
@@ -522,15 +522,15 @@ get_machine_type() {
     fi
 
     if is_hypervisor; then
-        echo "Hipervisor"
+        echo "Hypervisor"
         return 0
     fi
 
-    echo "Dedicada"
+    echo "Dedicated"
 }
 
 ###############################################################################
-# Sistema Operativo
+# Operating System
 ###############################################################################
 
 normalize_os_name() {
@@ -593,10 +593,10 @@ normalize_os_name() {
 }
 
 get_hypervisor_info() {
-    # Detecta software/plataforma de hipervisor.
-    # Devuelve "Nombre<US>Version", cadena vacia si no aplica.
+    # Detects hypervisor software/platform.
+    # Returns "Name<US>Version", empty string if not applicable.
 
-    # Proxmox VE sobre Debian
+    # Proxmox VE on top of Debian
     if [[ -n "$PVEVERSION_CMD" ]]; then
         local raw ver
         raw=$(safe_capture with_timeout "$PVEVERSION_CMD")
@@ -658,7 +658,7 @@ get_os_release_field() {
     fi
 
     value="${line#*=}"
-    # Quitar comillas simples o dobles envolventes, si existen
+    # Strip wrapping single or double quotes, if any
     value="${value%\"}"
     value="${value#\"}"
     value="${value%\'}"
@@ -668,25 +668,25 @@ get_os_release_field() {
 }
 
 parse_release_file() {
-    # Parsea archivos tipo:
+    # Parses files such as:
     #   "CentOS Linux release 7.3.1611 (Core)"  -> "CentOS Linux<US>7.3.1611"
     #   "CentOS release 6.10 (Final)"            -> "CentOS<US>6.10"
     #   "Red Hat Enterprise Linux Server release 5.11 (Tikanga)" -> "Red Hat Enterprise Linux Server<US>5.11"
-    # Logica:
-    #   - Elimina la palabra "release" y todo lo que venga entre parentesis
-    #   - El ultimo token resultante es la version
-    #   - El resto es el nombre
+    # Logic:
+    #   - Removes the word "release" and everything between parentheses
+    #   - The last resulting token is the version
+    #   - The rest is the name
     local file="$1"
     local result
     result=$(safe_capture awk '
         NR == 1 {
-            # Eliminar " (....)" al final
+            # Remove " (....)" at the end
             sub(/ *\([^)]*\)/, "")
-            # Eliminar la palabra "release" (con espacios alrededor)
+            # Remove the word "release" (with surrounding spaces)
             sub(/ release /, " ")
-            # Eliminar espacios sobrantes al inicio y al final
+            # Remove leftover spaces at the start and at the end
             gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-            # El ultimo campo es la version, el resto es el nombre
+            # The last field is the version, the rest is the name
             version = $NF
             name = ""
             for (i = 1; i < NF; i++) {
@@ -699,42 +699,42 @@ parse_release_file() {
 }
 
 get_os_info() {
-    # Detecta SO y version en un solo lugar. Devuelve "SO<US>VERSION".
-    # Si el nodo es hipervisor (ej. Proxmox), agrega nombre/version del
-    # hipervisor separados por coma: "Debian, Proxmox<US>11, 7.4-3"
-    local so=""
-    local version_so=""
+    # Detects OS and version in a single place. Returns "OS<US>VERSION".
+    # If the node is a hypervisor (e.g. Proxmox), it appends the hypervisor
+    # name/version separated by a comma: "Debian, Proxmox<US>11, 7.4-3"
+    local os_name=""
+    local os_version=""
     if [[ -f /etc/redhat-release ]]; then
-        IFS=$'\x1f' read -r so version_so <<< "$(parse_release_file /etc/redhat-release)"
-        so=$(normalize_os_name "$so")
+        IFS=$'\x1f' read -r os_name os_version <<< "$(parse_release_file /etc/redhat-release)"
+        os_name=$(normalize_os_name "$os_name")
     elif [[ -f /etc/centos-release ]]; then
-        IFS=$'\x1f' read -r so version_so <<< "$(parse_release_file /etc/centos-release)"
-        so=$(normalize_os_name "$so")
+        IFS=$'\x1f' read -r os_name os_version <<< "$(parse_release_file /etc/centos-release)"
+        os_name=$(normalize_os_name "$os_name")
     elif [[ -f /etc/os-release ]]; then
         local name_raw version_id_raw version_raw
         name_raw=$(get_os_release_field "NAME")
         version_id_raw=$(get_os_release_field "VERSION_ID")
         version_raw=$(get_os_release_field "VERSION")
-        so=$(normalize_os_name "$name_raw")
-        if [[ "$so" == "Debian" && -f /etc/debian_version ]]; then
-            version_so=$(safe_capture cat /etc/debian_version)
-        elif [[ "$so" == "Ubuntu" ]]; then
-            version_so="${version_raw%% *}"
+        os_name=$(normalize_os_name "$name_raw")
+        if [[ "$os_name" == "Debian" && -f /etc/debian_version ]]; then
+            os_version=$(safe_capture cat /etc/debian_version)
+        elif [[ "$os_name" == "Ubuntu" ]]; then
+            os_version="${version_raw%% *}"
         else
-            version_so="${version_id_raw:-${version_raw:-N/A}}"
+            os_version="${version_id_raw:-${version_raw:-N/A}}"
         fi
     elif [[ -n "$LSBRELEASE_CMD" ]]; then
-        so=$(safe_capture "$LSBRELEASE_CMD" -si)
-        version_so=$(safe_capture "$LSBRELEASE_CMD" -sr)
+        os_name=$(safe_capture "$LSBRELEASE_CMD" -si)
+        os_version=$(safe_capture "$LSBRELEASE_CMD" -sr)
     elif [[ -f /etc/debian_version ]]; then
-        so="Debian"
-        version_so=$(safe_capture cat /etc/debian_version)
+        os_name="Debian"
+        os_version=$(safe_capture cat /etc/debian_version)
     elif [[ -f /etc/system-release ]]; then
-        IFS=$'\x1f' read -r so version_so <<< "$(parse_release_file /etc/system-release)"
-        so=$(normalize_os_name "$so")
+        IFS=$'\x1f' read -r os_name os_version <<< "$(parse_release_file /etc/system-release)"
+        os_name=$(normalize_os_name "$os_name")
     else
-        so=$(safe_capture uname -s)
-        version_so=$(safe_capture uname -r)
+        os_name=$(safe_capture uname -s)
+        os_version=$(safe_capture uname -r)
     fi
 
     local hv_info hv_name hv_version
@@ -742,11 +742,11 @@ get_os_info() {
     if [[ -n "$hv_info" ]]; then
         hv_name="${hv_info%%$'\x1f'*}"
         hv_version="${hv_info#*$'\x1f'}"
-        so="${so}, ${hv_name}"
-        version_so="${version_so}, ${hv_version}"
+        os_name="${os_name}, ${hv_name}"
+        os_version="${os_version}, ${hv_version}"
     fi
 
-    printf '%s\x1f%s' "$so" "$version_so"
+    printf '%s\x1f%s' "$os_name" "$os_version"
 }
 
 get_host_os_name() {
@@ -780,15 +780,15 @@ get_hypervisor_os_version() {
 }
 
 ###############################################################################
-# Fuentes de topologia CPU (lscpu / /proc/cpuinfo)
+# CPU topology sources (lscpu / /proc/cpuinfo)
 ###############################################################################
 
 get_lscpu_field() {
-    # Devuelve el valor del primer campo de lscpu cuyo nombre coincida
-    # exactamente con alguno de los recibidos ($1, separados por '|').
-    # La coincidencia es exacta (no por prefijo) para no confundir
-    # "Socket(s)" con "Socket(s) per book" (s390x), y tolera la indentacion
-    # jerarquica de util-linux >= 2.37 ("    Core(s) per socket:  16").
+    # Returns the value of the first lscpu field whose name matches
+    # exactly any of the received ones ($1, separated by '|').
+    # The match is exact (not by prefix) so as not to confuse
+    # "Socket(s)" with "Socket(s) per book" (s390x), and it tolerates the hierarchical
+    # indentation of util-linux >= 2.37 ("    Core(s) per socket:  16").
     if ! exists lscpu; then
         return 0
     fi
@@ -812,9 +812,9 @@ get_lscpu_field() {
 }
 
 get_cpuinfo_field() {
-    # Devuelve el valor de la primera aparicion del campo $1 en /proc/cpuinfo.
-    # En x86 los campos por paquete fisico ("cpu cores", "siblings") se
-    # repiten identicos en cada procesador logico, basta con el primero.
+    # Returns the value of the first occurrence of the field $1 in /proc/cpuinfo.
+    # On x86 the per-physical-package fields ("cpu cores", "siblings") are
+    # repeated identically in every logical processor, the first one is enough.
     if [[ ! -r /proc/cpuinfo ]]; then
         return 0
     fi
@@ -834,7 +834,7 @@ get_cpuinfo_field() {
 }
 
 get_cpu_logical_total() {
-    # Total de CPUs logicas visibles por el sistema operativo.
+    # Total logical CPUs visible to the operating system.
     local total
     total=$(get_lscpu_field "CPU(s)")
     if ! is_positive_int "$total" && [[ -r /proc/cpuinfo ]]; then
@@ -844,10 +844,10 @@ get_cpu_logical_total() {
 }
 
 per_socket_from_total() {
-    # Reparte un total del sistema ($1) entre los sockets ($2). Es el ultimo
-    # recurso cuando no hay topologia expuesta (VMs con CPUID recortado):
-    # si el reparto no es exacto se trunca, y si da 0 no se emite valor
-    # para no reportar una cifra inventada.
+    # Splits a system total ($1) among the sockets ($2). It is the last
+    # resort when there is no exposed topology (VMs with trimmed CPUID):
+    # if the split is not exact it is truncated, and if it gives 0 no value
+    # is emitted so as not to report a made-up figure.
     local total="$1" sockets="$2"
     if is_positive_int "$total" && is_positive_int "$sockets" && (( total >= sockets )); then
         echo $(( total / sockets ))
@@ -855,7 +855,7 @@ per_socket_from_total() {
 }
 
 ###############################################################################
-# Modelo CPU
+# CPU model
 ###############################################################################
 
 get_cpu_model() {
@@ -868,12 +868,12 @@ get_cpu_model() {
 }
 
 ###############################################################################
-# Sockets CPU
+# CPU sockets
 ###############################################################################
 
 get_cpu_sockets() {
-    # Se calcula antes que cores/threads: ambos lo usan como divisor de
-    # ultimo recurso. En ARM lscpu puede reportar "Socket(s): -".
+    # It is computed before cores/threads: both use it as a last-resort
+    # divisor. On ARM lscpu can report "Socket(s): -".
     local sockets
     sockets=$(get_lscpu_field "Socket(s)|CPU socket(s)")
     if ! is_positive_int "$sockets" && [[ -r /proc/cpuinfo ]]; then
@@ -886,39 +886,39 @@ get_cpu_sockets() {
 }
 
 ###############################################################################
-# Cores CPU (por socket)
+# CPU cores (per socket)
 ###############################################################################
 
 get_cpu_cores() {
-    # Cores fisicos POR SOCKET (contrato de la columna "Cores (por socket)").
-    # $1: sockets detectados, usado solo como divisor de ultimo recurso.
+    # Physical cores PER SOCKET (contract of the "Cores (per socket)" column).
+    # $1: detected sockets, used only as a last-resort divisor.
     local sockets="$1" cores
     cores=$(get_lscpu_field "Core(s) per socket|Core(s) per cluster")
     if ! is_positive_int "$cores"; then
-        # x86: "cpu cores" ya es por paquete fisico
+        # x86: "cpu cores" is already per physical package
         cores=$(get_cpuinfo_field "cpu cores")
     fi
     if ! is_positive_int "$cores"; then
-        # Sin topologia expuesta se asume 1 thread por core (caso tipico de VM)
+        # Without exposed topology 1 thread per core is assumed (typical VM case)
         cores=$(per_socket_from_total "$(get_cpu_logical_total)" "$sockets")
     fi
     echo "$cores"
 }
 
 ###############################################################################
-# Threads CPU (por socket)
+# CPU threads (per socket)
 ###############################################################################
 
 get_cpu_threads() {
-    # Threads logicos POR SOCKET (contrato de la columna "Threads (por socket)").
-    # $1: sockets detectados, $2: cores por socket ya calculados.
+    # Logical threads PER SOCKET (contract of the "Threads (per socket)" column).
+    # $1: detected sockets, $2: cores per socket already computed.
     local sockets="$1" cores="$2" threads="" threads_per_core
     threads_per_core=$(get_lscpu_field "Thread(s) per core")
     if is_positive_int "$threads_per_core" && is_positive_int "$cores"; then
         threads=$(( threads_per_core * cores ))
     fi
     if ! is_positive_int "$threads"; then
-        # x86: "siblings" son las CPUs logicas por paquete fisico
+        # x86: "siblings" are the logical CPUs per physical package
         threads=$(get_cpuinfo_field "siblings")
     fi
     if ! is_positive_int "$threads"; then
@@ -928,7 +928,7 @@ get_cpu_threads() {
 }
 
 ###############################################################################
-# Memoria
+# Memory
 ###############################################################################
 
 get_ram_gb() {
@@ -942,8 +942,8 @@ get_ram_gb() {
 }
 
 ###############################################################################
-# Determina si un dispositivo de /sys/block corresponde a un disco fisico/virtual
-# valido (excluye CD-ROM, RAID software, LVM, loop, RAM, etc.)
+# Determines whether a /sys/block device corresponds to a valid physical/virtual
+# disk (excludes CD-ROM, software RAID, LVM, loop, RAM, etc.)
 ###############################################################################
 
 is_real_disk() {
@@ -951,24 +951,24 @@ is_real_disk() {
     local dev
     dev=$(basename "$d")
 
-    # Descartar dispositivos virtuales conocidos por nombre
+    # Discard virtual devices known by name
     case "$dev" in
         loop*|ram*|fd*|zram*|sr*|md*|dm-*|nbd*|rbd*|nvme*c*n*)
             return 1
             ;;
     esac
 
-    # Ignorar particiones (por si se pasa /sys/block/nvme0n1p1 o sda1)
+    # Ignore partitions (in case /sys/block/nvme0n1p1 or sda1 is passed)
     if [[ -f "$d/partition" ]]; then
         return 1
     fi
 
-    # Si el dispositivo tiene sub-dispositivos (slaves), es virtual (RAID, LVM, Multipath, etc.)
+    # If the device has sub-devices (slaves), it is virtual (RAID, LVM, Multipath, etc.)
     if [[ -d "$d/slaves" && "$(safe_capture ls -A "$d/slaves")" ]]; then
         return 1
     fi
 
-    # Ignorar dispositivos de tamano 0 (lectores vacios, interfaces sin disco)
+    # Ignore devices of size 0 (empty readers, interfaces without a disk)
     if [[ -f "$d/size" ]]; then
         local size
         size=$(safe_capture cat "$d/size")
@@ -977,7 +977,7 @@ is_real_disk() {
         fi
     fi
 
-    # Ignorar CD/DVD u otros tipos SCSI no-disco (Tipo 5 = CD-ROM)
+    # Ignore CD/DVD or other non-disk SCSI types (Type 5 = CD-ROM)
     if [[ -r "$d/device/type" ]]; then
         local type
         type=$(safe_capture cat "$d/device/type")
@@ -990,7 +990,7 @@ is_real_disk() {
 }
 
 ###############################################################################
-# Obtiene el tamano (en bytes) de todos los discos fisicos/validos
+# Gets the size (in bytes) of all the physical/valid disks
 ###############################################################################
 
 get_disk_sizes_bytes() {
@@ -1042,7 +1042,7 @@ get_disk_sizes_bytes() {
 }
 
 ###############################################################################
-# Capacidad total de discos (GB)
+# Total disk capacity (GB)
 ###############################################################################
 
 get_disk_capacity_gb() {
@@ -1060,7 +1060,7 @@ get_disk_capacity_gb() {
 }
 
 ###############################################################################
-# Resumen de discos
+# Disk summary
 ###############################################################################
 
 get_disk_layout() {
@@ -1096,8 +1096,8 @@ get_disk_layout() {
 }
 
 ###############################################################################
-# Agrupa niveles de RAID repetidos en un resumen legible
-# Ej: entrada "RAID1\nRAID1\nRAID5" -> salida "RAID1 x2 + RAID5"
+# Groups repeated RAID levels into a readable summary
+# E.g.: input "RAID1\nRAID1\nRAID5" -> output "RAID1 x2 + RAID5"
 ###############################################################################
 format_raid_list() {
     sort | uniq -c | awk '
@@ -1111,7 +1111,7 @@ format_raid_list() {
 }
 
 ###############################################################################
-# RAID por hardware: Dell / LSI (perccli, megacli)
+# Hardware RAID: Dell / LSI (perccli, megacli)
 ###############################################################################
 get_raid_dell() {
     local c bin=""
@@ -1128,13 +1128,13 @@ get_raid_dell() {
     local output
     case "$(basename "$bin")" in
         [Pp]erc[Cc]li*|[Ss]tor[Cc][Ll][Ii]*)
-            # Formato esperado (tabla): "0/0   RAID1  Optl  RW ..."
+            # Expected format (table): "0/0   RAID1  Optl  RW ..."
             output=$(safe_capture with_timeout "${cmd[@]}" /call/vall show)
             printf '%s\n' "$output" |
                 awk '/^[0-9]+\/[0-9]+[[:space:]]+RAID/ { print $2 }' || true
             ;;
         *[Mm]ega[Cc]li*)
-            # Formato esperado:
+            # Expected format:
             # "RAID Level          : Primary-5, Secondary-0, ..."
             output=$(safe_capture with_timeout "${cmd[@]}" -LDInfo -Lall -aALL)
             printf '%s\n' "$output" |
@@ -1155,7 +1155,7 @@ get_raid_dell() {
 }
 
 ###############################################################################
-# RAID por hardware: HP / HPE (ssacli, hpssacli, hpacucli)
+# Hardware RAID: HP / HPE (ssacli, hpssacli, hpacucli)
 ###############################################################################
 get_raid_hp() {
     local bin=""
@@ -1169,7 +1169,7 @@ get_raid_hp() {
     if [[ -z "$bin" ]]; then return 0; fi
     local -a cmd=(sudo "$bin")
     local output
-    # Formato esperado: "      Fault Tolerance: RAID 1"
+    # Expected format: "      Fault Tolerance: RAID 1"
     output=$(safe_capture with_timeout "${cmd[@]}" ctrl all show config)
     printf '%s\n' "$output" |
         awk -F': *' '
@@ -1182,7 +1182,7 @@ get_raid_hp() {
 }
 
 ###############################################################################
-# RAID por hardware: Adaptec (arcconf) - comun en algunos Lenovo/Supermicro
+# Hardware RAID: Adaptec (arcconf) - common in some Lenovo/Supermicro
 ###############################################################################
 get_raid_adaptec() {
     local bin
@@ -1192,9 +1192,9 @@ get_raid_adaptec() {
     fi
     local -a cmd=(sudo "$bin")
     local output
-    # Formato esperado: "RAID level                              : 5"
-    # Se asume controlador 1; en equipos con multiples controladoras
-    # convendria iterar, pero no es el caso comun.
+    # Expected format: "RAID level                              : 5"
+    # Controller 1 is assumed; on machines with multiple controllers
+    # it would be better to iterate, but it is not the common case.
     output=$(safe_capture with_timeout "${cmd[@]}" getconfig 1 ld)
     printf '%s\n' "$output" |
         awk -F': *' '
@@ -1207,9 +1207,9 @@ get_raid_adaptec() {
 }
 
 ###############################################################################
-# RAID por software: mdadm (via /proc/mdstat)
-# Importante para sistemas viejos sin controladora dedicada y para
-# hipervisores/dedicados que usan RAID por software.
+# Software RAID: mdadm (via /proc/mdstat)
+# Important for old systems without a dedicated controller and for
+# hypervisors/dedicated servers that use software RAID.
 ###############################################################################
 get_raid_mdadm() {
     if [[ ! -r /proc/mdstat ]]; then
@@ -1231,10 +1231,10 @@ get_raid_mdadm() {
 }
 
 ###############################################################################
-# Busca firmas de controladoras RAID conocidas en vendor/model de los discos
-# visibles en /sys/block (los rellena el firmware de la controladora, no el
-# disco fisico real, por lo que delatan la presencia de RAID por hardware
-# incluso cuando el SO ve un unico disco logico).
+# Looks for known RAID controller signatures in the vendor/model of the disks
+# visible in /sys/block (they are filled in by the controller firmware, not the
+# real physical disk, so they reveal the presence of hardware RAID
+# even when the OS sees a single logical disk).
 ###############################################################################
 get_raid_controller_signature() {
     if [[ ! -d /sys/block ]]; then
@@ -1257,8 +1257,8 @@ get_raid_controller_signature() {
         fi
 
         combined="$vendor $model"
-        # Recortar espacios sobrantes (los datos SCSI INQUIRY vienen
-        # rellenados con espacios de padding, ej: "DELL    ")
+        # Trim leftover spaces (SCSI INQUIRY data comes
+        # filled with padding spaces, e.g.: "DELL    ")
         combined="${combined#"${combined%%[![:space:]]*}"}"
         combined="${combined%"${combined##*[![:space:]]}"}"
 
@@ -1273,30 +1273,30 @@ get_raid_controller_signature() {
 }
 
 ###############################################################################
-# Fallback: sin herramienta RAID detectada.
-# - Si se detecta firma de controladora RAID (via vendor/model), hay RAID
-#   pero no se pudo determinar el nivel -> "Desconocido (controlador X)".
-# - Si no hay firma y solo hay un disco fisico, es razonable asumir sin RAID.
-# - Si no hay firma pero hay multiples discos, no hay forma confiable de
-#   saberlo -> se deja vacio (el llamador lo mostrara como N/A).
+# Fallback: no RAID tool detected.
+# - If a RAID controller signature is detected (via vendor/model), there is RAID
+#   but the level could not be determined -> "Unknown (controller X)".
+# - If there is no signature and only one physical disk, it is reasonable to assume no RAID.
+# - If there is no signature but there are multiple disks, there is no reliable way to
+#   know -> it is left empty (the caller will show it as N/A).
 ###############################################################################
 get_raid_fallback() {
     local sig n
 
     sig=$(get_raid_controller_signature)
     if [[ -n "$sig" ]]; then
-        echo "Desconocido (controlador $sig)"
+        echo "Unknown (controller $sig)"
         return
     fi
 
     n=$(get_disk_sizes_bytes 2>/dev/null | wc -l) || true
     if [[ "$n" -le 1 ]]; then
-        echo "Sin RAID"
+        echo "No RAID"
     fi
 }
 
 ###############################################################################
-# Orquestador: prueba cada proveedor en orden hasta obtener resultado
+# Orchestrator: tries each provider in order until a result is obtained
 ###############################################################################
 get_raid_info() {
     local raw=""
@@ -1321,9 +1321,9 @@ get_raid_info() {
 
 
 ###############################################################################
-# Conversion IP <-> entero (para calculos de red/mascara)
-# El prefijo 10# fuerza base decimal en cada octeto, previniendo que bash
-# interprete octetos con ceros a la izquierda (ej. 010) como octal.
+# IP <-> integer conversion (for network/mask calculations)
+# The 10# prefix forces decimal base on each octet, preventing bash from
+# interpreting octets with leading zeros (e.g. 010) as octal.
 ###############################################################################
 ip_to_int() {
     local ip="$1"
@@ -1338,7 +1338,7 @@ int_to_ip() {
 }
 
 ###############################################################################
-# Cuenta bits en 1 de una mascara dotted-decimal (ej: 255.255.255.0 -> 24)
+# Counts the 1 bits of a dotted-decimal mask (e.g.: 255.255.255.0 -> 24)
 ###############################################################################
 netmask_to_prefix() {
     local mask="$1"
@@ -1352,18 +1352,18 @@ netmask_to_prefix() {
 }
 
 ###############################################################################
-# Determina si una interfaz de red es "real" para efectos de inventario.
-# Se excluyen interfaces sinteticas/efimeras que no aportan valor en un
-# inventario de dataceter: loopback, veth (containers), docker0/br-*
-# (bridges de Docker), virbr* (bridge NAT interno de libvirt, no es un
-# uplink real), tun/tap, vnet* (interfaces vnetXX por VM en KVM/libvirt),
-# fwbr*/fwln*/fwpr* (bridges de firewall por-VM que genera Proxmox).
-# bond* y vmbr* son interfaces "reales" desde el punto de vista de inventario 
-# (bond = NIC logica por LACP/teaming; vmbr = bridge de uplink real en Proxmox,
-# analogo a un bridge de red fisica). Notar que las NICs fisicas
-# "esclavas" de un bond (ej. eth0/eth1 dentro de bond0) tambien apareceran
-# en el listado, normalmente sin IP propia (la IP vive en el bond) - esto
-# es intencional: documenta el cableado fisico real del nodo.
+# Determines whether a network interface is "real" for inventory purposes.
+# Synthetic/ephemeral interfaces that add no value to a datacenter
+# inventory are excluded: loopback, veth (containers), docker0/br-*
+# (Docker bridges), virbr* (libvirt internal NAT bridge, not a
+# real uplink), tun/tap, vnet* (per-VM vnetXX interfaces in KVM/libvirt),
+# fwbr*/fwln*/fwpr* (per-VM firewall bridges generated by Proxmox).
+# bond* and vmbr* are "real" interfaces from the inventory point of view
+# (bond = logical NIC through LACP/teaming; vmbr = real uplink bridge in Proxmox,
+# analogous to a physical network bridge). Note that the physical "slave"
+# NICs of a bond (e.g. eth0/eth1 within bond0) will also show up
+# in the listing, usually without their own IP (the IP lives on the bond) - this
+# is intentional: it documents the real physical cabling of the node.
 ###############################################################################
 is_real_nic() {
     local dev="$1"
@@ -1376,8 +1376,8 @@ is_real_nic() {
 }
 
 ###############################################################################
-# Lee el operstate (up/down/unknown) de una interfaz desde sysfs.
-# Si no esta disponible, devuelve "unknown".
+# Reads the operstate (up/down/unknown) of an interface from sysfs.
+# If it is not available, it returns "unknown".
 ###############################################################################
 get_nic_state() {
     local dev="$1"
@@ -1397,9 +1397,9 @@ get_nic_state() {
 }
 
 ###############################################################################
-# Enumera los nombres de interfaces de red "reales" (ver is_real_nic),
-# una por linea. Prueba /sys/class/net -> ip -> ifconfig, en ese orden.
-# Funcion base compartida por get_primary_interface y get_network_interfaces.
+# Enumerates the names of the "real" network interfaces (see is_real_nic),
+# one per line. It tries /sys/class/net -> ip -> ifconfig, in that order.
+# Base function shared by get_primary_interface and get_network_interfaces.
 ###############################################################################
 list_real_nics() {
     local dev d
@@ -1433,10 +1433,10 @@ list_real_nics() {
 
 
 ###############################################################################
-# Interfaz principal: la que tiene la ruta por defecto.
-# Prueba ip route -> route -n -> /proc/net/route (universal, sin
-# dependencias externas) -> primera interfaz real que este UP.
-# NOTA: SIN USO DIRECTO EN ESTE SCRIPT. SIRVE PARA MAS ADELANTE.
+# Primary interface: the one that has the default route.
+# It tries ip route -> route -n -> /proc/net/route (universal, without
+# external dependencies) -> first real interface that is UP.
+# NOTE: NOT USED DIRECTLY IN THIS SCRIPT. KEPT FOR LATER USE.
 ###############################################################################
 get_primary_interface() {
     local iface=""
@@ -1469,10 +1469,10 @@ get_primary_interface() {
 }
 
 ###############################################################################
-# Obtiene IP y prefijo de una interfaz en formato "ip/prefix" (ej: 10.0.0.5/24).
-# Funcion base interna: prueba 'ip', luego 'ifconfig' (formato viejo y nuevo).
-# Es la unica funcion que sabe parsear la salida de ip/ifconfig; get_ip_address
-# y get_network_cidr solo derivan sobre este resultado.
+# Gets the IP and prefix of an interface in "ip/prefix" format (e.g.: 10.0.0.5/24).
+# Internal base function: it tries 'ip', then 'ifconfig' (old and new format).
+# It is the only function that knows how to parse the ip/ifconfig output; get_ip_address
+# and get_network_cidr only derive from this result.
 ###############################################################################
 get_ip_cidr_raw() {
     local iface="$1"
@@ -1514,7 +1514,7 @@ get_ip_cidr_raw() {
 }
 
 ###############################################################################
-# Valida que un prefijo sea un entero entre 0 y 32
+# Validates that a prefix is an integer between 0 and 32
 ###############################################################################
 is_valid_prefix() {
     local prefix="$1"
@@ -1525,7 +1525,7 @@ is_valid_prefix() {
 }
 
 ###############################################################################
-# IP (IPv4) de una interfaz (por defecto, la principal)
+# IP (IPv4) of an interface (by default, the primary one)
 ###############################################################################
 get_ip_address() {
     local iface="${1:-$(get_primary_interface)}"
@@ -1537,7 +1537,7 @@ get_ip_address() {
 }
 
 ###############################################################################
-# Red IP en formato CIDR (direccion de red, no la IP del host): x.x.x.x/YY
+# IP network in CIDR format (network address, not the host IP): x.x.x.x/YY
 ###############################################################################
 get_network_cidr() {
     local iface="${1:-$(get_primary_interface)}"
@@ -1557,7 +1557,7 @@ get_network_cidr() {
 }
 
 ###############################################################################
-# Direccion MAC de una interfaz (por defecto, la principal)
+# MAC address of an interface (by default, the primary one)
 ###############################################################################
 get_mac_address() {
     local iface="${1:-$(get_primary_interface)}"
@@ -1585,24 +1585,24 @@ get_mac_address() {
 }
 
 ###############################################################################
-# Recorre todas las interfaces "reales" (ver is_real_nic) y arma 5 listas
-# alineadas por indice, separadas por ", ": INTERFACES, INTERFACES_ESTADO,
-# IP, RED_IP, MAC.
+# Walks through all the "real" interfaces (see is_real_nic) and builds 5 lists
+# aligned by index, separated by ", ": INTERFACES, INTERFACES_STATUS,
+# IP, IP_NETWORK, MAC.
 #
-# Ej. si el nodo tiene eth0 (up) y eth1 (down):
+# E.g. if the node has eth0 (up) and eth1 (down):
 #   INTERFACES        = "eth0, eth1"
-#   INTERFACES_ESTADO = "up, down"
+#   INTERFACES_STATUS = "up, down"
 #   IP                = "10.0.0.5, N/A"
-#   RED_IP            = "10.0.0.0/24, N/A"
+#   IP_NETWORK        = "10.0.0.0/24, N/A"
 #   MAC               = "ab:cd:ef:12:34:56, 98:76:54:32:ab:cd"
 #
-# Una interfaz sin IP configurada (ej. NIC esclava de un bond, o una
-# interfaz down) aparece igual en INTERFACES/INTERFACES_ESTADO/MAC, pero
-# con "N/A" en su posicion de IP/RED_IP - esto es intencional para
-# mantener los 5 indices alineados entre si.
+# An interface without a configured IP (e.g. a slave NIC of a bond, or a
+# down interface) still shows up in INTERFACES/INTERFACES_STATUS/MAC, but
+# with "N/A" in its IP/IP_NETWORK position - this is intentional to
+# keep the 5 indexes aligned with each other.
 #
-# Devuelve las 5 listas separadas por \x1f (no usar ", " como separador
-# aqui, ya que las listas individuales YA contienen ", ").
+# Returns the 5 lists separated by \x1f (do not use ", " as the separator
+# here, since the individual lists ALREADY contain ", ").
 ###############################################################################
 get_network_table() {
     local dev state ip cidr mac
@@ -1637,7 +1637,7 @@ get_network_table() {
 }
 
 ###############################################################################
-# FQDN del equipo
+# FQDN of the machine
 ###############################################################################
 get_fqdn() {
     local fqdn="" short domain
@@ -1670,17 +1670,17 @@ get_fqdn() {
 
 
 ###############################################################################
-# Nombre de maquina
+# Machine name
 ###############################################################################
 
-NOMBRE_MAQUINA=$(safe_capture hostname)
+MACHINE_NAME=$(safe_capture hostname)
 
 
 ###############################################################################
-# Deteccion tipo de maquina
+# Machine type detection
 ###############################################################################
 
-TIPO_MAQUINA=$(get_machine_type)
+MACHINE_TYPE=$(get_machine_type)
 
 
 ###############################################################################
@@ -1691,15 +1691,15 @@ UUID=$(get_system_uuid)
 
 
 ###############################################################################
-# Sistema operativo
+# Operating system
 ###############################################################################
 
-SO_INFO=$(get_os_info)
+OS_INFO=$(get_os_info)
 
-SO=$(get_host_os_name "$SO_INFO")
-VERSION_SO=$(get_host_os_version "$SO_INFO")
-SO_HIPERVISOR=$(get_hypervisor_os_name "$SO_INFO")
-VERSION_SO_HIPERVISOR=$(get_hypervisor_os_version "$SO_INFO")
+HOST_OS=$(get_host_os_name "$OS_INFO")
+HOST_OS_VERSION=$(get_host_os_version "$OS_INFO")
+HYPERVISOR_OS=$(get_hypervisor_os_name "$OS_INFO")
+HYPERVISOR_OS_VERSION=$(get_hypervisor_os_version "$OS_INFO")
 
 ###############################################################################
 # Kernel
@@ -1709,22 +1709,22 @@ KERNEL=$(uname -r)
 
 
 ###############################################################################
-# Informacion especifica de hardware
+# Specific hardware information
 ###############################################################################
 
-MARCA=""
-MODELO=""
+MANUFACTURER=""
+MODEL=""
 SERIAL=""
 SERVICE_TAG=""
 PART_NUMBER=""
 
-if [[ "$TIPO_MAQUINA" == "Hipervisor" || "$TIPO_MAQUINA" == "Dedicada" ]]; then
-    MARCA=$(get_dmi system-manufacturer)
-    MODELO=$(get_dmi system-product-name)
+if [[ "$MACHINE_TYPE" == "Hypervisor" || "$MACHINE_TYPE" == "Dedicated" ]]; then
+    MANUFACTURER=$(get_dmi system-manufacturer)
+    MODEL=$(get_dmi system-product-name)
     SERIAL=$(get_system_serial)
     PART_NUMBER=$(get_part_number)
 
-    if [[ "$MARCA" == *Dell* ]]; then
+    if [[ "$MANUFACTURER" == *Dell* ]]; then
         SERVICE_TAG="$SERIAL"
         SERIAL=""
     fi
@@ -1741,27 +1741,27 @@ BIOS_DATE=$(get_dmi bios-release-date)
 # CPU
 ###############################################################################
 
-CPU_MODELO=$(get_cpu_model)
+CPU_MODEL=$(get_cpu_model)
 CPU_SOCKETS=$(get_cpu_sockets)
 CPU_CORES=$(get_cpu_cores "$CPU_SOCKETS")
 CPU_THREADS=$(get_cpu_threads "$CPU_SOCKETS" "$CPU_CORES")
 
 ###############################################################################
-# Memoria
+# Memory
 ###############################################################################
 
 RAM_GB=$(get_ram_gb)
 
 ###############################################################################
-# Almacenamiento
+# Storage
 ###############################################################################
 
-ALM_CAPACIDAD=$(get_disk_capacity_gb)
+STORAGE_CAPACITY=$(get_disk_capacity_gb)
 
-ALM_DISCOS=""
+STORAGE_DISKS=""
 
-if [[ "$TIPO_MAQUINA" == "VM" ]]; then
-    ALM_DISCOS=$(get_disk_layout)
+if [[ "$MACHINE_TYPE" == "VM" ]]; then
+    STORAGE_DISKS=$(get_disk_layout)
 fi
 
 ###############################################################################
@@ -1769,17 +1769,17 @@ fi
 ###############################################################################
 
 RAID=""
-if [[ "$TIPO_MAQUINA" == "Hipervisor" || "$TIPO_MAQUINA" == "Dedicada" ]]; then
+if [[ "$MACHINE_TYPE" == "Hypervisor" || "$MACHINE_TYPE" == "Dedicated" ]]; then
     RAID=$(get_raid_info)
 fi
 
 
 ###############################################################################
-# Red
+# Network
 ###############################################################################
 
 NET_TABLE=$(get_network_table)
-IFS=$'\x1f' read -r INTERFACES INTERFACES_ESTADO IP RED_IP MAC <<< "$NET_TABLE"
+IFS=$'\x1f' read -r INTERFACES INTERFACES_STATUS IP IP_NETWORK MAC <<< "$NET_TABLE"
 
 FQDN=$(get_fqdn)
 
@@ -1787,65 +1787,65 @@ FQDN=$(get_fqdn)
 
 
 ###############################################################################
-# Datos de salida (deben respetar posicion 1 a 1 entre OUTPUT_KEYS y OUTPUT_VALUES)
+# Output data (must keep a 1-to-1 position match between OUTPUT_KEYS and OUTPUT_VALUES)
 ###############################################################################
 
 OUTPUT_KEYS=(
-    "Nombre maquina"
-    "Tipo de maquina"
-    "SO Host"
-    "Version SO Host"
-    "SO Hipervisor"
-    "Version SO Hipervisor"
+    "Machine name"
+    "Machine type"
+    "Host OS"
+    "Host OS version"
+    "Hypervisor OS"
+    "Hypervisor OS version"
     "Kernel"
     "FQDN"
     "Interfaces"
-    "Interfaces estado"
+    "Interfaces status"
     "IP"
-    "Red IP"
+    "IP network"
     "MAC"
-    "CPU Modelo"
-    "Cores (por socket)"
-    "Threads (por socket)"
+    "CPU model"
+    "Cores (per socket)"
+    "Threads (per socket)"
     "Sockets"
     "RAM (GB)"
-    "Discos"
-    "Capacidad visible (GB)"
+    "Disks"
+    "Visible capacity (GB)"
     "RAID"
-    "Marca"
-    "Modelo"
+    "Manufacturer"
+    "Model"
     "Serial Number"
     "Service Tag"
     "P/N"
     "UUID"
-    "Version BIOS"
-    "Fecha BIOS"
+    "BIOS version"
+    "BIOS date"
 )
 
 OUTPUT_VALUES=(
-    "$NOMBRE_MAQUINA"
-    "$TIPO_MAQUINA"
-    "$SO"
-    "$VERSION_SO"
-    "$SO_HIPERVISOR"
-    "$VERSION_SO_HIPERVISOR"
+    "$MACHINE_NAME"
+    "$MACHINE_TYPE"
+    "$HOST_OS"
+    "$HOST_OS_VERSION"
+    "$HYPERVISOR_OS"
+    "$HYPERVISOR_OS_VERSION"
     "$KERNEL"
     "$FQDN"
     "$INTERFACES"
-    "$INTERFACES_ESTADO"
+    "$INTERFACES_STATUS"
     "$IP"
-    "$RED_IP"
+    "$IP_NETWORK"
     "$MAC"
-    "$CPU_MODELO"
+    "$CPU_MODEL"
     "$CPU_CORES"
     "$CPU_THREADS"
     "$CPU_SOCKETS"
     "$RAM_GB"
-    "$ALM_DISCOS"
-    "$ALM_CAPACIDAD"
+    "$STORAGE_DISKS"
+    "$STORAGE_CAPACITY"
     "$RAID"
-    "$MARCA"
-    "$MODELO"
+    "$MANUFACTURER"
+    "$MODEL"
     "$SERIAL"
     "$SERVICE_TAG"
     "$PART_NUMBER"
@@ -1856,9 +1856,9 @@ OUTPUT_VALUES=(
 
 
 ###############################################################################
-# Imprime un valor para la salida clave-valor.
-# El valor queda entre comillas dobles.
-# Las comillas dobles internas se escapan duplicandolas.
+# Prints a value for the key-value output.
+# The value is wrapped in double quotes.
+# Inner double quotes are escaped by doubling them.
 ###############################################################################
 
 key_value_field() {
@@ -1871,7 +1871,7 @@ key_value_field() {
 
 
 ###############################################################################
-# Salida clave-valor
+# Key-value output
 ###############################################################################
 
 print_key_value_output() {
@@ -1910,7 +1910,7 @@ print_key_value_output() {
 }
 
 ###############################################################################
-# Salida
+# Output
 ###############################################################################
 
 print_key_value_output

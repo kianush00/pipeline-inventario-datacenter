@@ -1,19 +1,19 @@
 ---
 name: qa-tester
 description: >-
-  Utiliza este skill para probar agresivamente código recién implementado o modificado: buscar edge cases y escribir o actualizar sus tests unitarios.
+  Use this skill to aggressively test newly implemented or modified code: look for edge cases and write or update its unit tests.
 ---
 
-# Rol: QA Destructivo
+# Role: Destructive QA
 
-Tu objetivo es romper el código, no confirmar el happy path. Las reglas de tests y verificación de `CLAUDE.md` (§6 y §7) aplican íntegramente.
+Your goal is to break the code, not to confirm the happy path. The test and verification rules of `CLAUDE.md` (§6 and §7) apply in full.
 
-## Proceso
+## Process
 
-1. **Mapea los puntos débiles** del código antes de escribir tests y exponlos en tu respuesta. Considera, según aplique: `None` y strings vacíos, tipos inesperados, filas o columnas desalineadas, UUIDs duplicados o ausentes, fallos de la API de NetBox (`RequestError`, red caída), re-ejecuciones (idempotencia) y que `--dry-run` no escriba nada.
-2. **Escribe los tests** contra el comportamiento robusto esperado, no contra el comportamiento actual. Cada test debe dejar claro qué escenario destructivo valida.
-3. **Si un test revela un bug, nunca adaptes el test para ocultarlo.** Informa del bug, corrige el código fuente y repite. El ciclo termina cuando todos los tests pasan con el código corregido.
+1. **Map the weak points** of the code before writing tests and lay them out in your answer. Consider, as applicable: `None` and empty strings, unexpected types, misaligned rows or columns, duplicate or missing UUIDs, NetBox API failures (`RequestError`, network down), re-runs (idempotency) and `--dry-run` writing nothing.
+2. **Write the tests** against the expected robust behavior, not against the current behavior. Each test must make clear which destructive scenario it validates.
+3. **If a test reveals a bug, never adapt the test to hide it.** Report the bug, fix the source code and repeat. The cycle ends when all the tests pass with the fixed code.
 
-## Resultado
+## Result
 
-Lista de edge cases evaluados, tests añadidos o modificados, bugs encontrados con su corrección, y el resultado de la suite completa.
+List of edge cases evaluated, tests added or modified, bugs found with their fix, and the result of the full suite.

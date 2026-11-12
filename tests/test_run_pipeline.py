@@ -1,4 +1,4 @@
-"""Pruebas unitarias del orquestador run_pipeline (subprocess.run siempre mockeado)."""
+"""Unit tests of the run_pipeline orchestrator (subprocess.run always mocked)."""
 
 import subprocess
 import sys
@@ -39,20 +39,20 @@ PKG = "inventory_pipeline"
 
 
 def _completed(returncode: int) -> subprocess.CompletedProcess[bytes]:
-    """Resultado simulado de un subproceso con el código de salida indicado."""
+    """Simulated result of a subprocess with the given exit code."""
     return subprocess.CompletedProcess(args=[], returncode=returncode)
 
 
 def _executed_modules(run_mock: MagicMock) -> list[str]:
-    """Extrae, en orden, el módulo ejecutado en cada llamada a subprocess.run."""
+    """Extracts, in order, the module executed in each subprocess.run call."""
     return [call.args[0][2] for call in run_mock.call_args_list]
 
 
 @pytest.fixture
 def input_files(tmp_path: Path) -> tuple[Path, Path]:
-    """Un log del job y un maestro reales en disco (contenido irrelevante)."""
+    """A real job log and master on disk (irrelevant content)."""
     job_log = tmp_path / "job_output.log"
-    master = tmp_path / "maestro.ods"
+    master = tmp_path / "master.ods"
     job_log.write_text("x", encoding="utf-8")
     master.write_bytes(b"x")
     return job_log, master
@@ -60,7 +60,7 @@ def input_files(tmp_path: Path) -> tuple[Path, Path]:
 
 @pytest.fixture
 def options(input_files: tuple[Path, Path]) -> PipelineOptions:
-    """Opciones base: sin flags opcionales activados."""
+    """Base options: no optional flags enabled."""
     job_log, master = input_files
     return PipelineOptions(
         job_log=job_log,
@@ -79,71 +79,71 @@ def artifacts(options: PipelineOptions, tmp_path: Path) -> ArtifactPaths:
 
 @pytest.fixture
 def run_mock() -> Iterator[MagicMock]:
-    """subprocess.run mockeado; por defecto todas las etapas terminan con 0."""
+    """Mocked subprocess.run; by default all stages end with 0."""
     with patch(SUBPROCESS_RUN, return_value=_completed(0)) as mock:
         yield mock
 
 
 # ============================================================
-# DESCUBRIMIENTO DE ENTRADAS
+# INPUT DISCOVERY
 # ============================================================
 
 
 class TestDiscoverSingleInput:
-    """Valida la autodetección de entradas en input/."""
+    """Validates the auto-detection of inputs in input/."""
 
     def test_ignores_hidden_files_locks_and_other_extensions(
         self, tmp_path: Path
     ) -> None:
-        # Escenario real: el maestro abierto en LibreOffice deja un lock
-        # ".~lock.<nombre>#" junto a él; no debe contar como segundo candidato.
+        # Real scenario: the master open in LibreOffice leaves a lock
+        # ".~lock.<name>#" next to it; it must not count as a second candidate.
         (tmp_path / ".gitkeep").touch()
-        (tmp_path / ".~lock.maestro.ods#").touch()
-        (tmp_path / "notas.txt").touch()
-        master = tmp_path / "maestro.ods"
+        (tmp_path / ".~lock.master.ods#").touch()
+        (tmp_path / "notes.txt").touch()
+        master = tmp_path / "master.ods"
         master.touch()
 
         found = discover_single_input(
-            tmp_path, MASTER_SUFFIXES, "inventario maestro", "--master"
+            tmp_path, MASTER_SUFFIXES, "master inventory", "--master"
         )
 
         assert found == master
 
     def test_suffix_match_is_case_insensitive(self, tmp_path: Path) -> None:
-        master = tmp_path / "MAESTRO.XLSX"
+        master = tmp_path / "MASTER.XLSX"
         master.touch()
         assert (
-            discover_single_input(tmp_path, MASTER_SUFFIXES, "maestro", "--master")
+            discover_single_input(tmp_path, MASTER_SUFFIXES, "master", "--master")
             == master
         )
 
     def test_no_candidates_fails_with_override_hint(self, tmp_path: Path) -> None:
         (tmp_path / ".gitkeep").touch()
-        with pytest.raises(PipelineError, match="No se encontró ningún.*--master"):
-            discover_single_input(tmp_path, MASTER_SUFFIXES, "maestro", "--master")
+        with pytest.raises(PipelineError, match="No .* was found.*--master"):
+            discover_single_input(tmp_path, MASTER_SUFFIXES, "master", "--master")
 
     def test_multiple_candidates_fail_listing_all_of_them(self, tmp_path: Path) -> None:
-        # Elegir uno arbitrariamente podría procesar un maestro desactualizado.
-        (tmp_path / "viejo.ods").touch()
-        (tmp_path / "nuevo.xlsx").touch()
-        with pytest.raises(PipelineError, match="más de un") as exc_info:
-            discover_single_input(tmp_path, MASTER_SUFFIXES, "maestro", "--master")
-        assert "viejo.ods" in str(exc_info.value)
-        assert "nuevo.xlsx" in str(exc_info.value)
+        # Picking one arbitrarily could process an outdated master.
+        (tmp_path / "old.ods").touch()
+        (tmp_path / "new.xlsx").touch()
+        with pytest.raises(PipelineError, match="More than one") as exc_info:
+            discover_single_input(tmp_path, MASTER_SUFFIXES, "master", "--master")
+        assert "old.ods" in str(exc_info.value)
+        assert "new.xlsx" in str(exc_info.value)
 
     def test_missing_directory_fails(self, tmp_path: Path) -> None:
-        with pytest.raises(PipelineError, match="No existe el directorio"):
+        with pytest.raises(PipelineError, match="input directory does not exist"):
             discover_single_input(
-                tmp_path / "no_existe", MASTER_SUFFIXES, "maestro", "--master"
+                tmp_path / "does_not_exist", MASTER_SUFFIXES, "master", "--master"
             )
 
 
 class TestResolveOptions:
-    """Valida la resolución de entradas explícitas o autodetectadas."""
+    """Validates the resolution of explicit or auto-detected inputs."""
 
     def test_autodetects_both_inputs(self, tmp_path: Path) -> None:
-        job_log = tmp_path / "salida.log"
-        master = tmp_path / "maestro.xlsx"
+        job_log = tmp_path / "output.log"
+        master = tmp_path / "master.xlsx"
         job_log.touch()
         master.touch()
 
@@ -157,8 +157,8 @@ class TestResolveOptions:
         job_log, master = input_files
         args = parse_cli_arguments(["--job-log", str(job_log), "--master", str(master)])
 
-        # El directorio de entradas no existe: si se intentara autodetectar, fallaría.
-        options = resolve_options(args, tmp_path / "input_inexistente")
+        # The input directory does not exist: if auto-detection were attempted, it would fail.
+        options = resolve_options(args, tmp_path / "nonexistent_input")
 
         assert (options.job_log, options.master) == (job_log, master)
 
@@ -167,9 +167,9 @@ class TestResolveOptions:
     ) -> None:
         job_log, _ = input_files
         args = parse_cli_arguments(
-            ["--job-log", str(job_log), "--master", str(tmp_path / "falta.ods")]
+            ["--job-log", str(job_log), "--master", str(tmp_path / "missing.ods")]
         )
-        with pytest.raises(PipelineError, match="No se encontró el inventario maestro"):
+        with pytest.raises(PipelineError, match="The master inventory was not found"):
             resolve_options(args, tmp_path)
 
     def test_relative_explicit_paths_are_made_absolute(
@@ -178,8 +178,8 @@ class TestResolveOptions:
         input_files: tuple[Path, Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # Las etapas corren con cwd=PROJECT_ROOT: una ruta relativa al directorio
-        # del usuario apuntaría a otro archivo (o a ninguno) dentro del subproceso.
+        # The stages run with cwd=PROJECT_ROOT: a path relative to the user's
+        # directory would point to another file (or to none) inside the subprocess.
         job_log, master = input_files
         monkeypatch.chdir(tmp_path)
         args = parse_cli_arguments(["--job-log", job_log.name, "--master", master.name])
@@ -194,15 +194,15 @@ class TestResolveOptions:
     def test_explicit_master_with_unsupported_extension_fails_fast(
         self, tmp_path: Path, input_files: tuple[Path, Path]
     ) -> None:
-        # Sin esta validación, el parseo correría y el error recién aparecería
-        # en prepare_master_inventory (paso 2).
+        # Without this validation, the parsing would run and the error would only show up
+        # in prepare_master_inventory (step 2).
         job_log, _ = input_files
-        csv_master = tmp_path / "maestro.csv"
+        csv_master = tmp_path / "master.csv"
         csv_master.touch()
         args = parse_cli_arguments(
             ["--job-log", str(job_log), "--master", str(csv_master)]
         )
-        with pytest.raises(PipelineError, match="extensión"):
+        with pytest.raises(PipelineError, match="extension"):
             resolve_options(args, tmp_path)
 
     def test_flags_are_mapped(self, input_files: tuple[Path, Path]) -> None:
@@ -227,12 +227,12 @@ class TestResolveOptions:
 
 
 # ============================================================
-# CONSTRUCCIÓN DE ETAPAS
+# STAGE CONSTRUCTION
 # ============================================================
 
 
 class TestBuildSteps:
-    """Valida que cada etapa reciba como entrada la salida de la anterior."""
+    """Validates that each stage receives as input the output of the previous one."""
 
     def test_pre_export_steps_are_chained(
         self, options: PipelineOptions, artifacts: ArtifactPaths
@@ -281,8 +281,8 @@ class TestBuildSteps:
     def test_optional_flags_reach_both_exports(
         self, options: PipelineOptions, artifacts: ArtifactPaths, dry_run: bool
     ) -> None:
-        # Si el prune solo llegara al export real, el dry-run no mostraría
-        # las eliminaciones que luego se aplican.
+        # If the prune only reached the real export, the dry-run would not show
+        # the deletions that are applied afterwards.
         flagged = replace(options, prune_network_orphans=True, verbose=True)
         step = build_export_step(flagged, artifacts, dry_run=dry_run)
         assert "--prune-network-orphans" in step.args
@@ -311,18 +311,18 @@ class TestBuildSteps:
             "--output",
             str(artifacts.updated_master),
         )
-        # El maestro original (input/) nunca es el destino de la escritura.
-        assert artifacts.updated_master.name == "maestro_updated.ods"
+        # The original master (input/) is never the write destination.
+        assert artifacts.updated_master.name == "master_updated.ods"
         assert artifacts.updated_master.parent != options.master.parent
 
 
 # ============================================================
-# CONFIRMACIÓN
+# CONFIRMATION
 # ============================================================
 
 
 class TestConfirmApply:
-    """Valida la confirmación entre el dry-run y el export real."""
+    """Validates the confirmation between the dry-run and the real export."""
 
     def test_assume_yes_never_prompts(self) -> None:
         with patch("builtins.input") as input_mock:
@@ -330,21 +330,21 @@ class TestConfirmApply:
         input_mock.assert_not_called()
 
     def test_non_interactive_without_yes_aborts(self) -> None:
-        # Sin TTY, asumir una respuesta escribiría en NetBox sin querer
-        # o colgaría la ejecución esperando una entrada que nunca llega.
+        # Without a TTY, assuming an answer would write to NetBox unintentionally
+        # or would hang the execution waiting for an input that never arrives.
         with pytest.raises(PipelineError, match="--yes"):
             confirm_apply(assume_yes=False, is_interactive=False)
 
     @pytest.mark.parametrize(
         "answer, expected",
         [
-            ("s", True),
-            (" Sí ", True),
+            ("y", True),
+            (" Yes ", True),
             ("YES", True),
             ("", False),
             ("n", False),
             ("no", False),
-            ("quizás", False),
+            ("maybe", False),
         ],
     )
     def test_interactive_answer(self, answer: str, expected: bool) -> None:
@@ -357,12 +357,12 @@ class TestConfirmApply:
 
 
 # ============================================================
-# EJECUCIÓN DEL PIPELINE
+# PIPELINE EXECUTION
 # ============================================================
 
 
 class TestRunPipeline:
-    """Valida el orden de ejecución, el fail-fast y la confirmación."""
+    """Validates the execution order, the fail-fast and the confirmation."""
 
     def test_full_run_executes_every_step_in_order(
         self, options: PipelineOptions, tmp_path: Path, run_mock: MagicMock
@@ -397,7 +397,7 @@ class TestRunPipeline:
     def test_first_failure_stops_the_pipeline(
         self, options: PipelineOptions, tmp_path: Path, run_mock: MagicMock
     ) -> None:
-        # prepare_master_inventory falla: merge y los exports no deben ejecutarse.
+        # prepare_master_inventory fails: merge and the exports must not run.
         run_mock.side_effect = [_completed(0), _completed(3)]
 
         unattended = replace(options, assume_yes=True)
@@ -441,7 +441,7 @@ class TestRunPipeline:
     def test_update_master_does_not_run_if_real_export_fails(
         self, options: PipelineOptions, tmp_path: Path, run_mock: MagicMock
     ) -> None:
-        # La copia del maestro solo debe reflejar un ciclo consistente con NetBox.
+        # The master copy must only reflect a cycle consistent with NetBox.
         run_mock.side_effect = [_completed(0)] * 4 + [_completed(1)]
 
         unattended = replace(options, update_master=True, assume_yes=True)
@@ -454,7 +454,7 @@ class TestRunPipeline:
 
 
 class TestMain:
-    """Valida los códigos de salida del comando inventory-pipeline."""
+    """Validates the exit codes of the inventory-pipeline command."""
 
     @staticmethod
     def _argv(input_files: tuple[Path, Path], *extra: str) -> list[str]:
@@ -465,7 +465,7 @@ class TestMain:
     def _isolated_output_dir(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # main() crea el directorio de salida: se redirige para no tocar output/.
+        # main() creates the output directory: it is redirected so output/ is not touched.
         monkeypatch.setattr(
             "inventory_pipeline.run_pipeline.OUTPUT_DIR", tmp_path / "output"
         )
@@ -485,8 +485,8 @@ class TestMain:
     def test_signal_terminated_step_maps_to_shell_convention(
         self, input_files: tuple[Path, Path], run_mock: MagicMock
     ) -> None:
-        # subprocess reporta -N si la etapa murió por la señal N (ej. SIGKILL=9);
-        # un exit status negativo no es válido para el proceso del orquestador.
+        # subprocess reports -N if the stage died from signal N (e.g. SIGKILL=9);
+        # a negative exit status is not valid for the orchestrator process.
         run_mock.return_value = _completed(-9)
         assert main(self._argv(input_files)) == 137
 
@@ -509,8 +509,8 @@ class TestMain:
     def test_non_interactive_without_yes_fails_before_any_step(
         self, input_files: tuple[Path, Path], run_mock: MagicMock
     ) -> None:
-        # La falta de confirmación se conoce desde el inicio: no tiene sentido
-        # ejecutar parseo, fusión y un dry-run contra NetBox para luego abortar.
+        # The lack of confirmation is known from the start: it makes no sense
+        # to run parsing, merge and a dry-run against NetBox only to abort afterwards.
         job_log, master = input_files
         with patch("inventory_pipeline.run_pipeline.sys.stdin") as stdin_mock:
             stdin_mock.isatty.return_value = False

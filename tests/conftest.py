@@ -1,4 +1,4 @@
-"""Fixtures compartidas para las pruebas unitarias de export_to_netbox."""
+"""Shared fixtures for the export_to_netbox unit tests."""
 
 from pathlib import Path
 
@@ -12,21 +12,21 @@ from inventory_pipeline.export_to_netbox import (
 from inventory_pipeline.paths import DEFAULT_MAPPING_PATH
 
 # ============================================================
-# CONFIGURACIÓN YAML REAL
+# REAL YAML CONFIGURATION
 # ============================================================
 
 
 @pytest.fixture(scope="session")
 def yaml_path() -> Path:
-    """Ruta al archivo YAML real del proyecto."""
+    """Path to the project's real YAML file."""
     path = DEFAULT_MAPPING_PATH
-    assert path.exists(), f"No se encontró el archivo YAML en {path}"
+    assert path.exists(), f"YAML file not found at {path}"
     return path
 
 
 @pytest.fixture(scope="session", autouse=True)
 def mock_env_vars():
-    """Mockea las variables de entorno requeridas por el YAML antes de cargarlo."""
+    """Mocks the environment variables required by the YAML before loading it."""
     import os
 
     os.environ["NETBOX_SITE_NAME"] = "Test Site"
@@ -36,26 +36,26 @@ def mock_env_vars():
 
 @pytest.fixture(scope="session")
 def config(yaml_path: Path) -> NetBoxMappingConfig:
-    """Instancia de configuración cargada desde el YAML real.
+    """Configuration instance loaded from the real YAML.
 
-    Se usa scope='session' porque el YAML no cambia entre tests,
-    evitando re-parsear ~600 líneas de YAML en cada test.
+    scope='session' is used because the YAML does not change between tests,
+    avoiding re-parsing ~600 lines of YAML on every test.
     """
     return load_config(yaml_path)
 
 
 # ============================================================
-# OBJETOS MOCK DE NETBOX
+# NETBOX MOCK OBJECTS
 # ============================================================
 
 
 @pytest.fixture
 def mock_record() -> MockNetBoxRecord:
-    """Objeto simulado de NetBox con ID válido para tests genéricos."""
+    """Simulated NetBox object with a valid ID for generic tests."""
     return MockNetBoxRecord(id=42, name="test-object")
 
 
 @pytest.fixture
 def mock_record_no_id() -> MockNetBoxRecord:
-    """Objeto simulado de NetBox sin ID (por defecto id=0)."""
-    return MockNetBoxRecord(name="sin-id")
+    """Simulated NetBox object without an ID (id=0 by default)."""
+    return MockNetBoxRecord(name="no-id")

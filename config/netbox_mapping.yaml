@@ -1,49 +1,49 @@
 # netbox_mapping.yaml
 # ====================
-# Contrato de exportación entre merged_inventory.csv y NetBox 4.6+.
-# Leído exclusivamente por export_to_netbox.py.
-# No depende de rundeck_header_list.txt.
+# Export contract between merged_inventory.csv and NetBox 4.6+.
+# Read exclusively by export_to_netbox.py.
+# It does not depend on rundeck_header_list.txt.
 #
-# Documentación completa: docs/netbox_mapping.md
-# Credenciales: se leen desde variables de entorno (ver docs/usage_and_config.md).
+# Full documentation: docs/netbox_mapping.md
+# Credentials: read from environment variables (see docs/usage_and_config.md).
 
 csv_columns:
   machine_name:
-    source: &col_machine_name "Nombre maquina"
+    source: &col_machine_name "Machine name"
     required: true
   machine_type:
-    source: "Tipo de maquina"
+    source: "Machine type"
     required: true
     map:
-      "dedicada": "dedicated"
-      "hipervisor": "hypervisor"
+      "dedicated": "dedicated"
+      "hypervisor": "hypervisor"
       "vm": "vm"
   os:
-    source: "SO Host"
+    source: "Host OS"
   status:
-    source: "Estado"
+    source: "Status"
     map:
-      "activo": "active"
-      "planificado": "planned"
-      "en preparación": "staged"
-      "fallido": "failed"
-      "en inventario": "inventory"
-      "en baja": "decommissioning"
-      "fuera de línea": "offline"
+      "active": "active"
+      "planned": "planned"
+      "staged": "staged"
+      "failed": "failed"
+      "inventory": "inventory"
+      "decommissioning": "decommissioning"
+      "offline": "offline"
   role:
-    source: "Rol"
+    source: "Role"
   manufacturer:
-    source: "Marca"
+    source: "Manufacturer"
     required: true
   model:
-    source: "Modelo"
+    source: "Model"
     required: true
   rack:
     source: "Rack"
   rack_location:
-    source: "Fila"
+    source: "Row"
   host_device:
-    source: "Dispositivo Host"
+    source: "Host device"
   cluster_name:
     source: "Cluster"
     required: true
@@ -51,81 +51,81 @@ csv_columns:
     source: &col_inventory_uuid "UUID"
     required: true
   os_ver:
-    source: &col_os_version "Version SO Host"
+    source: &col_os_version "Host OS version"
   hypervisor_os:
-    source: &col_hypervisor_os "SO Hipervisor"
+    source: &col_hypervisor_os "Hypervisor OS"
   hypervisor_ver:
-    source: &col_hypervisor_version "Version SO Hipervisor"
+    source: &col_hypervisor_version "Hypervisor OS version"
   serial:
     source: &col_serial "Serial Number"
   part_number:
     source: "P/N"
   asset_tag:
-    source: &col_asset_tag "Nro Inventario"
+    source: &col_asset_tag "Inventory number"
   pos_u:
-    source: &col_pos_u "Posicion (U)"
+    source: &col_pos_u "Position (U)"
   height_u:
-    source: "Altura (U)"
+    source: "Height (U)"
   desc:
-    source: &col_desc "Descripcion"
+    source: &col_desc "Description"
   notes:
-    source: &col_notes "Notas"
+    source: &col_notes "Notes"
   environment:
-    source: &col_environment "Entorno"
+    source: &col_environment "Environment"
     map:
-      "producción": "production"
-      "certificación": "certification"
-      "desarrollo": "development"
+      "production": "production"
+      "certification": "certification"
+      "development": "development"
   service_tag:
     source: &col_service_tag "Service Tag"
   cpu_model:
-    source: &col_cpu_model "CPU Modelo"
+    source: &col_cpu_model "CPU model"
   cores:
-    source: &col_cpu_cores "Cores (por socket)"
+    source: &col_cpu_cores "Cores (per socket)"
   threads:
-    source: &col_cpu_threads "Threads (por socket)"
+    source: &col_cpu_threads "Threads (per socket)"
   sockets:
     source: &col_cpu_sockets "Sockets"
   disks:
-    source: &col_disks "Discos"
+    source: &col_disks "Disks"
   raid:
     source: &col_raid "RAID"
   bios_ver:
-    source: &col_bios_version "Version BIOS"
+    source: &col_bios_version "BIOS version"
   bios_date:
-    source: &col_bios_date "Fecha BIOS"
+    source: &col_bios_date "BIOS date"
   rundeck_node:
-    source: &col_rundeck_node "Nodo Rundeck"
+    source: &col_rundeck_node "Rundeck node"
   ram_gb:
     source: &col_ram_gb "RAM (GB)"
   disk_cap:
-    source: &col_disk_cap "Capacidad visible (GB)"
+    source: &col_disk_cap "Visible capacity (GB)"
   iface_names:
     source: "Interfaces"
   iface_status:
-    source: "Interfaces estado"
+    source: "Interfaces status"
     map:
       "up": true
       "down": false
   iface_ip:
     source: "IP"
   iface_pfx:
-    source: "Red IP"
+    source: "IP network"
   iface_mac:
     source: "MAC"
 
-# ── Site único (se crea automáticamente si no existe) ────────
+# ── Single site (created automatically if it does not exist) ─
 site:
   name: "${NETBOX_SITE_NAME}"
   slug: "${NETBOX_SITE_NAME}"
 
-# ── ClusterType (se crea automáticamente si no existe) ───────
+# ── ClusterType (created automatically if it does not exist) ─
 cluster_type:
   default:
-    name: "Hipervisor"
-    slug: "hipervisor"
+    name: "Hypervisor"
+    slug: "hypervisor"
 
-# ── Roles de dispositivo (colores hex sin '#') ──────────────
+# ── Device roles (hex colors without '#') ───────────────────
 device_roles:
   - name: "Hypervisor"
     slug: "hypervisor"
@@ -197,10 +197,10 @@ device_roles:
     slug: "others"
     color: "9e9e9e"
 
-# ── Custom Fields (Esquema DDL, ver docs/netbox_mapping.md) ──
+# ── Custom Fields (DDL schema, see docs/netbox_mapping.md) ───
 custom_field_definitions:
   - name: &cf_environment "environment"
-    label: "Entorno"
+    label: "Environment"
     type: "select"
     object_types:
       - "dcim.device"
@@ -209,14 +209,14 @@ custom_field_definitions:
       name: "Environment"
       choices:
         - value: "production"
-          label: "Producción"
+          label: "Production"
         - value: "certification"
-          label: "Certificación"
+          label: "Certification"
         - value: "development"
-          label: "Desarrollo"
+          label: "Development"
 
   - name: &cf_inventory_uuid "inventory_uuid"
-    label: "UUID de inventario"
+    label: "Inventory UUID"
     type: "text"
     filter_logic: "exact"
     object_types:
@@ -224,32 +224,32 @@ custom_field_definitions:
       - "virtualization.virtualmachine"
 
   - name: &cf_cpu_model "cpu_model"
-    label: "Modelo CPU"
+    label: "CPU model"
     type: "text"
     object_types:
       - "dcim.device"
       - "virtualization.virtualmachine"
 
   - name: &cf_cpu_cores "cpu_cores"
-    label: "Cores CPU"
+    label: "CPU cores"
     type: "integer"
     object_types:
       - "dcim.device"
 
   - name: &cf_cpu_threads "cpu_threads"
-    label: "Threads CPU"
+    label: "CPU threads"
     type: "integer"
     object_types:
       - "dcim.device"
 
   - name: &cf_cpu_sockets "cpu_sockets"
-    label: "Sockets CPU"
+    label: "CPU sockets"
     type: "integer"
     object_types:
       - "dcim.device"
 
   - name: &cf_disks "disks"
-    label: "Discos"
+    label: "Disks"
     type: "text"
     object_types:
       - "dcim.device"
@@ -262,19 +262,19 @@ custom_field_definitions:
       - "dcim.device"
 
   - name: &cf_bios_version "bios_version"
-    label: "Version BIOS"
+    label: "BIOS version"
     type: "text"
     object_types:
       - "dcim.device"
 
   - name: &cf_bios_date "bios_date"
-    label: "Fecha BIOS"
+    label: "BIOS date"
     type: "text"
     object_types:
       - "dcim.device"
 
   - name: &cf_rundeck_node "rundeck_node"
-    label: "Nodo Rundeck"
+    label: "Rundeck node"
     type: "boolean"
     default: false
     object_types:
@@ -282,25 +282,25 @@ custom_field_definitions:
       - "virtualization.virtualmachine"
 
   - name: &cf_os_version "os_version"
-    label: "Version SO Host"
+    label: "Host OS version"
     type: "text"
     object_types:
       - "dcim.device"
       - "virtualization.virtualmachine"
 
   - name: &cf_hypervisor_os "hypervisor_os"
-    label: "SO Hipervisor"
+    label: "Hypervisor OS"
     type: "text"
     object_types:
       - "dcim.device"
 
   - name: &cf_hypervisor_version "hypervisor_version"
-    label: "Version SO Hipervisor"
+    label: "Hypervisor OS version"
     type: "text"
     object_types:
       - "dcim.device"
 
-# ── Mapeo DML por tipo de nodo (ver docs/netbox_mapping.md) ──
+# ── DML mapping per node type (see docs/netbox_mapping.md) ───
 node_types:
   device:
     status:
@@ -364,7 +364,7 @@ node_types:
 
       - source: *col_rundeck_node
         target: *cf_rundeck_node
-        cast: "bool_si_no"
+        cast: "bool_yes_no"
 
       - source: *col_os_version
         target: *cf_os_version
@@ -416,12 +416,12 @@ node_types:
 
       - source: *col_rundeck_node
         target: *cf_rundeck_node
-        cast: "bool_si_no"
+        cast: "bool_yes_no"
 
       - source: *col_os_version
         target: *cf_os_version
 
-# ── Valores equivalentes a vacío/null ──────────────────────
+# ── Values equivalent to empty/null ────────────────────────
 
 empty_values:
   - "N/A"

@@ -6,14 +6,14 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pipeline-inventario"
+name = "inventory-pipeline"
 version = "0.1.0"
 description = "Automated, idempotent ETL pipeline that collects, consolidates and synchronizes datacenter infrastructure into NetBox."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
-# Dependencias de runtime; requirements.txt fija las versiones exactas (lock).
+# Runtime dependencies; requirements.txt pins the exact versions (lock).
 dependencies = [
     "openpyxl>=3.1",
     "pydantic>=2.0",
@@ -26,15 +26,15 @@ dependencies = [
 [project.scripts]
 inventory-pipeline = "inventory_pipeline.run_pipeline:main"
 
-# ── Empaquetado (src layout) ────────────────────────────────
+# ── Packaging (src layout) ──────────────────────────────────
 [tool.setuptools.packages.find]
 where = ["src"]
 
-# ── Ruff (linter y formateador) ─────────────────────────────
+# ── Ruff (linter and formatter) ─────────────────────────────
 [tool.ruff]
 src = ["src", "tests"]
 
-# ── Pyright (tipado estático) ───────────────────────────────
+# ── Pyright (static typing) ─────────────────────────────────
 [tool.pyright]
 venvPath = "."
 venv = ".venv"

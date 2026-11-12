@@ -1,64 +1,64 @@
 """
 merge_inventories.py
 =======================
-Fusiona un inventario "parseado" sobre un inventario "maestro"
-(source of truth), usando como clave de fusión la columna cuyo
-FLAG en rundeck_header_list.txt sea 2.
+Merges a "parsed" inventory onto a "master" inventory
+(source of truth), using as the merge key the column whose
+FLAG in rundeck_header_list.txt is 2.
 
-El layout de columnas y las reglas de fusión se leen desde
-rundeck_header_list.txt con formato:
+The column layout and the merge rules are read from
+rundeck_header_list.txt with the format:
 
-    NOMBRE_COLUMNA|FLAG
+    COLUMN_NAME|FLAG
 
-donde FLAG indica:
-    0 → conservar el valor del inventario maestro
-    1 → permitir que el valor del inventario parseado
-        sobrescriba al del maestro (si no está vacío ni es "N/A")
-    2 → columna utilizada como clave de unión
+where FLAG means:
+    0 → keep the value of the master inventory
+    1 → allow the value of the parsed inventory to
+        overwrite the master one (if it is neither empty nor "N/A")
+    2 → column used as the join key
 
-Debe existir exactamente una columna con FLAG 2.
+There must be exactly one column with FLAG 2.
 
-La columna con FLAG 2 puede tener cualquier nombre. Ese nombre
-se utiliza como clave de unión tanto en el inventario maestro
-como en el inventario parseado.
+The column with FLAG 2 can have any name. That name
+is used as the join key both in the master inventory
+and in the parsed inventory.
 
-Las posiciones de las columnas se detectan automáticamente
-leyendo los headers de ambos CSV.
+The column positions are detected automatically
+by reading the headers of both CSVs.
 
-El inventario maestro es la base:
-- Todas sus filas se conservan en el CSV de salida.
-- Las columnas adicionales no definidas en rundeck_header_list.txt
-  se conservan sin fusionar.
-- Las columnas con FLAG 0 se conservan sin fusionar.
-- Las columnas con FLAG 1 pueden ser actualizadas desde el
-  inventario parseado.
-- La columna con FLAG 2 se utiliza exclusivamente como clave
-  de unión y nunca se sobrescribe.
+The master inventory is the base:
+- All its rows are kept in the output CSV.
+- Additional columns not defined in rundeck_header_list.txt
+  are kept without merging.
+- Columns with FLAG 0 are kept without merging.
+- Columns with FLAG 1 can be updated from the
+  parsed inventory.
+- The column with FLAG 2 is used exclusively as the join
+  key and is never overwritten.
 
-La unión se comporta como un LEFT JOIN:
-- Si la clave del maestro no existe en el parseado, la fila del
-  maestro se conserva sin modificar.
-- Si la clave del maestro es vacía o N/A, la fila del maestro
-  se conserva sin fusionar.
-- Si una clave aparece más de una vez en cualquiera de los dos
-  inventarios, las filas afectadas se conservan sin fusionar.
-- Solo se fusionan filas cuya clave sea válida y única en ambos
-  inventarios.
+The join behaves like a LEFT JOIN:
+- If the master key does not exist in the parsed one, the master
+  row is kept unmodified.
+- If the master key is empty or N/A, the master row
+  is kept without merging.
+- If a key appears more than once in either of the two
+  inventories, the affected rows are kept without merging.
+- Only rows whose key is valid and unique in both
+  inventories are merged.
 
-Uso:
+Usage:
     python -m inventory_pipeline.merge_inventories \
         --parsed parsed_job_output.csv \
         --master prepared_master_inventory.csv \
         [--output merged_inventory.csv] \
         [--header-list rundeck_header_list.txt]
 
-Cada opción tiene una forma corta: -p, -m, -o y -l respectivamente.
+Each option has a short form: -p, -m, -o and -l respectively.
 
-Los inventarios se indican con opciones nombradas (y no por posición) para que
-un orden accidental de los archivos no invierta silenciosamente la fusión.
+The inventories are given with named options (and not by position) so that
+an accidental order of the files does not silently invert the merge.
 
-Si no se indica --header-list, se usa config/rundeck_header_list.txt. Si no
-se indica --output, se escribe output/merged_inventory.csv (ver
+If --header-list is not given, config/rundeck_header_list.txt is used. If
+--output is not given, output/merged_inventory.csv is written (see
 inventory_pipeline.paths).
 """
 
@@ -84,19 +84,19 @@ from inventory_pipeline.paths import (
 )
 
 # ============================================================
-# ESTRUCTURAS DE DATOS DEL FLUJO PRINCIPAL
+# DATA STRUCTURES OF THE MAIN FLOW
 # ============================================================
 
 
 class KeyedRows(NamedTuple):
-    """Filas de un inventario indexadas por clave de unión."""
+    """Rows of an inventory indexed by join key."""
 
     rows_by_key: dict[str, list[str]]
     duplicated_keys: set[str]
 
 
 class CliPaths(NamedTuple):
-    """Rutas resueltas a partir de los argumentos de línea de comandos."""
+    """Paths resolved from the command-line arguments."""
 
     parsed: Path
     master: Path
@@ -105,7 +105,7 @@ class CliPaths(NamedTuple):
 
 
 class LoadedInventory(NamedTuple):
-    """Inventario CSV ya leído, con sus posiciones de columna y filas válidas."""
+    """CSV inventory already read, with its column positions and valid rows."""
 
     header_line: str
     header_fields: list[str]
@@ -114,7 +114,7 @@ class LoadedInventory(NamedTuple):
 
 
 class MergePlan(NamedTuple):
-    """Datos de solo lectura necesarios para decidir el destino de cada fila del maestro."""
+    """Read-only data needed to decide the fate of each master row."""
 
     key_master_idx: int
     parsed_data: dict[str, list[str]]
@@ -123,7 +123,7 @@ class MergePlan(NamedTuple):
 
 
 # ============================================================
-# VALIDAR Y RESOLVER CLAVE DE UNIÓN
+# VALIDATE AND RESOLVE THE JOIN KEY
 # ============================================================
 
 
@@ -131,40 +131,40 @@ def resolve_key_column(
     rundeck_header_list: list[tuple[str, int]],
 ) -> str:
     """
-    Determina la columna utilizada como clave de unión.
-    Debe existir exactamente una entrada con FLAG 2.
+    Determines the column used as the join key.
+    There must be exactly one entry with FLAG 2.
 
-    Retorna:
-        nombre de la columna con FLAG 2.
+    Returns:
+        name of the column with FLAG 2.
     """
     key_columns = [name for name, flag in rundeck_header_list if flag == 2]
 
     if len(key_columns) != 1:
         error(
-            "rundeck_header_list.txt debe contener exactamente una "
-            "columna con flag 2.\n"
-            f"Se encontraron {len(key_columns)}."
+            "rundeck_header_list.txt must contain exactly one "
+            "column with flag 2.\n"
+            f"{len(key_columns)} were found."
         )
 
     return key_columns[0]
 
 
 # ============================================================
-# VALIDAR CLAVE DE UNIÓN
+# VALIDATE THE JOIN KEY
 # ============================================================
 
 
 def is_invalid_key(value: str) -> bool:
     """
-    Retorna True si el valor no puede utilizarse como clave
-    de unión.
-    Una clave es inválida solamente si está vacía o es "N/A".
+    Returns True if the value cannot be used as a join
+    key.
+    A key is invalid only if it is empty or is "N/A".
     """
     return is_empty_or_na(value)
 
 
 def extract_key(fields: list[str], key_idx: int) -> str:
-    """Retorna la clave de unión de una fila, sin comillas y en minúsculas."""
+    """Returns the join key of a row, unquoted and in lowercase."""
     return strip_quotes(fields[key_idx]).lower()
 
 
@@ -172,11 +172,11 @@ def is_identity_duplicate(
     row_a: list[str], row_b: list[str], positions: dict[str, int]
 ) -> bool:
     """
-    Comprueba si dos filas con la misma clave son el mismo registro de nodo
-    repetido, comparando solo los campos de identidad (nombre, MAC, IP y serial,
-    sin distinguir mayúsculas ni espacios). Los demás campos no se evalúan.
+    Checks whether two rows with the same key are the same node record
+    repeated, comparing only the identity fields (name, MAC, IP and serial,
+    ignoring case and whitespace). The other fields are not evaluated.
     """
-    fields_to_check = ["Nombre maquina", "MAC", "IP", "Serial Number"]
+    fields_to_check = ["Machine name", "MAC", "IP", "Serial Number"]
     for field in fields_to_check:
         idx = positions.get(field)
         if idx is not None and idx < len(row_a) and idx < len(row_b):
@@ -188,7 +188,7 @@ def is_identity_duplicate(
 
 
 # ============================================================
-# RESOLVER POSICIONES EN UN HEADER
+# RESOLVE POSITIONS IN A HEADER
 # ============================================================
 
 
@@ -198,18 +198,18 @@ def resolve_positions(
     csv_path: Path,
 ) -> dict[str, int]:
     """
-    Detecta la posición (índice 0-based) de cada columna de
-    rundeck_header_list dentro del header de un CSV.
+    Detects the position (0-based index) of each column of
+    rundeck_header_list within the header of a CSV.
 
-    Reglas:
-    - Cada nombre de rundeck_header_list debe aparecer exactamente una
-      vez en el header del CSV.
-    - El orden de las columnas NO importa.
-    - Los CSV pueden contener columnas adicionales no definidas
-      en rundeck_header_list.txt.
+    Rules:
+    - Each rundeck_header_list name must appear exactly
+      once in the CSV header.
+    - The order of the columns does NOT matter.
+    - The CSVs may contain additional columns not defined
+      in rundeck_header_list.txt.
 
-    Retorna:
-        dict {nombre_columna: índice_0based}
+    Returns:
+        dict {column_name: 0based_index}
     """
     name_to_index: dict[str, int] = {}
 
@@ -218,9 +218,9 @@ def resolve_positions(
 
         if field_name in name_to_index:
             error(
-                f"El archivo tiene el nombre de columna "
-                f"'{field_name}' duplicado (posiciones "
-                f"{name_to_index[field_name] + 1} y {idx + 1}).\n"
+                f"The file has the column name "
+                f"'{field_name}' duplicated (positions "
+                f"{name_to_index[field_name] + 1} and {idx + 1}).\n"
                 f"  {csv_path}"
             )
 
@@ -231,8 +231,8 @@ def resolve_positions(
     for name, _flag in rundeck_header_list:
         if name not in name_to_index:
             error(
-                f"La columna '{name}' definida en rundeck_header_list.txt "
-                f"no existe en el header del archivo.\n"
+                f"The column '{name}' defined in rundeck_header_list.txt "
+                f"does not exist in the header of the file.\n"
                 f"  {csv_path}"
             )
 
@@ -242,7 +242,7 @@ def resolve_positions(
 
 
 # ============================================================
-# LEER CSV COMPLETO
+# READ THE WHOLE CSV
 # ============================================================
 
 
@@ -250,13 +250,13 @@ def load_csv_data(
     csv_path: Path,
 ) -> tuple[str, list[str], list[list[str]]]:
     """
-    Lee un CSV completo en una sola pasada.
+    Reads a whole CSV in a single pass.
 
-    Retorna:
-        (línea_original_del_header, campos_del_header, filas_de_datos)
+    Returns:
+        (original_header_line, header_fields, data_rows)
 
-    Las filas se mantienen en memoria para evitar una segunda
-    lectura del archivo durante el procesamiento posterior.
+    The rows are kept in memory to avoid a second
+    read of the file during the later processing.
     """
     with csv_path.open(
         "r",
@@ -266,12 +266,12 @@ def load_csv_data(
         header_line = file.readline().rstrip("\r\n")
 
         if not header_line:
-            error(f"El archivo CSV está vacío:\n  {csv_path}")
+            error(f"The CSV file is empty:\n  {csv_path}")
 
         header_fields = split_quoted_csv_line(header_line)
 
         if header_fields is None:
-            error(f"El header del CSV tiene comillas desbalanceadas:\n  {csv_path}")
+            error(f"The CSV header has unbalanced quotes:\n  {csv_path}")
 
         rows: list[list[str]] = []
 
@@ -285,8 +285,8 @@ def load_csv_data(
 
             if fields is None:
                 print(
-                    f"[ERROR] Línea {line_number} de "
-                    f"{csv_path.name}: comillas desbalanceadas.",
+                    f"[ERROR] Line {line_number} of "
+                    f"{csv_path.name}: unbalanced quotes.",
                     file=sys.stderr,
                 )
                 continue
@@ -297,7 +297,7 @@ def load_csv_data(
 
 
 # ============================================================
-# VALIDAR ESTRUCTURA DE FILAS
+# VALIDATE ROW STRUCTURE
 # ============================================================
 
 
@@ -307,19 +307,19 @@ def validate_rows(
     csv_path: Path,
 ) -> list[list[str]]:
     """
-    Valida que todas las filas tengan exactamente la cantidad
-    de columnas esperada.
+    Validates that all rows have exactly the expected
+    number of columns.
 
-    Las filas inválidas se descartan.
+    Invalid rows are discarded.
     """
     valid_rows: list[list[str]] = []
 
     for row_number, fields in enumerate(rows, start=2):
         if len(fields) != expected_columns:
             print(
-                f"[ERROR] Línea {row_number} de {csv_path.name}: "
-                f"se esperaban {expected_columns} campos, "
-                f"pero se encontraron {len(fields)}.",
+                f"[ERROR] Line {row_number} of {csv_path.name}: "
+                f"{expected_columns} fields were expected, "
+                f"but {len(fields)} were found.",
                 file=sys.stderr,
             )
             continue
@@ -330,7 +330,7 @@ def validate_rows(
 
 
 # ============================================================
-# CONSTRUIR MAPA DEL INVENTARIO PARSEADO
+# BUILD THE MAP OF THE PARSED INVENTORY
 # ============================================================
 
 
@@ -341,18 +341,18 @@ def index_rows_by_unique_key(
     inventory_label: str,
 ) -> KeyedRows:
     """
-    Indexa las filas por clave de unión separando las claves únicas de las duplicadas.
+    Indexes the rows by join key, separating the unique keys from the duplicate ones.
 
-    Decisiones de diseño:
-    - Lógica común al inventario parseado y al maestro (`inventory_label` solo
-      contextualiza los logs), para que ambos apliquen exactamente la misma regla.
-    - Las filas con clave inválida se ignoran. Si una clave se repite y las filas
-      son duplicados de identidad, se conserva la primera y se omite el resto; si
-      difieren, la clave se marca como duplicada y se excluye del índice para
-      impedir cualquier fusión posterior.
+    Design decisions:
+    - Logic shared by the parsed inventory and the master (`inventory_label` only
+      gives context to the logs), so that both apply exactly the same rule.
+    - Rows with an invalid key are ignored. If a key is repeated and the rows
+      are identity duplicates, the first one is kept and the rest are skipped; if
+      they differ, the key is marked as duplicate and excluded from the index to
+      prevent any later merge.
 
-    Retorna:
-        KeyedRows: (clave -> fila única, claves duplicadas)
+    Returns:
+        KeyedRows: (key -> unique row, duplicate keys)
     """
     unique_rows: dict[str, list[str]] = {}
     duplicated_keys: set[str] = set()
@@ -369,8 +369,8 @@ def index_rows_by_unique_key(
 
         if is_identity_duplicate(unique_rows[key], fields, positions):
             print(
-                f"[WARNING] Duplicado de identidad detectado en el inventario "
-                f"{inventory_label} para la clave '{key}'. Omitiendo duplicado.",
+                f"[WARNING] Identity duplicate detected in the {inventory_label} "
+                f"inventory for the key '{key}'. Skipping duplicate.",
                 file=sys.stderr,
             )
             continue
@@ -380,8 +380,8 @@ def index_rows_by_unique_key(
 
     for key in sorted(duplicated_keys):
         print(
-            f"[WARNING] Clave duplicada en el inventario {inventory_label}: "
-            f"'{key}'. Las filas con esta clave difieren y no serán fusionadas.",
+            f"[WARNING] Duplicate key in the {inventory_label} inventory: "
+            f"'{key}'. The rows with this key differ and will not be merged.",
             file=sys.stderr,
         )
 
@@ -394,18 +394,18 @@ def build_parsed_data(
     positions: dict[str, int],
 ) -> KeyedRows:
     """
-    Construye un mapa:
+    Builds a map:
 
-        clave -> fila
+        key -> row
 
-    Las claves duplicadas se registran y quedan excluidas del
-    mapa para impedir cualquier fusión posterior, a menos que sean duplicados de identidad.
+    Duplicate keys are recorded and excluded from the
+    map to prevent any later merge, unless they are identity duplicates.
     """
-    return index_rows_by_unique_key(rows, key_idx, positions, "parseado")
+    return index_rows_by_unique_key(rows, key_idx, positions, "parsed")
 
 
 # ============================================================
-# VALIDAR UNICIDAD DE CLAVES EN EL INVENTARIO MAESTRO
+# VALIDATE KEY UNIQUENESS IN THE MASTER INVENTORY
 # ============================================================
 
 
@@ -415,53 +415,53 @@ def find_master_duplicated_keys(
     positions: dict[str, int],
 ) -> set[str]:
     """
-    Detecta claves duplicadas en el inventario maestro.
+    Detects duplicate keys in the master inventory.
 
-    Retorna el conjunto de claves duplicadas (aquellas que no son duplicados de identidad).
+    Returns the set of duplicate keys (those that are not identity duplicates).
     """
-    return index_rows_by_unique_key(rows, key_idx, positions, "maestro").duplicated_keys
+    return index_rows_by_unique_key(rows, key_idx, positions, "master").duplicated_keys
 
 
 # ============================================================
-# ARGUMENTOS Y VALIDACIÓN DE RUTAS
+# ARGUMENTS AND PATH VALIDATION
 # ============================================================
 
 
 def parse_cli_paths(argv: Sequence[str]) -> CliPaths:
     """
-    Interpreta los argumentos de línea de comandos (sin el nombre del programa).
+    Parses the command-line arguments (without the program name).
 
-    Decisiones de diseño:
-    - Los inventarios son opciones nombradas obligatorias (`--parsed`, `--master`):
-      con argumentos posicionales, intercambiar los archivos no produce ningún
-      error y la fusión se ejecuta al revés sin avisar.
-    - La salida y el rundeck_header_list son opcionales y, por defecto, se resuelven
-      en output/ y config/ respectivamente (ver inventory_pipeline.paths).
+    Design decisions:
+    - The inventories are mandatory named options (`--parsed`, `--master`):
+      with positional arguments, swapping the files produces no
+      error and the merge runs backwards without warning.
+    - The output and the rundeck_header_list are optional and, by default, resolve
+      to output/ and config/ respectively (see inventory_pipeline.paths).
 
-    argparse termina el proceso con un mensaje de uso si falta una opción obligatoria.
+    argparse ends the process with a usage message if a mandatory option is missing.
     """
     parser = argparse.ArgumentParser(
-        description="Fusiona un inventario parseado sobre el inventario maestro."
+        description="Merges a parsed inventory onto the master inventory."
     )
     parser.add_argument(
-        "-p", "--parsed", type=Path, required=True, help="CSV del inventario parseado."
+        "-p", "--parsed", type=Path, required=True, help="CSV of the parsed inventory."
     )
     parser.add_argument(
-        "-m", "--master", type=Path, required=True, help="CSV del inventario maestro."
+        "-m", "--master", type=Path, required=True, help="CSV of the master inventory."
     )
     parser.add_argument(
         "-o",
         "--output",
         type=Path,
         default=OUTPUT_DIR / MERGED_CSV_NAME,
-        help=f"CSV de salida (por defecto output/{MERGED_CSV_NAME}).",
+        help=f"Output CSV (default output/{MERGED_CSV_NAME}).",
     )
     parser.add_argument(
         "-l",
         "--header-list",
         type=Path,
         default=DEFAULT_HEADER_LIST_PATH,
-        help="Ruta de rundeck_header_list.txt (por defecto en config/).",
+        help="Path of rundeck_header_list.txt (default in config/).",
     )
     args = parser.parse_args(argv)
     return CliPaths(
@@ -474,41 +474,41 @@ def parse_cli_paths(argv: Sequence[str]) -> CliPaths:
 
 def validate_paths(paths: CliPaths) -> None:
     """
-    Verifica que existan los inventarios de entrada y que la salida no los pise.
+    Verifies that the input inventories exist and that the output does not clobber them.
 
-    Termina el proceso con error si alguna validación falla.
+    Ends the process with an error if any validation fails.
     """
     labeled_inputs = (
-        (paths.parsed, "inventario parseado"),
-        (paths.master, "inventario maestro"),
+        (paths.parsed, "parsed inventory"),
+        (paths.master, "master inventory"),
     )
     ensure_inputs_exist(labeled_inputs)
     ensure_output_does_not_overwrite(paths.output, labeled_inputs)
 
 
 def ensure_inputs_exist(labeled_inputs: tuple[tuple[Path, str], ...]) -> None:
-    """Termina el proceso con error si algún inventario de entrada no existe."""
+    """Ends the process with an error if any input inventory does not exist."""
     for path, label in labeled_inputs:
         if not path.is_file():
-            error(f"No se encontró el {label}: {path}")
+            error(f"The {label} was not found: {path}")
 
 
 def ensure_output_does_not_overwrite(
     output_path: Path, labeled_inputs: tuple[tuple[Path, str], ...]
 ) -> None:
-    """Termina el proceso con error si la salida coincide con algún inventario de entrada."""
+    """Ends the process with an error if the output matches any input inventory."""
     resolved_output = output_path.resolve()
     for path, label in labeled_inputs:
         if resolved_output == path.resolve():
             error(
-                f"El archivo de salida no puede ser el mismo archivo "
-                f"que el {label}:\n"
+                f"The output file cannot be the same file "
+                f"as the {label}:\n"
                 f"  {output_path}"
             )
 
 
 # ============================================================
-# CARGA DE INVENTARIOS
+# INVENTORY LOADING
 # ============================================================
 
 
@@ -518,24 +518,24 @@ def load_inventory(
     restrict_to_defined_columns: bool,
 ) -> LoadedInventory:
     """
-    Lee un inventario CSV, resuelve las posiciones de sus columnas y descarta las
-    filas con cantidad de campos inválida.
+    Reads a CSV inventory, resolves the positions of its columns and discards the
+    rows with an invalid number of fields.
 
-    Decisiones de diseño:
-    - El inventario parseado solo contiene las columnas definidas en
-      rundeck_header_list (`restrict_to_defined_columns=True`); el maestro puede
-      traer columnas adicionales, por lo que se valida contra su propio header.
-    - Un parseado con columnas adicionales casi seguro es el maestro pasado en el
-      lugar equivocado: se aborta en lugar de descartar todas sus filas en silencio.
+    Design decisions:
+    - The parsed inventory only contains the columns defined in
+      rundeck_header_list (`restrict_to_defined_columns=True`); the master may
+      bring additional columns, so it is validated against its own header.
+    - A parsed inventory with additional columns is almost certainly the master passed
+      in the wrong place: it aborts instead of silently discarding all its rows.
     """
     header_line, header_fields, rows = load_csv_data(csv_path)
     positions = resolve_positions(rundeck_header_list, header_fields, csv_path)
     if restrict_to_defined_columns and len(header_fields) != len(rundeck_header_list):
         error(
-            f"El inventario parseado tiene {len(header_fields)} columnas pero "
-            f"rundeck_header_list define {len(rundeck_header_list)}. "
-            "Un inventario con columnas adicionales corresponde al maestro: "
-            "verifique que los argumentos no estén invertidos.\n"
+            f"The parsed inventory has {len(header_fields)} columns but "
+            f"rundeck_header_list defines {len(rundeck_header_list)}. "
+            "An inventory with additional columns corresponds to the master: "
+            "check that the arguments are not swapped.\n"
             f"  {csv_path}"
         )
     expected_columns = (
@@ -555,12 +555,12 @@ def build_merge_pairs(
     parsed_positions: dict[str, int],
 ) -> list[tuple[int, int]]:
     """
-    Construye los pares (índice_maestro, índice_parseado) de las columnas fusionables.
+    Builds the (master_index, parsed_index) pairs of the mergeable columns.
 
-    Solo las columnas con flag 1 se fusionan:
-        flag 0 -> nunca se fusiona.
-        flag 1 -> puede actualizarse desde el parseado.
-        flag 2 -> clave de unión; nunca se sobrescribe.
+    Only columns with flag 1 are merged:
+        flag 0 -> never merged.
+        flag 1 -> can be updated from the parsed one.
+        flag 2 -> join key; never overwritten.
     """
     return [
         (master_positions[name], parsed_positions[name])
@@ -577,31 +577,31 @@ def print_summary(
     plan: MergePlan,
     parsed_duplicated_keys: set[str],
 ) -> None:
-    """Imprime el resumen informativo previo a la fusión."""
+    """Prints the informational summary before the merge."""
     master_total_columns = len(master.header_fields)
     extra_columns = master_total_columns - defined_fields
 
-    print(f"Columnas definidas en rundeck_header_list : {defined_fields}")
-    print(f"Columnas totales en el maestro    : {master_total_columns}")
+    print(f"Columns defined in rundeck_header_list : {defined_fields}")
+    print(f"Total columns in the master       : {master_total_columns}")
 
     if extra_columns > 0:
-        print(f"Columnas adicionales del maestro  : {extra_columns}")
+        print(f"Additional master columns         : {extra_columns}")
 
-    print(f"Clave de unión                    : {key_name}")
-    print(f"Posición de clave en el maestro   : {plan.key_master_idx + 1}")
-    print(f"Posición de clave en el parseado  : {key_parsed_idx + 1}")
-    print(f"Claves válidas en el parseado     : {len(plan.parsed_data)}")
-    print(f"Claves duplicadas en el parseado  : {len(parsed_duplicated_keys)}")
-    print(f"Claves duplicadas en el maestro   : {len(plan.master_duplicated_keys)}")
+    print(f"Join key                          : {key_name}")
+    print(f"Key position in the master        : {plan.key_master_idx + 1}")
+    print(f"Key position in the parsed        : {key_parsed_idx + 1}")
+    print(f"Valid keys in the parsed          : {len(plan.parsed_data)}")
+    print(f"Duplicate keys in the parsed      : {len(parsed_duplicated_keys)}")
+    print(f"Duplicate keys in the master      : {len(plan.master_duplicated_keys)}")
 
 
 def warn_if_no_keys_match(master: LoadedInventory, plan: MergePlan) -> None:
     """
-    Advierte si ninguna clave del maestro existe en el parseado.
+    Warns if no master key exists in the parsed inventory.
 
-    Decisiones de diseño:
-    - No es un error (un maestro nuevo o sin colisiones es legítimo), pero es la
-      señal visible de argumentos invertidos o de archivos que no corresponden.
+    Design decisions:
+    - It is not an error (a new master or one without collisions is legitimate), but it is
+      the visible sign of swapped arguments or of files that do not belong together.
     """
     if not master.rows:
         return
@@ -612,15 +612,15 @@ def warn_if_no_keys_match(master: LoadedInventory, plan: MergePlan) -> None:
     )
     if not has_match:
         print(
-            "[WARNING] Ninguna clave del inventario maestro coincide con el "
-            "inventario parseado. No se fusionará ninguna fila; verifique que los "
-            "argumentos no estén invertidos.",
+            "[WARNING] No key of the master inventory matches the "
+            "parsed inventory. No row will be merged; check that the "
+            "arguments are not swapped.",
             file=sys.stderr,
         )
 
 
 # ============================================================
-# FUSIÓN DE FILAS
+# ROW MERGE
 # ============================================================
 
 
@@ -630,8 +630,8 @@ def merge_row(
     merge_pairs: list[tuple[int, int]],
 ) -> list[str]:
     """
-    Retorna una copia de la fila del maestro con las columnas fusionables
-    sobrescritas por el valor parseado, salvo que este sea vacío o "N/A".
+    Returns a copy of the master row with the mergeable columns
+    overwritten by the parsed value, unless it is empty or "N/A".
     """
     merged = list(master_fields)
     for master_idx, parsed_idx in merge_pairs:
@@ -648,11 +648,11 @@ def resolve_output_row(
     plan: MergePlan,
 ) -> list[str]:
     """
-    Decide la fila de salida para una fila del maestro (comportamiento LEFT JOIN).
+    Decides the output row for a master row (LEFT JOIN behavior).
 
-    La fila se conserva sin fusionar si su clave es inválida, está duplicada en el
-    maestro o no existe en el parseado; solo se fusiona si la clave es válida y
-    única en ambos inventarios.
+    The row is kept without merging if its key is invalid, is duplicated in the
+    master or does not exist in the parsed inventory; it is only merged if the key
+    is valid and unique in both inventories.
     """
     key = extract_key(master_fields, plan.key_master_idx)
 
@@ -662,9 +662,9 @@ def resolve_output_row(
     parsed_fields = plan.parsed_data.get(key)
     if parsed_fields is None:
         print(
-            f"[INFO] Línea {line_number} del inventario maestro: "
-            f"la clave '{key}' no existe en el inventario "
-            "parseado. La fila se conservará sin fusionar.",
+            f"[INFO] Line {line_number} of the master inventory: "
+            f"the key '{key}' does not exist in the parsed "
+            "inventory. The row will be kept without merging.",
             file=sys.stderr,
         )
         return master_fields
@@ -673,7 +673,7 @@ def resolve_output_row(
 
 
 # ============================================================
-# ESCRITURA ATÓMICA
+# ATOMIC WRITE
 # ============================================================
 
 
@@ -683,14 +683,14 @@ def write_merged_inventory(
     plan: MergePlan,
 ) -> None:
     """
-    Escribe el inventario fusionado de forma atómica.
+    Writes the merged inventory atomically.
 
-    Decisiones de diseño:
-    - Se escribe en un archivo temporal del mismo directorio que la salida para que
-      `os.replace()` sea atómico; la salida definitiva solo se reemplaza si todo el
-      procesamiento terminó correctamente.
-    - Si el proceso falla antes del reemplazo, el temporal se elimina para no dejar
-      residuos.
+    Design decisions:
+    - It is written to a temporary file in the same directory as the output so that
+      `os.replace()` is atomic; the final output is only replaced if all the
+      processing finished successfully.
+    - If the process fails before the replacement, the temporary file is removed so no
+      leftovers remain.
     """
     temporary_output_path: Path | None = None
 
@@ -771,10 +771,10 @@ def main() -> None:
     write_merged_inventory(paths.output, master, plan)
 
     print()
-    print("[OK] Inventarios fusionados correctamente.")
-    print(f"Inventario parseado : {paths.parsed}")
-    print(f"Inventario maestro  : {paths.master}")
-    print(f"Inventario salida   : {paths.output}")
+    print("[OK] Inventories merged successfully.")
+    print(f"Parsed inventory : {paths.parsed}")
+    print(f"Master inventory : {paths.master}")
+    print(f"Output inventory : {paths.output}")
 
 
 if __name__ == "__main__":

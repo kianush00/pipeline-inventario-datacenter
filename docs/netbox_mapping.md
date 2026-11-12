@@ -28,7 +28,7 @@ Each entry defines a semantic key used by the Python script with the following s
 | ---------- | ----------- | ------------- |
 | `source` | Yes | Exact text name of the column in the CSV. Can include a YAML anchor (`&col_id`) to reuse it in lower sections. |
 | `required` | No | If `true`, the **presence of the header** in the CSV is mandatory. The script aborts if it is missing. Does not validate that the cell value is filled. |
-| `map` | No | Value translation dictionary used solely to normalize CSV values into values accepted by NetBox (e.g., `"Dedicada" → "dedicated"`). Including identity mappings (e.g., `"active" → "active"`) is recommended so that CSVs already containing native English NetBox values are supported. |
+| `map` | No | Value translation dictionary used solely to normalize CSV values into values accepted by NetBox (e.g., `"Dedicated" → "dedicated"`). Matching ignores case and surrounding spaces, and a value that is neither a key nor a target of the map rejects the row, so the map also works as the list of accepted values. |
 
 The `machine_type` entry **must** define a `map`. Its normalized values drive the node classification, which is fixed in the exporter: `vm` is a Virtual Machine, `hypervisor` is a physical Device that also acts as a cluster host, and any other mapped value (e.g. `dedicated`) is a physical Device. A value missing from the map rejects the row.
 
@@ -44,72 +44,72 @@ This table acts as a data dictionary of the fields the script expects to extract
 
 | Internal Alias (`key`) | Typical Source (`source`) | Description (Business Semantics) | Example Values |
 | ---------------------- | ------------------------- | -------------------------------- | -------------- |
-| `machine_name` | `Nombre maquina` | Hostname or main label of the device/VM. Required. | `srv-web-01`, `db-prod-sql` |
-| `machine_type` | `Tipo de maquina` | Defines if the node is a physical server, hypervisor, or virtual machine. | `Dedicada`, `VM`, `Hipervisor` |
-| `role` | `Rol` | Network function or role of the device in the infrastructure. | `Web Server`, `Database Server` |
-| `desc` | `Descripcion` | Brief free text to describe the node. | `Primary DB server` |
+| `machine_name` | `Machine name` | Hostname or main label of the device/VM. Required. | `srv-web-01`, `db-prod-sql` |
+| `machine_type` | `Machine type` | Defines if the node is a physical server, hypervisor, or virtual machine. | `Dedicated`, `VM`, `Hypervisor` |
+| `role` | `Role` | Network function or role of the device in the infrastructure. | `Web Server`, `Database Server` |
+| `desc` | `Description` | Brief free text to describe the node. | `Primary DB server` |
 | `cluster_name` | `Cluster` | Name of the cluster the node belongs to. | `Cluster-VMware-01`, `KVM-Pool-B` |
-| `host_device` | `Dispositivo Host` | (For VMs) Name of the physical server running the VM. | `hyper-node-05` |
+| `host_device` | `Host device` | (For VMs) Name of the physical server running the VM. | `hyper-node-05` |
 | `rack` | `Rack` | Name of the physical rack where it is located. | `Rack-A1`, `Row-2-R4` |
-| `rack_location` | `Fila` | Name of the Location (row/corridor) where the rack is grouped. | `Row A`, `Row B` |
-| `pos_u` | `Posicion (U)` | Physical position or lowest bay number within the rack. Must be `>= 1` and a multiple of `0.5` (NetBox `Device.position` constraint). | `12`, `25`, `12.5` |
-| `height_u` | `Altura (U)` | Total U height of the device **model** (DeviceType). Must be `>= 0` and a multiple of `0.5`; `0` is valid (e.g. blades inside a chassis). If empty, an existing DeviceType keeps its height and a new one is created with `1.0` (with a warning). | `0`, `1.0`, `1.5`, `2.0` |
-| `os` | `SO Host` | Base operating system of the node. | `Ubuntu`, `Windows Server 2022` |
-| `os_ver` | `Version SO Host` | Specific OS version. | `22.04 LTS`, `2019 Standard` |
-| `hypervisor_os` | `SO Hipervisor` | Base hypervisor operating system (e.g. ESXi, Proxmox). | `VMware ESXi`, `Proxmox VE` |
-| `hypervisor_ver` | `Version SO Hipervisor` | Hypervisor OS build or version. | `7.0.3`, `8.1.1` |
+| `rack_location` | `Row` | Name of the Location (row/corridor) where the rack is grouped. | `Row A`, `Row B` |
+| `pos_u` | `Position (U)` | Physical position or lowest bay number within the rack. Must be `>= 1` and a multiple of `0.5` (NetBox `Device.position` constraint). | `12`, `25`, `12.5` |
+| `height_u` | `Height (U)` | Total U height of the device **model** (DeviceType). Must be `>= 0` and a multiple of `0.5`; `0` is valid (e.g. blades inside a chassis). If empty, an existing DeviceType keeps its height and a new one is created with `1.0` (with a warning). | `0`, `1.0`, `1.5`, `2.0` |
+| `os` | `Host OS` | Base operating system of the node. | `Ubuntu`, `Windows Server 2022` |
+| `os_ver` | `Host OS version` | Specific OS version. | `22.04 LTS`, `2019 Standard` |
+| `hypervisor_os` | `Hypervisor OS` | Base hypervisor operating system (e.g. ESXi, Proxmox). | `VMware ESXi`, `Proxmox VE` |
+| `hypervisor_ver` | `Hypervisor OS version` | Hypervisor OS build or version. | `7.0.3`, `8.1.1` |
 | `iface_names` | `Interfaces` | Comma-separated list of network interface names. | `eth0, eth1`, `vmnic0` |
-| `iface_status` | `Interfaces estado` | Comma-separated list of link statuses for each interface. | `up, down` |
-| `iface_ip` | `IP` | Comma-separated host IP addresses, one per interface (positional, see [Network columns](#network-columns-ip-and-red-ip)). | `10.0.0.10, 192.168.1.5` |
-| `iface_pfx` | `Red IP` | Comma-separated networks, one per interface, aligned by position with `IP`. | `10.0.0.0/24, 192.168.1.0/26` |
+| `iface_status` | `Interfaces status` | Comma-separated list of link statuses for each interface. | `up, down` |
+| `iface_ip` | `IP` | Comma-separated host IP addresses, one per interface (positional, see [Network columns](#network-columns-ip-and-ip-network)). | `10.0.0.10, 192.168.1.5` |
+| `iface_pfx` | `IP network` | Comma-separated networks, one per interface, aligned by position with `IP`. | `10.0.0.0/24, 192.168.1.0/26` |
 | `iface_mac` | `MAC` | List of MAC addresses corresponding to the interfaces. | `aa:bb:cc:dd:ee:ff` |
-| `cpu_model` | `CPU Modelo` | Commercial name of the processor. | `Intel Xeon Gold 6230` |
-| `cores` | `Cores (por socket)` | Physical (Device) or virtual (VM) cores **per socket**, not the system total. | `16`, `1` |
-| `threads` | `Threads (por socket)` | Logical CPUs (threads) **per socket**, not the system total. | `32`, `1` |
+| `cpu_model` | `CPU model` | Commercial name of the processor. | `Intel Xeon Gold 6230` |
+| `cores` | `Cores (per socket)` | Physical (Device) or virtual (VM) cores **per socket**, not the system total. | `16`, `1` |
+| `threads` | `Threads (per socket)` | Logical CPUs (threads) **per socket**, not the system total. | `32`, `1` |
 | `sockets` | `Sockets` | Number of physical sockets (Device) or virtual sockets (VM). The VM `vcpus` total is derived as `threads × sockets`. | `2`, `4` |
 | `ram_gb` | `RAM (GB)` | Total RAM memory expressed in Gigabytes. | `128`, `256` |
-| `disks` | `Discos` | Raw breakdown of the disk configuration. | `2x SSD 512GB, 4x HDD 4TB` |
-| `disk_cap` | `Capacidad visible (GB)` | Total visible storage capacity. | `1024`, `500` |
+| `disks` | `Disks` | Raw breakdown of the disk configuration. | `2x SSD 512GB, 4x HDD 4TB` |
+| `disk_cap` | `Visible capacity (GB)` | Total visible storage capacity. | `1024`, `500` |
 | `raid` | `RAID` | Configured RAID level. | `RAID 1`, `RAID 5` |
-| `manufacturer` | `Marca` | Hardware brand or manufacturer. | `Dell`, `HP`, `Cisco` |
-| `model` | `Modelo` | Specific hardware model. | `PowerEdge R740`, `ProLiant DL380` |
+| `manufacturer` | `Manufacturer` | Hardware brand or manufacturer. | `Dell`, `HP`, `Cisco` |
+| `model` | `Model` | Specific hardware model. | `PowerEdge R740`, `ProLiant DL380` |
 | `serial` | `Serial Number` | Physical serial number for general hardware (non-Dell). Coalesced with Service Tag. | `ABC12345` |
 | `part_number` | `P/N` | Part Number (P/N) or SKU of the hardware **model** (DeviceType). Max 50 characters (NetBox limit). If empty, an existing P/N is kept. | `123-456-789` |
 | `service_tag` | `Service Tag` | Conventionally reserved for the Service Tag of Dell equipment. Coalesced into native Serial. | `ST-442-XY` |
-| `asset_tag` | `Nro Inventario` | Internal inventory plate or number. | `INV-9876` |
+| `asset_tag` | `Inventory number` | Internal inventory plate or number. | `INV-9876` |
 | `inventory_uuid` | `UUID` | Unique and deterministic identifier of the node (ideally extracted from DMI or virtual system). Uniqueness is enforced at export time: a UUID repeated in the CSV or in NetBox is not used to identify the node and the row falls back to name resolution (see [architecture](architecture.md#netbox-synchronization-flow)). | `564d...e2f1` |
-| `bios_ver` | `Version BIOS` | Current BIOS/UEFI firmware version. | `2.14.0` |
-| `bios_date` | `Fecha BIOS` | Release or update date of the BIOS. | `2023-01-15` |
-| `status` | `Estado` | Lifecycle status. Accepts the Spanish labels mapped in the YAML or the native NetBox values (`active`, `planned`, `staged`, `failed`, `inventory`, `decommissioning`, `offline`). If empty, the node type default applies (`inventory` for Devices, `staged` for VMs). | `Activo`, `Offline`, `Decommissioning` |
-| `environment` | `Entorno` | Deployment environment (Production, QA, Development). | `Production`, `Development` |
-| `rundeck_node` | `Nodo Rundeck` | Indicates if the node was discovered via Rundeck (boolean). | `Yes`, `No` |
-| `notes` | `Notas` | Extensive notes or additional audit metadata (flexible placement). | `Replace disks in Q3` |
+| `bios_ver` | `BIOS version` | Current BIOS/UEFI firmware version. | `2.14.0` |
+| `bios_date` | `BIOS date` | Release or update date of the BIOS. | `2023-01-15` |
+| `status` | `Status` | Lifecycle status. Accepts the native NetBox values (`active`, `planned`, `staged`, `failed`, `inventory`, `decommissioning`, `offline`), case-insensitively. If empty, the node type default applies (`inventory` for Devices, `staged` for VMs). | `Active`, `Offline`, `Decommissioning` |
+| `environment` | `Environment` | Deployment environment (Production, QA, Development). | `Production`, `Development` |
+| `rundeck_node` | `Rundeck node` | Indicates if the node was discovered via Rundeck (boolean). | `Yes`, `No` |
+| `notes` | `Notes` | Extensive notes or additional audit metadata (flexible placement). | `Replace disks in Q3` |
 
-### Network columns (`IP` and `Red IP`)
+### Network columns (`IP` and `IP network`)
 
-`Interfaces`, `Interfaces estado`, `IP`, `Red IP` and `MAC` are **positional**: the Nth element of each column describes the Nth interface. Each column must have the same number of comma-separated elements as `Interfaces`, or be completely empty. `N/A` marks an interface without that value.
+`Interfaces`, `Interfaces status`, `IP`, `IP network` and `MAC` are **positional**: the Nth element of each column describes the Nth interface. Each column must have the same number of comma-separated elements as `Interfaces`, or be completely empty. `N/A` marks an interface without that value.
 
 | Column | Content | Accepted formats |
 | --- | --- | --- |
-| `IP` | Host address of the interface (no mask). | `192.168.1.10`, `2001:db8::1`. A CIDR (`192.168.1.10/24`) is also accepted; its prefix is used only when `Red IP` is empty. |
-| `Red IP` | Network the IP belongs to. | Full network `192.168.1.0/24` or `192.168.1.0/255.255.255.0` (recommended), prefix only `24`, or mask only `255.255.255.0`. |
+| `IP` | Host address of the interface (no mask). | `192.168.1.10`, `2001:db8::1`. A CIDR (`192.168.1.10/24`) is also accepted; its prefix is used only when `IP network` is empty. |
+| `IP network` | Network the IP belongs to. | Full network `192.168.1.0/24` or `192.168.1.0/255.255.255.0` (recommended), prefix only `24`, or mask only `255.255.255.0`. |
 
 Example (3 interfaces):
 
 ```text
 Interfaces = eth0, eth1, eth2
 IP         = 192.168.1.10, 10.0.0.5, N/A
-Red IP     = 192.168.1.0/24, 10.0.0.0/8, N/A
+IP network = 192.168.1.0/24, 10.0.0.0/8, N/A
 ```
 
 Rules applied per interface:
 
-| `IP` | `Red IP` | Result |
+| `IP` | `IP network` | Result |
 | --- | --- | --- |
 | set | full network | The IP **must belong** to that network, otherwise the whole machine's interfaces are rejected (`RowValidationError`). A Prefix and the IP address are synchronized. |
 | set | prefix or mask only | The network is derived from IP + prefix; a Prefix and the IP address are synchronized. |
 | set | empty / `N/A` | The IP is skipped with a warning (no prefix is invented). |
-| empty / `N/A` | set | `Red IP` is discarded with a warning (NetBox requires a host). |
+| empty / `N/A` | set | `IP network` is discarded with a warning (NetBox requires a host). |
 | empty / `N/A` | empty / `N/A` | Nothing to sync for the network. |
 
 A prefix length of `/0` (e.g. `0.0.0.0/0`) is always rejected.
@@ -136,22 +136,22 @@ The slug is automatically generated from the name to avoid errors with spaces an
 
 ## Cluster Type (`cluster_type`)
 
-Nodes are grouped into Clusters whose name matches the value of the `Cluster` field in the CSV. Each Cluster gets a ClusterType named after the hypervisor OS (`SO Hipervisor`) reported by the `hypervisor` rows of that cluster; these ClusterTypes are created dynamically, one per distinct OS. Two hypervisors of the same cluster reporting different OS abort the run with a configuration error.
+Nodes are grouped into Clusters whose name matches the value of the `Cluster` field in the CSV. Each Cluster gets a ClusterType named after the hypervisor OS (`Hypervisor OS`) reported by the `hypervisor` rows of that cluster; these ClusterTypes are created dynamically, one per distinct OS. Two hypervisors of the same cluster reporting different OS abort the run with a configuration error.
 
 The `cluster_type.default` entry is the **fallback** for clusters with no hypervisor OS information. It is always ensured in NetBox (created if missing).
 
 ```yaml
 cluster_type:
   default:
-    name: "Hipervisor"
-    slug: "hipervisor"
+    name: "Hypervisor"
+    slug: "hypervisor"
 ```
 
 ---
 
 ## Device Roles (`device_roles`)
 
-Canonical list of Device Roles. The value of the `Rol` column in the CSV must match one of these names. They are created automatically if they do not exist.
+Canonical list of Device Roles. The value of the `Role` column in the CSV must match one of these names. They are created automatically if they do not exist.
 
 | Subfield | Required | Description |
 | ---------- | ----------- | ------------- |
@@ -223,7 +223,7 @@ Defines how to **extract** data from the CSV and **map** it to fields in the Net
 | `float_to_int` | Converts decimal float strings to nearest integer (useful for disk gigabytes) |
 | `rack_position` | Converts to float and validates NetBox's rack position rules: value `>= 1` and a multiple of `0.5` (e.g. `12`, `12.5`; `12.25` and `0` are rejected) |
 | `int_gb_to_mb` | Converts GB (string) to MB (integer) using x1000 multiplier |
-| `bool_si_no` | Converts "Sí"/"No" to `true`/`false` |
+| `bool_yes_no` | Converts "Yes"/"No" (also `true`/`false` and `1`/`0`, case-insensitive) to `true`/`false` |
 | `lower` | Converts to lowercase (used for UUID normalization) |
 
 ### Transformations
@@ -232,7 +232,7 @@ Defines how to **extract** data from the CSV and **map** it to fields in the Net
 | ----------- | ---------------- |
 | `concat_dot` | Concatenates a list of values with the separator `.` (dot + space) |
 | `coalesce` | Returns the first non-empty value from a list of sources. Fails-fast if there is a collision. |
-| `product` | Multiplies numeric sources (e.g. VM `vcpus = Threads (por socket) × Sockets`). If every source is empty the field follows the default/optional policy. |
+| `product` | Multiplies numeric sources (e.g. VM `vcpus = Threads (per socket) × Sockets`). If every source is empty the field follows the default/optional policy. |
 
 **Note on `cast` and `transform`:** If a mapping defines both a `transform` and a `cast`, they are NOT mutually exclusive. The transformation (combining the source columns) is executed first, and the resulting value is then passed to the specified `cast` function.
 

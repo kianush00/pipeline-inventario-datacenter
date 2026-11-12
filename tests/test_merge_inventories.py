@@ -6,6 +6,7 @@ from typing import ClassVar
 import pytest
 
 from inventory_pipeline import merge_inventories
+from inventory_pipeline.base_inventory import load_rundeck_header_list
 from inventory_pipeline.merge_inventories import (
     CliPaths,
     LoadedInventory,
@@ -33,7 +34,7 @@ from inventory_pipeline.paths import (
 
 
 class TestIsInvalidKey:
-    """Valida los edge cases de claves invalidas."""
+    """Validates the edge cases of invalid keys."""
 
     @pytest.mark.parametrize(
         "value, expected",
@@ -50,13 +51,13 @@ class TestIsInvalidKey:
 
 
 class TestIsIdentityDuplicate:
-    """Valida la detección de duplicados de identidad en filas con el mismo UUID."""
+    """Validates the detection of identity duplicates in rows with the same UUID."""
 
     @pytest.fixture
     def base_positions(self) -> dict[str, int]:
         return {
             "UUID": 0,
-            "Nombre maquina": 1,
+            "Machine name": 1,
             "MAC": 2,
             "IP": 3,
             "Serial Number": 4,
@@ -94,18 +95,35 @@ class TestIsIdentityDuplicate:
         row_b = ["uuid1", "host2"]
         assert is_identity_duplicate(row_a, row_b, {}) is True
 
+    def test_identity_fields_exist_in_real_header_list(self) -> None:
+        """The identity columns must be named as in config/rundeck_header_list.txt.
+
+        A column renamed there but not in `is_identity_duplicate` is never found in
+        the positions, so it silently stops being compared (see the test above).
+        """
+        header_list = load_rundeck_header_list(DEFAULT_HEADER_LIST_PATH)
+        positions = {name: index for index, (name, _flag) in enumerate(header_list)}
+        base_row = ["same"] * len(positions)
+
+        compared_columns: set[str] = set()
+        for name, index in positions.items():
+            other_row = [*base_row]
+            other_row[index] = "different"
+            if not is_identity_duplicate(base_row, other_row, positions):
+                compared_columns.add(name)
+
+        assert compared_columns == {"Machine name", "MAC", "IP", "Serial Number"}
+
 
 class TestBuildParsedData:
-    """Valida la creación de inventario parseado con edge cases de UUIDs."""
+    """Validates the creation of the parsed inventory with UUID edge cases."""
 
     def test_build_parsed_data_clean(self) -> None:
         rows = [
             ["uuid1", "host1"],
             ["uuid2", "host2"],
         ]
-        parsed, dups = build_parsed_data(
-            rows, key_idx=0, positions={"Nombre maquina": 1}
-        )
+        parsed, dups = build_parsed_data(rows, key_idx=0, positions={"Machine name": 1})
         assert len(parsed) == 2
         assert len(dups) == 0
         assert "uuid1" in parsed
@@ -114,10 +132,10 @@ class TestBuildParsedData:
     def test_build_parsed_data_with_identity_duplicates(self) -> None:
         rows = [
             ["uuid1", "host1", "mac1", "ip1", "sn1"],
-            ["uuid1", "host1", "mac1", "ip1", "sn1"],  # Duplicado de identidad
+            ["uuid1", "host1", "mac1", "ip1", "sn1"],  # Identity duplicate
         ]
         positions = {
-            "Nombre maquina": 1,
+            "Machine name": 1,
             "MAC": 2,
             "IP": 3,
             "Serial Number": 4,
@@ -133,7 +151,7 @@ class TestBuildParsedData:
             ["uuid1", "host1", "mac2", "ip1", "sn1"],  # MAC differs
         ]
         positions = {
-            "Nombre maquina": 1,
+            "Machine name": 1,
             "MAC": 2,
             "IP": 3,
             "Serial Number": 4,
@@ -144,7 +162,7 @@ class TestBuildParsedData:
 
 
 class TestFindMasterDuplicatedKeys:
-    """Valida la detección de duplicados en maestro."""
+    """Validates the detection of duplicates in the master."""
 
     def test_find_master_no_duplicates(self) -> None:
         rows = [
@@ -152,7 +170,7 @@ class TestFindMasterDuplicatedKeys:
             ["uuid2", "host2"],
         ]
         dups = find_master_duplicated_keys(
-            rows, key_idx=0, positions={"Nombre maquina": 1}
+            rows, key_idx=0, positions={"Machine name": 1}
         )
         assert len(dups) == 0
 
@@ -161,7 +179,7 @@ class TestFindMasterDuplicatedKeys:
             ["uuid1", "host1", "mac1"],
             ["uuid1", "host1", "mac1"],
         ]
-        positions = {"Nombre maquina": 1, "MAC": 2}
+        positions = {"Machine name": 1, "MAC": 2}
         dups = find_master_duplicated_keys(rows, key_idx=0, positions=positions)
         assert len(dups) == 0
 
@@ -170,16 +188,16 @@ class TestFindMasterDuplicatedKeys:
             ["uuid1", "host1", "mac1"],
             ["uuid1", "host2", "mac1"],  # hostname differs
         ]
-        positions = {"Nombre maquina": 1, "MAC": 2}
+        positions = {"Machine name": 1, "MAC": 2}
         dups = find_master_duplicated_keys(rows, key_idx=0, positions=positions)
         assert "uuid1" in dups
         assert len(dups) == 1
 
 
 class TestIndexRowsByUniqueKey:
-    """Valida la regla común de unicidad compartida por parseado y maestro."""
+    """Validates the common uniqueness rule shared by parsed and master."""
 
-    POSITIONS: ClassVar[dict[str, int]] = {"Nombre maquina": 1, "MAC": 2}
+    POSITIONS: ClassVar[dict[str, int]] = {"Machine name": 1, "MAC": 2}
 
     def test_first_row_kept_for_identity_duplicates_and_invalid_keys_ignored(
         self,
@@ -190,7 +208,7 @@ class TestIndexRowsByUniqueKey:
             ["N/A", "h2", "m2", "x"],
             ["", "h3", "m3", "x"],
         ]
-        unique, dups = index_rows_by_unique_key(rows, 0, self.POSITIONS, "parseado")
+        unique, dups = index_rows_by_unique_key(rows, 0, self.POSITIONS, "parsed")
         assert unique == {"u1": rows[0]}
         assert dups == set()
 
@@ -198,30 +216,30 @@ class TestIndexRowsByUniqueKey:
         rows = [
             ["u1", "h1", "m1"],
             ["u1", "h2", "m1"],
-            ["u1", "h1", "m1"],  # tercera fila: no debe reintroducir la clave
+            ["u1", "h1", "m1"],  # third row: must not reintroduce the key
         ]
-        unique, dups = index_rows_by_unique_key(rows, 0, self.POSITIONS, "maestro")
+        unique, dups = index_rows_by_unique_key(rows, 0, self.POSITIONS, "master")
         assert unique == {}
         assert dups == {"u1"}
 
     def test_keys_are_normalized_to_lowercase(self) -> None:
         rows = [["UUID-1", "h1", "m1"], ["uuid-1", "h2", "m1"]]
-        _, dups = index_rows_by_unique_key(rows, 0, self.POSITIONS, "maestro")
+        _, dups = index_rows_by_unique_key(rows, 0, self.POSITIONS, "master")
         assert dups == {"uuid-1"}
 
-    @pytest.mark.parametrize("label", ["parseado", "maestro"])
+    @pytest.mark.parametrize("label", ["parsed", "master"])
     def test_logs_identify_the_inventory(
         self, label: str, capsys: pytest.CaptureFixture[str]
     ) -> None:
         rows = [["u1", "h1", "m1"], ["u1", "h2", "m1"]]
         index_rows_by_unique_key(rows, 0, self.POSITIONS, label)
         assert (
-            f"Clave duplicada en el inventario {label}: 'u1'" in capsys.readouterr().err
+            f"Duplicate key in the {label} inventory: 'u1'" in capsys.readouterr().err
         )
 
 
 class TestResolvePositions:
-    """Valida la extracción de cabeceras."""
+    """Validates the extraction of headers."""
 
     def test_resolve_positions_happy_path(self) -> None:
         header_fields = ["A", "B", "C"]
@@ -252,7 +270,7 @@ class TestResolvePositions:
 
 
 class TestResolveKeyColumn:
-    """Valida la resolución de la clave principal (flag 2)."""
+    """Validates the resolution of the primary key (flag 2)."""
 
     def test_resolve_key_column_happy_path(self) -> None:
         rundeck_header_list = [("A", 1), ("B", 2), ("C", 0)]
@@ -271,7 +289,7 @@ class TestResolveKeyColumn:
 
 
 class TestValidateRows:
-    """Valida el filtro de filas en base al número de columnas."""
+    """Validates the row filter based on the number of columns."""
 
     def test_validate_rows_happy_path(self) -> None:
         rows = [["a", "b", "c"], ["d", "e", "f"]]
@@ -290,12 +308,12 @@ class TestValidateRows:
         assert valid[0] == ["a", "b", "c"]
 
 
-HEADER_LIST = "UUID|2\nNombre maquina|0\nMAC|1\nIP|1\nSerial Number|0\n"
-CSV_HEADER = "UUID,Nombre maquina,MAC,IP,Serial Number,Extra"
+HEADER_LIST = "UUID|2\nMachine name|0\nMAC|1\nIP|1\nSerial Number|0\n"
+CSV_HEADER = "UUID,Machine name,MAC,IP,Serial Number,Extra"
 
 
 class TestMainEndToEnd:
-    """Caracteriza el flujo completo de main(): validaciones, fusión y escritura atómica."""
+    """Characterizes the full flow of main(): validations, merge and atomic write."""
 
     @pytest.fixture
     def workdir(self, tmp_path: Path) -> Path:
@@ -345,9 +363,9 @@ class TestMainEndToEnd:
         self, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         parsed, master, out, header = self._paths(workdir)
-        # El parseado solo trae las 5 columnas definidas (sin Extra)
+        # The parsed one only brings the 5 defined columns (without Extra)
         parsed.write_text(
-            "UUID,Nombre maquina,MAC,IP,Serial Number\n"
+            "UUID,Machine name,MAC,IP,Serial Number\n"
             "u1,h1,NEW-MAC,N/A,SN-PARSED\n"
             "u2,h2,mac2,ip2,SN2\n",
             encoding="utf-8",
@@ -355,10 +373,10 @@ class TestMainEndToEnd:
         self._write(
             master,
             [
-                "u1,host-master,old-mac,old-ip,SN-MASTER,x1",  # fusiona MAC; IP N/A se conserva
-                "u3,h3,m3,i3,SN3,x3",  # no existe en parseado: sin fusionar
-                "N/A,h4,m4,i4,SN4,x4",  # clave inválida: sin fusionar
-                "dup,h5,m5,i5,SN5,x5",  # clave duplicada en maestro
+                "u1,host-master,old-mac,old-ip,SN-MASTER,x1",  # merges MAC; IP N/A is kept
+                "u3,h3,m3,i3,SN3,x3",  # does not exist in parsed: not merged
+                "N/A,h4,m4,i4,SN4,x4",  # invalid key: not merged
+                "dup,h5,m5,i5,SN5,x5",  # duplicate key in master
                 "dup,h6,m6,i6,SN6,x6",
             ],
         )
@@ -380,7 +398,7 @@ class TestMainEndToEnd:
     ) -> None:
         parsed, master, out, header = self._paths(workdir)
         parsed.write_text(
-            "UUID,Nombre maquina,MAC,IP,Serial Number\n"
+            "UUID,Machine name,MAC,IP,Serial Number\n"
             "u1,h1,mac-a,ip,SN\n"
             "u1,h1,mac-b,ip,SN\n",
             encoding="utf-8",
@@ -399,7 +417,7 @@ class TestMainEndToEnd:
             [],
             ["--parsed", "p.csv"],
             ["--master", "m.csv"],
-            ["p.csv", "m.csv"],  # el formato posicional antiguo ya no es válido
+            ["p.csv", "m.csv"],  # the old positional format is no longer valid
         ],
     )
     def test_missing_required_options_exit(
@@ -411,10 +429,10 @@ class TestMainEndToEnd:
     def test_option_order_does_not_change_roles(
         self, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Con opciones nombradas, el orden en la línea de comandos es irrelevante."""
+        """With named options, the order on the command line is irrelevant."""
         parsed, master, out, header = self._paths(workdir)
         parsed.write_text(
-            "UUID,Nombre maquina,MAC,IP,Serial Number\nu1,h1,NEW,ip,SN\n",
+            "UUID,Machine name,MAC,IP,Serial Number\nu1,h1,NEW,ip,SN\n",
             encoding="utf-8",
         )
         self._write(master, ["u1,h1,old,old-ip,SN,x"])
@@ -446,9 +464,7 @@ class TestMainEndToEnd:
         self, workdir: Path, monkeypatch: pytest.MonkeyPatch, clobbered: str
     ) -> None:
         parsed, master, _, header = self._paths(workdir)
-        parsed.write_text(
-            "UUID,Nombre maquina,MAC,IP,Serial Number\n", encoding="utf-8"
-        )
+        parsed.write_text("UUID,Machine name,MAC,IP,Serial Number\n", encoding="utf-8")
         self._write(master, [])
         output = parsed if clobbered == "parsed" else master
         with pytest.raises(SystemExit):
@@ -458,15 +474,13 @@ class TestMainEndToEnd:
         self, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         parsed, master, out, header = self._paths(workdir)
-        parsed.write_text(
-            "UUID,Nombre maquina,MAC,IP,Serial Number\n", encoding="utf-8"
-        )
+        parsed.write_text("UUID,Machine name,MAC,IP,Serial Number\n", encoding="utf-8")
         self._write(master, ["u1,h1,m,i,SN,x"])
 
         def failing_replace(
             src: str | os.PathLike[str], dst: str | os.PathLike[str]
         ) -> None:
-            raise OSError("fallo simulado")
+            raise OSError("simulated failure")
 
         monkeypatch.setattr(merge_inventories.os, "replace", failing_replace)
 
@@ -481,7 +495,7 @@ class TestMainEndToEnd:
     ) -> None:
         parsed, master, out, header = self._paths(workdir)
         parsed.write_text(
-            "UUID,Nombre maquina,MAC,IP,Serial Number\nu1,h1,m,i,SN\n",
+            "UUID,Machine name,MAC,IP,Serial Number\nu1,h1,m,i,SN\n",
             encoding="utf-8",
         )
         self._write(master, ["u1,h1,m,i,SN,x"])
@@ -499,26 +513,22 @@ class TestMainEndToEnd:
     ) -> None:
         parsed, master, out, header = self._paths(workdir)
         parsed.write_text(
-            "UUID,Nombre maquina,MAC,IP,Serial Number\nz9,hz,m,i,SN\n",
+            "UUID,Machine name,MAC,IP,Serial Number\nz9,hz,m,i,SN\n",
             encoding="utf-8",
         )
         self._write(master, ["u1,h1,m,i,SN,x"])
 
         self._run(monkeypatch, parsed, master, out, header)
 
-        assert (
-            "Ninguna clave del inventario maestro coincide" in capsys.readouterr().err
-        )
+        assert "No key of the master inventory matches" in capsys.readouterr().err
         assert out.read_text(encoding="utf-8").splitlines()[1] == "u1,h1,m,i,SN,x"
 
     def test_row_with_wrong_column_count_is_discarded(
         self, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         parsed, master, out, header = self._paths(workdir)
-        parsed.write_text(
-            "UUID,Nombre maquina,MAC,IP,Serial Number\n", encoding="utf-8"
-        )
-        self._write(master, ["u1,h1,m,i,SN,x", "truncada,h2"])
+        parsed.write_text("UUID,Machine name,MAC,IP,Serial Number\n", encoding="utf-8")
+        self._write(master, ["u1,h1,m,i,SN,x", "truncated,h2"])
 
         self._run(monkeypatch, parsed, master, out, header)
 
@@ -529,7 +539,7 @@ class TestMainEndToEnd:
 
 
 class TestParseCliPaths:
-    """Valida el parseo de argumentos nombrados y sus valores por defecto."""
+    """Validates the parsing of named arguments and their default values."""
 
     def test_defaults_point_to_project_output_and_config(self) -> None:
         paths = parse_cli_paths(["--parsed", "parsed.csv", "--master", "master.csv"])
@@ -584,11 +594,11 @@ class TestParseCliPaths:
 
     def test_unknown_option_exits(self) -> None:
         with pytest.raises(SystemExit):
-            parse_cli_paths(["--parsed", "p", "--master", "m", "--otra", "x"])
+            parse_cli_paths(["--parsed", "p", "--master", "m", "--other", "x"])
 
 
 class TestBuildMergePairs:
-    """Valida que solo las columnas con flag 1 sean fusionables."""
+    """Validates that only columns with flag 1 are mergeable."""
 
     def test_only_flag_one_columns_are_paired(self) -> None:
         header_list = [("K", 2), ("A", 0), ("B", 1), ("C", 1)]
@@ -598,7 +608,7 @@ class TestBuildMergePairs:
 
 
 class TestMergeRow:
-    """Valida la fusión pura de una fila."""
+    """Validates the pure merge of a row."""
 
     def test_overrides_only_non_empty_and_does_not_mutate(self) -> None:
         master = ["k", "old1", "old2"]
@@ -613,7 +623,7 @@ class TestMergeRow:
 
 
 class TestResolveOutputRow:
-    """Valida el destino de cada fila del maestro (LEFT JOIN)."""
+    """Validates the fate of each master row (LEFT JOIN)."""
 
     @pytest.fixture
     def plan(self) -> MergePlan:
@@ -636,18 +646,18 @@ class TestResolveOutputRow:
         self, plan: MergePlan, capsys: pytest.CaptureFixture[str]
     ) -> None:
         resolve_output_row(7, ["missing", "old"], plan)
-        assert "Línea 7" in capsys.readouterr().err
+        assert "Line 7" in capsys.readouterr().err
 
 
 class TestExtractKey:
-    """Valida la normalización de la clave de unión."""
+    """Validates the normalization of the join key."""
 
     def test_strips_quotes_and_lowercases(self) -> None:
         assert extract_key(["x", '"UUID-1"'], 1) == "uuid-1"
 
 
 class TestWarnIfNoKeysMatch:
-    """Valida la advertencia de claves sin coincidencias."""
+    """Validates the warning for keys without matches."""
 
     @staticmethod
     def _master(rows: list[list[str]]) -> LoadedInventory:

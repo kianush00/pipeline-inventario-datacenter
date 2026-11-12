@@ -88,7 +88,7 @@ The orchestrator (`src/inventory_pipeline/run_pipeline.py`) runs each stage as a
 | 2 | `prepare_master_inventory` | `output/prepared_master_inventory.csv` |
 | 3 | `merge_inventories` | `output/merged_inventory.csv` |
 | 4 | `export_to_netbox --dry-run` | NetBox preview (no writes) |
-| — | Confirmation: `¿Aplicar los cambios en NetBox? [s/N]` | — |
+| — | Confirmation: `Apply the changes in NetBox? [y/N]` | — |
 | 5 | `export_to_netbox` | Changes applied to NetBox |
 | 6 | `update_master_inventory` (only with `--update-master`) | `output/<master>_updated.<ext>` |
 

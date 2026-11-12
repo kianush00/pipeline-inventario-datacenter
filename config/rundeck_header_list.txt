@@ -1,29 +1,29 @@
-Nombre maquina|0
-Tipo de maquina|1
-SO Host|1
-Version SO Host|1
-SO Hipervisor|1
-Version SO Hipervisor|1
+Machine name|0
+Machine type|1
+Host OS|1
+Host OS version|1
+Hypervisor OS|1
+Hypervisor OS version|1
 Kernel|1
 FQDN|0
 Interfaces|1
-Interfaces estado|1
+Interfaces status|1
 IP|1
-Red IP|1
+IP network|1
 MAC|1
-CPU Modelo|1
-Cores (por socket)|1
-Threads (por socket)|1
+CPU model|1
+Cores (per socket)|1
+Threads (per socket)|1
 Sockets|1
 RAM (GB)|1
-Discos|1
-Capacidad visible (GB)|1
+Disks|1
+Visible capacity (GB)|1
 RAID|0
-Marca|0
-Modelo|0
+Manufacturer|0
+Model|0
 Serial Number|0
 Service Tag|0
 P/N|0
 UUID|2
-Version BIOS|1
-Fecha BIOS|1
+BIOS version|1
+BIOS date|1

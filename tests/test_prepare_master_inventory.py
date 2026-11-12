@@ -14,7 +14,7 @@ from inventory_pipeline.prepare_master_inventory import (
 
 
 class TestFindLibreOffice:
-    """Valida la detección del ejecutable de LibreOffice."""
+    """Validates the detection of the LibreOffice executable."""
 
     @patch("shutil.which")
     def test_find_libreoffice_found_primary(self, mock_which: MagicMock) -> None:
@@ -39,14 +39,14 @@ class TestFindLibreOffice:
 
 
 class TestConvertSpreadsheetToCsv:
-    """Valida la conversión mediante LibreOffice CLI."""
+    """Validates the conversion through the LibreOffice CLI."""
 
     @patch("subprocess.run")
     def test_conversion_success(self, mock_run: MagicMock, tmp_path: Path) -> None:
         mock_run.return_value = MagicMock(returncode=0)
-        input_path = tmp_path / "inventario.ods"
-        # Crear el archivo CSV simulando que libreoffice lo creó
-        expected_csv = tmp_path / "inventario.csv"
+        input_path = tmp_path / "inventory.ods"
+        # Create the CSV file simulating that libreoffice created it
+        expected_csv = tmp_path / "inventory.csv"
         expected_csv.touch()
 
         result = convert_spreadsheet_to_csv(
@@ -59,7 +59,7 @@ class TestConvertSpreadsheetToCsv:
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
         mock_run.return_value = MagicMock(returncode=1, stdout="err", stderr="err")
-        input_path = tmp_path / "inventario.ods"
+        input_path = tmp_path / "inventory.ods"
 
         with pytest.raises(SystemExit):
             convert_spreadsheet_to_csv("/usr/bin/libreoffice", input_path, tmp_path)
@@ -69,14 +69,14 @@ class TestConvertSpreadsheetToCsv:
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
         mock_run.return_value = MagicMock(returncode=0)
-        input_path = tmp_path / "inventario.ods"
-        # Libreoffice termina bien pero el csv NO se genera.
+        input_path = tmp_path / "inventory.ods"
+        # Libreoffice finishes fine but the csv is NOT generated.
         with pytest.raises(SystemExit):
             convert_spreadsheet_to_csv("/usr/bin/libreoffice", input_path, tmp_path)
 
 
 class TestFindRealHeader:
-    """Valida la heurística para encontrar la cabecera real en medio de la basura."""
+    """Validates the heuristic to find the real header amid the garbage."""
 
     def test_happy_path_first_row(self) -> None:
         rows = [["UUID", "IP", "MAC", "EXTRA"]]
@@ -87,7 +87,7 @@ class TestFindRealHeader:
 
     def test_skip_garbage_rows(self) -> None:
         rows = [
-            ["Inventario General", "", "", ""],
+            ["General Inventory", "", "", ""],
             ["UUID", "IP", "MAC", "EXTRA"],
             ["123", "10.0.0.1", "aa:bb", "data"],
         ]
@@ -98,7 +98,7 @@ class TestFindRealHeader:
 
     def test_missing_required_columns(self) -> None:
         rows = [
-            ["UUID", "IP", "EXTRA"],  # Falta MAC
+            ["UUID", "IP", "EXTRA"],  # MAC is missing
         ]
         rundeck = [("UUID", 2), ("IP", 1), ("MAC", 1)]
         with pytest.raises(SystemExit):
@@ -106,7 +106,7 @@ class TestFindRealHeader:
 
     def test_required_columns_duplicated(self) -> None:
         rows = [
-            ["UUID", "IP", "MAC", "IP"],  # IP duplicada
+            ["UUID", "IP", "MAC", "IP"],  # duplicate IP
         ]
         rundeck = [("UUID", 2), ("IP", 1), ("MAC", 1)]
         with pytest.raises(SystemExit):
@@ -114,14 +114,14 @@ class TestFindRealHeader:
 
 
 class TestProcessCsv:
-    """Valida la sanitización y validación del CSV procesado."""
+    """Validates the sanitization and validation of the processed CSV."""
 
     def test_process_csv_happy_path(self, tmp_path: Path) -> None:
         source_csv = tmp_path / "source.csv"
         out_csv = tmp_path / "out.csv"
 
         source_csv.write_text(
-            'Basura,,\nUUID,IP,MAC,EXTRA\n123,10.0.0.1,aa:bb,"hola\nmundo"\n'
+            'Garbage,,\nUUID,IP,MAC,EXTRA\n123,10.0.0.1,aa:bb,"hello\nworld"\n'
         )
 
         rundeck = [("UUID", 2), ("IP", 1), ("MAC", 1)]
@@ -129,14 +129,14 @@ class TestProcessCsv:
 
         assert out_csv.exists()
         lines = out_csv.read_text().splitlines()
-        # Se elimina la basura y se sanitan los saltos de línea
+        # The garbage is removed and line breaks are sanitized
         assert lines[0] == '"UUID","IP","MAC","EXTRA"'
-        assert lines[1] == '"123","10.0.0.1","aa:bb","hola mundo"'
+        assert lines[1] == '"123","10.0.0.1","aa:bb","hello world"'
 
     def test_process_csv_unnamed_columns(self, tmp_path: Path) -> None:
         source_csv = tmp_path / "source.csv"
         out_csv = tmp_path / "out.csv"
-        # La cuarta columna no tiene nombre
+        # The fourth column has no name
         source_csv.write_text("UUID,IP,MAC,\n123,10.0.0.1,aa:bb,data\n")
         rundeck = [("UUID", 2), ("IP", 1), ("MAC", 1)]
 
@@ -146,7 +146,7 @@ class TestProcessCsv:
     def test_process_csv_duplicated_unrequired_columns(self, tmp_path: Path) -> None:
         source_csv = tmp_path / "source.csv"
         out_csv = tmp_path / "out.csv"
-        # EXTRA duplicado (no requerido)
+        # Duplicate EXTRA (not required)
         source_csv.write_text("UUID,IP,MAC,EXTRA,EXTRA\n123,10.0.0.1,aa:bb,data,data\n")
         rundeck = [("UUID", 2), ("IP", 1), ("MAC", 1)]
 
@@ -156,7 +156,7 @@ class TestProcessCsv:
     def test_process_csv_row_length_mismatch(self, tmp_path: Path) -> None:
         source_csv = tmp_path / "source.csv"
         out_csv = tmp_path / "out.csv"
-        # Fila 2 le falta 1 columna
+        # Row 2 is missing 1 column
         source_csv.write_text(
             "UUID,IP,MAC,EXTRA\n123,10.0.0.1,aa:bb,data\n456,10.0.0.2,cc:dd\n"
         )
@@ -170,14 +170,14 @@ class TestProcessCsv:
         out_csv = tmp_path / "out.csv"
         rundeck = [("UUID", 2)]
 
-        # Archivo no existe, levantará FileNotFoundError (OSError)
+        # The file does not exist, it will raise FileNotFoundError (OSError)
         with pytest.raises(SystemExit):
             process_csv(source_csv, out_csv, rundeck)
 
     def test_process_csv_empty_file(self, tmp_path: Path) -> None:
         source_csv = tmp_path / "source.csv"
         out_csv = tmp_path / "out.csv"
-        source_csv.touch()  # Archivo vacío, 0 filas
+        source_csv.touch()  # Empty file, 0 rows
         rundeck = [("UUID", 2)]
 
         with pytest.raises(SystemExit):
@@ -185,11 +185,11 @@ class TestProcessCsv:
 
 
 class TestMainPrepareMasterInventory:
-    """Valida flujos de la capa principal de entrada/salida y limpieza."""
+    """Validates flows of the main input/output and cleanup layer."""
 
     @pytest.fixture
     def setup_files(self, tmp_path: Path) -> tuple[Path, Path, Path]:
-        input_ods = tmp_path / "inventario.ods"
+        input_ods = tmp_path / "inventory.ods"
         output_csv = tmp_path / "prepared.csv"
         header_list = tmp_path / "rundeck_header_list.txt"
 
@@ -201,8 +201,8 @@ class TestMainPrepareMasterInventory:
         self, setup_files: tuple[Path, Path, Path]
     ) -> None:
         _, output_csv, header_list = setup_files
-        # Extension no soportada .txt
-        input_txt = output_csv.parent / "inventario.txt"
+        # Unsupported .txt extension
+        input_txt = output_csv.parent / "inventory.txt"
         input_txt.touch()
 
         with (
@@ -241,8 +241,8 @@ class TestMainPrepareMasterInventory:
     ) -> None:
         input_ods, output_csv, header_list = setup_files
 
-        # Simulamos que convert_spreadsheet_to_csv devuelve un CSV que tiene columnas sin nombre
-        # Esto hará que process_csv detone un SystemExit antes de escribir el archivo final.
+        # We simulate that convert_spreadsheet_to_csv returns a CSV that has unnamed columns
+        # This will make process_csv trigger a SystemExit before writing the final file.
         def convert_side_effect(lo: str, ip: Path, tmp: Path) -> Path:
             csv_path = tmp / "converted.csv"
             csv_path.write_text("UUID,IP,\n1,10.0.0.1,bad\n")
@@ -261,7 +261,7 @@ class TestMainPrepareMasterInventory:
             main()
 
         assert not output_csv.exists()
-        # Verificar que no hay temporales
+        # Verify that there are no temporary files
         tmp_files = list(output_csv.parent.glob(f".{output_csv.name}.*.tmp"))
         assert len(tmp_files) == 0
 
@@ -313,8 +313,8 @@ class TestMainPrepareMasterInventory:
     def test_main_oserror_on_stat(self, setup_files: tuple[Path, Path, Path]) -> None:
         input_ods, output_csv, header_list = setup_files
 
-        # is_file() llama a stat() internamente, por lo que la primera llamada
-        # debe ser exitosa, y la segunda (explícita) debe fallar.
+        # is_file() calls stat() internally, so the first call
+        # must succeed, and the second (explicit) one must fail.
         valid_stat = MagicMock()
         valid_stat.st_mode = 33188  # S_IFREG
 

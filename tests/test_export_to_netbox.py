@@ -1,5 +1,5 @@
 """
-Pruebas unitarias para export_to_netbox.py
+Unit tests for export_to_netbox.py
 """
 
 import argparse
@@ -133,7 +133,7 @@ from inventory_pipeline.export_to_netbox import (
     get_or_create_cached,
     load_config,
     main,
-    parse_bool_si_no,
+    parse_bool_yes_no,
     parse_device_type_attributes,
     parse_float,
     parse_float_to_int,
@@ -153,70 +153,70 @@ from inventory_pipeline.export_to_netbox import (
 
 
 class TestSlugify:
-    """Verifica la generación de slugs válidos para NetBox."""
+    """Verifies the generation of valid slugs for NetBox."""
 
     def test_simple_name(self) -> None:
-        """Un nombre limpio se convierte a minúsculas sin alteraciones."""
-        assert slugify("Produccion") == "produccion"
+        """A clean name is converted to lowercase without alterations."""
+        assert slugify("Production") == "production"
 
     def test_spaces_and_dashes(self) -> None:
-        """Espacios y guiones múltiples se unifican en '-', y se conservan guiones bajos."""
+        """Multiple spaces and hyphens are unified into '-', and underscores are kept."""
         assert slugify("Data  Center__Principal--Rack") == "data-center__principal-rack"
 
     def test_special_characters(self) -> None:
-        """Caracteres no alfanuméricos (excepto guiones) se eliminan."""
-        assert slugify("Rack #3 (Piso 2)") == "rack-3-piso-2"
+        """Non-alphanumeric characters (except hyphens) are removed."""
+        assert slugify("Rack #3 (Floor 2)") == "rack-3-floor-2"
 
     def test_truncates_to_100_chars(self) -> None:
-        """NetBox limita los slugs a 100 caracteres."""
-        nombre_largo = "a" * 150
-        resultado = slugify(nombre_largo)
-        assert len(resultado) == 100
-        assert resultado == "a" * 100
+        """NetBox limits slugs to 100 characters."""
+        long_name = "a" * 150
+        result = slugify(long_name)
+        assert len(result) == 100
+        assert result == "a" * 100
 
     def test_empty_string(self) -> None:
-        """Un string vacío produce un slug vacío."""
+        """An empty string produces an empty slug."""
         assert slugify("") == ""
 
     def test_strips_extreme_dashes(self) -> None:
-        """Guiones o guiones bajos al inicio y final del slug se eliminan."""
-        assert slugify("--__nombre__--") == "nombre"
+        """Hyphens or underscores at the start and end of the slug are removed."""
+        assert slugify("--__name__--") == "name"
 
     def test_removes_accents(self) -> None:
-        """Caracteres acentuados se normalizan a ASCII válido para NetBox."""
-        assert slugify("Producción") == "produccion"
-        assert slugify("Genérico") == "generico"
-        assert slugify("Niño") == "nino"
-        assert slugify("Árbol_Cúbico") == "arbol_cubico"
+        """Accented characters are normalized to ASCII valid for NetBox."""
+        assert slugify("Café") == "cafe"
+        assert slugify("Naïve") == "naive"
+        assert slugify("Façade") == "facade"
+        assert slugify("Crème_Brûlée") == "creme_brulee"
 
     def test_slugify_accents_and_symbols_complex(self) -> None:
-        """Comportamiento QA ante strings basura con símbolos y múltiples espacios."""
+        """QA behavior on garbage strings with symbols and multiple spaces."""
         assert slugify("  --H.P.!!__  ") == "hp"
-        assert slugify("¿Quién es el #1?") == "quien-es-el-1"
+        assert slugify("Who's the #1 café?") == "whos-the-1-cafe"
         assert slugify("  -_H_P_-  ") == "h_p"
         assert slugify("   ___---___   ") == ""
-        assert slugify("a" * 150) == "a" * 100  # truncamiento
+        assert slugify("a" * 150) == "a" * 100  # truncation
 
 
 class TestGenerateFallbackSlug:
-    """Verifica la generación determinista de slugs de respaldo."""
+    """Verifies the deterministic generation of fallback slugs."""
 
     def test_slug_format_with_hash(self) -> None:
-        """El slug de fallback tiene el formato 'base-XXXX' (hash MD5 de 4 chars)."""
-        resultado = generate_fallback_slug("mi-slug", "Nombre Original")
-        expected_hash = hashlib.md5(b"Nombre Original").hexdigest()[:4]
-        assert resultado == f"mi-slug-{expected_hash}"
+        """The fallback slug has the format 'base-XXXX' (4-char MD5 hash)."""
+        result = generate_fallback_slug("my-slug", "Original Name")
+        expected_hash = hashlib.md5(b"Original Name").hexdigest()[:4]
+        assert result == f"my-slug-{expected_hash}"
 
     def test_determinism(self) -> None:
-        """La misma entrada siempre produce el mismo slug de fallback."""
-        a = generate_fallback_slug("base", "Mismo Nombre")
-        b = generate_fallback_slug("base", "Mismo Nombre")
+        """The same input always produces the same fallback slug."""
+        a = generate_fallback_slug("base", "Same Name")
+        b = generate_fallback_slug("base", "Same Name")
         assert a == b
 
     def test_different_names_produce_different_hashes(self) -> None:
-        """Nombres distintos generan sufijos hash distintos."""
-        a = generate_fallback_slug("base", "Nombre A")
-        b = generate_fallback_slug("base", "Nombre B")
+        """Different names generate different hash suffixes."""
+        a = generate_fallback_slug("base", "Name A")
+        b = generate_fallback_slug("base", "Name B")
         assert a != b
 
     def test_generate_fallback_slug(self) -> None:
@@ -230,11 +230,11 @@ class TestGenerateFallbackSlug:
         endpoint = MagicMock()
         mock_obj = MockNetBoxRecord(id=10, name="SRV", slug="srv-1234")
 
-        # Simula error 400 por slug
+        # Simulates a 400 error due to slug
         mock_req = MagicMock(status_code=400, reason="Collision")
         mock_req.json.return_value = {"slug": ["already exists"]}
 
-        # Falla la primera, funciona la segunda
+        # The first one fails, the second one works
         endpoint.create.side_effect = [
             RequestError(mock_req),
             mock_obj,
@@ -244,7 +244,7 @@ class TestGenerateFallbackSlug:
         result = _create_with_fallback_slug(endpoint, "SRV", name="SRV", slug="srv")
         assert result.id == 10
         assert endpoint.create.call_count == 2
-        # Verifica que la segunda llamada uso un slug diferente
+        # Verifies that the second call used a different slug
         call_kwargs = endpoint.create.call_args_list[1][1]
         assert call_kwargs["slug"] != "srv"
         assert call_kwargs["slug"].startswith("srv-")
@@ -252,44 +252,44 @@ class TestGenerateFallbackSlug:
     def test_failure_on_retry(self) -> None:
 
         endpoint = MagicMock()
-        # Falla siempre por slug
+        # Always fails due to slug
         mock_req = MagicMock(status_code=400, reason="Persistent Collision")
         mock_req.json.return_value = {"slug": ["already exists"]}
         endpoint.name = "clusters"
         endpoint.create.side_effect = RequestError(mock_req)
 
         with pytest.raises(
-            NetBoxApiError, match="Imposible crear objeto en 'devices' con nombre 'SRV'"
+            NetBoxApiError, match="Unable to create object in 'devices' with name 'SRV'"
         ):
             endpoint.name = "devices"
             _create_with_fallback_slug(endpoint, "SRV", name="SRV", slug="srv")
 
 
 class TestParseInt:
-    """Verifica la conversión robusta de valores a enteros."""
+    """Verifies the robust conversion of values to integers."""
 
     def test_valid_integer(self) -> None:
         assert parse_int("42") == 42
 
     def test_integer_with_spaces(self) -> None:
-        """El strip() interno elimina espacios antes de parsear."""
+        """The internal strip() removes spaces before parsing."""
         assert parse_int("  128  ") == 128
 
     def test_negative_integer(self) -> None:
         assert parse_int("-7") == -7
 
     def test_invalid_value_raises_error(self) -> None:
-        with pytest.raises(ValueError, match="No es un número entero válido"):
+        with pytest.raises(ValueError, match="Not a valid integer"):
             parse_int("abc")
 
     def test_float_string_raises_error(self) -> None:
-        """Un float como '3.14' no es un entero válido."""
-        with pytest.raises(ValueError, match="No es un número entero válido"):
+        """A float such as '3.14' is not a valid integer."""
+        with pytest.raises(ValueError, match="Not a valid integer"):
             parse_int("3.14")
 
 
 class TestParseFloat:
-    """Verifica la conversión robusta de valores a decimales."""
+    """Verifies the robust conversion of values to decimals."""
 
     def test_valid_float(self) -> None:
         assert parse_float("3.14") == 3.14
@@ -304,44 +304,44 @@ class TestParseFloat:
         assert parse_float("  -2.5  ") == -2.5
 
     def test_invalid_value_raises_error(self) -> None:
-        with pytest.raises(ValueError, match="No es un número decimal válido"):
+        with pytest.raises(ValueError, match="Not a valid decimal number"):
             parse_float("abc")
 
 
 class TestParseFloatToInt:
-    """Verifica la conversión robusta de floats a enteros más cercanos."""
+    """Verifies the robust conversion of floats to the nearest integers."""
 
     def test_float_string_dot(self) -> None:
-        """Punto decimal se redondea correctamente."""
+        """A decimal point is rounded correctly."""
         assert parse_float_to_int("50.5") == 50
         assert parse_float_to_int("50.6") == 51
 
     def test_float_string_comma(self) -> None:
-        """Coma decimal se soporta y redondea."""
+        """A decimal comma is supported and rounded."""
         assert parse_float_to_int("50,5") == 50
         assert parse_float_to_int("50,6") == 51
 
     def test_integer_string(self) -> None:
-        """Strings enteros se mantienen intactos."""
+        """Integer strings are kept untouched."""
         assert parse_float_to_int("42") == 42
 
     def test_with_spaces(self) -> None:
-        """Espacios alrededor se limpian."""
+        """Surrounding spaces are cleaned."""
         assert parse_float_to_int("  10.2  ") == 10
 
     def test_invalid_value_raises_error(self) -> None:
-        """Strings no numéricos lanzan ValueError."""
-        with pytest.raises(ValueError, match="No es un valor numérico válido"):
-            parse_float_to_int("cincuenta")
+        """Non-numeric strings raise ValueError."""
+        with pytest.raises(ValueError, match="Not a valid numeric value"):
+            parse_float_to_int("fifty")
 
     def test_none_value(self) -> None:
-        """None lanza ValueError."""
-        with pytest.raises(ValueError, match="No es un valor numérico válido"):
+        """None raises ValueError."""
+        with pytest.raises(ValueError, match="Not a valid numeric value"):
             parse_float_to_int(None)
 
 
 class TestParseRackPosition:
-    """Verifica las reglas de Device.position de NetBox (>= 1, múltiplos de 0.5)."""
+    """Verifies the NetBox Device.position rules (>= 1, multiples of 0.5)."""
 
     @pytest.mark.parametrize(
         ("raw", "expected"),
@@ -355,35 +355,35 @@ class TestParseRackPosition:
         ],
     )
     def test_valid_positions(self, raw: str, expected: float) -> None:
-        """Enteros y medias unidades (con punto o coma) son válidos."""
+        """Integers and half units (with dot or comma) are valid."""
         assert parse_rack_position(raw) == expected
 
     @pytest.mark.parametrize("raw", ["12.25", "12.3", "1.75", "2.75"])
     def test_non_half_unit_increments_rejected(self, raw: str) -> None:
-        """Valores que no son múltiplos de 0.5 se rechazan antes de llamar a la API."""
-        with pytest.raises(ValueError, match="múltiplo de 0.5"):
+        """Values that are not multiples of 0.5 are rejected before calling the API."""
+        with pytest.raises(ValueError, match="multiple of 0.5"):
             parse_rack_position(raw)
 
     @pytest.mark.parametrize("raw", ["0", "0.5", "-1", "-2.5"])
     def test_below_minimum_rejected(self, raw: str) -> None:
-        """Posiciones menores a 1 (incluidas 0.5 y negativas) se rechazan."""
-        with pytest.raises(ValueError, match="mayor o igual a 1"):
+        """Positions lower than 1 (including 0.5 and negatives) are rejected."""
+        with pytest.raises(ValueError, match="greater than or equal to 1"):
             parse_rack_position(raw)
 
     @pytest.mark.parametrize("raw", ["abc", "", "U12", "nan", "inf", "-inf"])
     def test_non_numeric_or_non_finite_rejected(self, raw: str) -> None:
-        """Texto, vacío y valores no finitos lanzan ValueError."""
+        """Text, empty and non-finite values raise ValueError."""
         with pytest.raises(ValueError):
             parse_rack_position(raw)
 
     def test_none_rejected(self) -> None:
-        """None lanza ValueError con mensaje de posición numérica."""
-        with pytest.raises(ValueError, match="posición de rack numérica"):
+        """None raises ValueError with a numeric position message."""
+        with pytest.raises(ValueError, match="numeric rack position"):
             parse_rack_position(None)
 
 
 class TestParseIntGbToMb:
-    """Verifica la conversión de GB a MB (NetBox espera MB para RAM)."""
+    """Verifies the conversion from GB to MB (NetBox expects MB for RAM)."""
 
     def test_gb_integer(self) -> None:
         """8 GB = 8000 MB."""
@@ -394,15 +394,15 @@ class TestParseIntGbToMb:
         assert parse_int_gb_to_mb("0.5") == 500
 
     def test_gb_decimal_comma(self) -> None:
-        """Soporta formato hispano: 7,8 GB = 7800 MB."""
+        """Supports the decimal comma format: 7,8 GB = 7800 MB."""
         assert parse_int_gb_to_mb("7,8") == 7800
 
     def test_with_spaces(self) -> None:
         assert parse_int_gb_to_mb("  16  ") == 16000
 
     def test_invalid_value_raises_error(self) -> None:
-        with pytest.raises(ValueError, match="No es un valor numérico válido"):
-            parse_int_gb_to_mb("no-es-numero")
+        with pytest.raises(ValueError, match="Not a valid numeric value"):
+            parse_int_gb_to_mb("not-a-number")
 
     def test_zero_gb(self) -> None:
         """0 GB = 0 MB."""
@@ -413,34 +413,34 @@ class TestParseIntGbToMb:
             parse_int_gb_to_mb("invalid_number")
 
 
-class TestParseBoolSiNo:
-    """Verifica la conversión de valores a booleanos con variantes en español."""
+class TestParseBoolYesNo:
+    """Verifies the conversion of values to booleans with their accepted variants."""
 
     @pytest.mark.parametrize(
-        "valor",
-        ["si", "sí", "SI", "Sí", "yes", "YES", "true", "True", "1"],
+        "value",
+        ["yes", "YES", "Yes", "true", "True", "1"],
     )
-    def test_true_values(self, valor: str) -> None:
-        assert parse_bool_si_no(valor) is True
+    def test_true_values(self, value: str) -> None:
+        assert parse_bool_yes_no(value) is True
 
     @pytest.mark.parametrize(
-        "valor",
+        "value",
         ["no", "NO", "No", "false", "False", "0"],
     )
-    def test_false_values(self, valor: str) -> None:
-        assert parse_bool_si_no(valor) is False
+    def test_false_values(self, value: str) -> None:
+        assert parse_bool_yes_no(value) is False
 
     def test_invalid_value_raises_error(self) -> None:
-        with pytest.raises(ValueError, match="No es 'si' ni 'no'"):
-            parse_bool_si_no("quizás")
+        with pytest.raises(ValueError, match="Not 'yes' or 'no'"):
+            parse_bool_yes_no("maybe")
 
     def test_with_spaces(self) -> None:
-        """El strip() interno tolera espacios."""
-        assert parse_bool_si_no("  si  ") is True
+        """The internal strip() tolerates spaces."""
+        assert parse_bool_yes_no("  yes  ") is True
 
 
 class TestApplyCast:
-    """Verifica el dispatcher de casteos dinámicos definidos en el YAML."""
+    """Verifies the dispatcher of dynamic casts defined in the YAML."""
 
     def test_cast_int(self) -> None:
         assert apply_cast("42", CastType.INT, "cpu_cores") == 42
@@ -452,68 +452,68 @@ class TestApplyCast:
         assert apply_cast("12,5", CastType.RACK_POSITION, "position") == 12.5
 
     def test_invalid_rack_position_raises_row_validation_error(self) -> None:
-        """Una posición no múltiplo de 0.5 se reporta como error de fila con contexto."""
-        with pytest.raises(RowValidationError, match="Valor inválido.*position"):
+        """A position that is not a multiple of 0.5 is reported as a row error with context."""
+        with pytest.raises(RowValidationError, match="Invalid value.*position"):
             apply_cast("12.25", CastType.RACK_POSITION, "position")
 
-    def test_cast_bool_si_no(self) -> None:
-        assert apply_cast("si", CastType.BOOL_SI_NO, "is_virtual") is True
+    def test_cast_bool_yes_no(self) -> None:
+        assert apply_cast("yes", CastType.BOOL_YES_NO, "is_virtual") is True
 
     def test_cast_lower(self) -> None:
-        assert apply_cast("MAYUS", CastType.LOWER, "uuid") == "mayus"
+        assert apply_cast("UPPER", CastType.LOWER, "uuid") == "upper"
         assert apply_cast(None, CastType.LOWER, "uuid") is None
 
     def test_invalid_cast_raises_row_validation_error(self) -> None:
-        """apply_cast envuelve ValueError en RowValidationError con contexto."""
-        with pytest.raises(RowValidationError, match="Valor inválido.*cpu_cores"):
+        """apply_cast wraps ValueError in RowValidationError with context."""
+        with pytest.raises(RowValidationError, match="Invalid value.*cpu_cores"):
             apply_cast("abc", CastType.INT, "cpu_cores")
 
     def test_none_with_int_cast_raises_error(self) -> None:
-        """None no es convertible a int; se espera RowValidationError."""
-        with pytest.raises(RowValidationError, match="Valor inválido.*campo"):
-            apply_cast(None, CastType.INT, "campo")
+        """None is not convertible to int; RowValidationError is expected."""
+        with pytest.raises(RowValidationError, match="Invalid value.*field"):
+            apply_cast(None, CastType.INT, "field")
 
     def test_non_numeric_string_with_int_cast_raises_error(self) -> None:
-        """Un string no-numérico con cast INT produce RowValidationError."""
-        with pytest.raises(RowValidationError, match="Valor inválido.*campo"):
-            apply_cast("texto", CastType.INT, "campo")
+        """A non-numeric string with an INT cast produces RowValidationError."""
+        with pytest.raises(RowValidationError, match="Invalid value.*field"):
+            apply_cast("text", CastType.INT, "field")
 
 
 class TestApplyCastEdgeCases:
-    """Casos específicos del branch final de apply_cast."""
+    """Specific cases of the final branch of apply_cast."""
 
     def test_valid_int_returns_int(self) -> None:
-        """Verifica que un int ya parseado sale como int."""
+        """Verifies that an already parsed int comes out as int."""
         assert apply_cast("100", CastType.INT, "pos_u") == 100
 
     def test_gb_to_mb_precision(self) -> None:
-        """Verifica la precisión del redondeo: 1.5 GB = 1500 MB."""
+        """Verifies the rounding precision: 1.5 GB = 1500 MB."""
         assert apply_cast("1.5", CastType.INT_GB_TO_MB, "memory") == 1500
 
 
 class TestGetNetboxObjectId:
-    """Verifica la extracción segura del ID de un objeto NetBox."""
+    """Verifies the safe extraction of the ID of a NetBox object."""
 
     def test_object_with_id(self, mock_record: MockNetBoxRecord) -> None:
-        """Un objeto con id=42 retorna 42."""
+        """An object with id=42 returns 42."""
         assert get_netbox_object_id(mock_record) == 42
 
     def test_object_without_id_returns_zero(self) -> None:
-        """Un objeto con id=0 (mock de dry-run) retorna 0."""
+        """An object with id=0 (dry-run mock) returns 0."""
         obj = MockNetBoxRecord(id=0, name="dry-run-mock")
         assert get_netbox_object_id(obj) == 0
 
     def test_object_with_string_id_converts(self) -> None:
-        """El ID se convierte a int incluso si viene como string."""
-        # MockNetBoxRecord usa Pydantic que coerce automáticamente,
-        # pero verificamos el contrato de get_netbox_object_id.
+        """The ID is converted to int even if it comes as a string."""
+        # MockNetBoxRecord uses Pydantic which coerces automatically,
+        # but we verify the contract of get_netbox_object_id.
         obj = MockNetBoxRecord(id=99, name="test")
         assert get_netbox_object_id(obj) == 99
         assert isinstance(get_netbox_object_id(obj), int)
 
 
 class TestExtractCsvValue:
-    """Verifica la extracción y sanitización de valores del CSV."""
+    """Verifies the extraction and sanitization of CSV values."""
 
     def test_normal_value(self, config: NetBoxMappingConfig) -> None:
         col_name = config.csv_columns["machine_name"].source
@@ -533,22 +533,22 @@ class TestExtractCsvValue:
     def test_strict_map_raises_error_when_unmapped(
         self, config: NetBoxMappingConfig
     ) -> None:
-        """Prueba destructiva: si se provee un valor que NO está en el map, strict_map=True lanza error"""
+        """Destructive test: if a value that is NOT in the map is provided, strict_map=True raises an error"""
         col_name = config.csv_columns["machine_type"].source
         row = {col_name: "INVALID_TYPE"}
         with pytest.raises(
-            RowValidationError, match="no está definido en el mapa configurado"
+            RowValidationError, match="is not defined in the configured map"
         ):
             extract_csv_value(row, "machine_type", config, strict_map=True)
 
     def test_non_strict_map_returns_fallback_when_unmapped(
         self, config: NetBoxMappingConfig
     ) -> None:
-        """Prueba de fallback: si falla el mapeo y strict_map=False, debe devolver el fallback (o el raw_val si fallback=None)"""
+        """Fallback test: if the mapping fails and strict_map=False, it must return the fallback (or the raw_val if fallback=None)"""
         col_name = config.csv_columns["machine_type"].source
         row = {col_name: "INVALID_TYPE"}
 
-        # Con fallback definido
+        # With a fallback defined
         assert (
             extract_csv_value(
                 row, "machine_type", config, strict_map=False, fallback="default_vm"
@@ -556,7 +556,7 @@ class TestExtractCsvValue:
             == "default_vm"
         )
 
-        # Sin fallback definido, devuelve crudo
+        # Without a fallback defined, it returns the raw value
         assert (
             extract_csv_value(row, "machine_type", config, strict_map=False)
             == "INVALID_TYPE"
@@ -565,7 +565,7 @@ class TestExtractCsvValue:
     def test_fallback_returned_when_cell_empty(
         self, config: NetBoxMappingConfig
     ) -> None:
-        """Prueba de celda vacía: el fallback actúa directamente sin intentar el mapeo"""
+        """Empty cell test: the fallback acts directly without attempting the mapping"""
         col_name = config.csv_columns["status"].source
         row = {col_name: ""}
         assert extract_csv_value(row, "status", config, fallback="active") == "active"
@@ -576,7 +576,7 @@ class TestExtractCsvValue:
         col_name = config.csv_columns["machine_name"].source
         row = {col_name: " "}
         with pytest.raises(
-            RowValidationError, match="obligatorio 'machine_name' está vacío"
+            RowValidationError, match="mandatory field 'machine_name' is empty"
         ):
             extract_csv_value(row, "machine_name", config, strict_extract=True)
 
@@ -586,9 +586,9 @@ class TestExtractCsvValue:
         col_name = config.csv_columns["machine_name"].source
         row = {col_name: "SRV-01"}
         with pytest.raises(
-            ConfigValidationError, match="El alias 'alias_falso' solicitado"
+            ConfigValidationError, match="The alias 'fake_alias' requested"
         ):
-            extract_csv_value(row, "alias_falso", config)
+            extract_csv_value(row, "fake_alias", config)
 
     def test_column_with_null_source_returns_empty(
         self, config: NetBoxMappingConfig
@@ -598,7 +598,7 @@ class TestExtractCsvValue:
             update={"source": None}
         )
         config_copy.csv_columns["machine_name"] = col
-        row = {"Cualquier_Columna": "SRV-01"}
+        row = {"Any_Column": "SRV-01"}
         assert extract_csv_value(row, "machine_name", config_copy) == ""
 
     def test_null_source_and_required_raises_error(
@@ -609,15 +609,15 @@ class TestExtractCsvValue:
             update={"source": None}
         )
         config_copy.csv_columns["machine_name"] = col
-        row = {"Cualquier_Columna": "SRV-01"}
+        row = {"Any_Column": "SRV-01"}
         with pytest.raises(
-            RowValidationError, match="no está mapeado en la configuración"
+            RowValidationError, match="is not mapped in the configuration"
         ):
             extract_csv_value(row, "machine_name", config_copy, strict_extract=True)
 
 
 class TestConcatDot:
-    """Verifica la concatenación de campos de texto."""
+    """Verifies the concatenation of text fields."""
 
     def test_valid_parts(self, config: NetBoxMappingConfig) -> None:
         assert concat_dot(["A", "B", "C"], config) == "A. B. C"
@@ -629,65 +629,65 @@ class TestConcatDot:
 
 
 class TestExtractConcatDotValue:
-    """QA Tests para _extract_concat_dot_value."""
+    """QA Tests for _extract_concat_dot_value."""
 
     def test_extract_multiple_non_empty_values(
         self, config: NetBoxMappingConfig
     ) -> None:
         """
-        Escenario: Múltiples columnas source tienen valores.
-        El código NO debe levantar RowValidationError (a diferencia de coalesce),
-        sino que debe unirlos correctamente.
+        Scenario: Multiple source columns have values.
+        The code must NOT raise RowValidationError (unlike coalesce),
+        but must join them correctly.
         """
         row = {"col1": "Data1", "col2": "Data2", "col3": "N/A", "col4": "Data4"}
         source = ["col1", "col2", "col3", "col4", "missing_col"]
 
         result = _extract_concat_dot_value(row, source, config)
-        # col3 ('N/A') es purgado. missing_col devuelve '' y se purga.
+        # col3 ('N/A') is purged. missing_col returns '' and is purged.
         assert result == "Data1. Data2. Data4"
 
 
 class TestExtractProductValue:
-    """QA Tests para _extract_product_value."""
+    """QA Tests for _extract_product_value."""
 
     def test_integer_product_is_normalized(self, config: NetBoxMappingConfig) -> None:
-        """Un producto entero se emite sin decimales para el cast posterior."""
+        """An integer product is emitted without decimals for the later cast."""
         row = {"Threads": "16", "Sockets": "2"}
         assert _extract_product_value(row, ["Threads", "Sockets"], config) == "32"
 
     def test_decimal_product_with_comma(self, config: NetBoxMappingConfig) -> None:
-        """Respeta la normalización de comas decimales de parse_float."""
+        """Honors the decimal comma normalization of parse_float."""
         row = {"A": "1,5", "B": "3"}
         assert _extract_product_value(row, ["A", "B"], config) == "4.5"
 
     def test_all_sources_empty(self, config: NetBoxMappingConfig) -> None:
-        """Sin datos en ninguna fuente se delega en la política de defaults."""
+        """Without data in any source it delegates to the defaults policy."""
         row = {"Threads": "", "Sockets": "N/A"}
         assert _extract_product_value(row, ["Threads", "Sockets"], config) == ""
 
     def test_partial_empty_is_omitted_with_warning(
         self, config: NetBoxMappingConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Un producto parcial sería un total incorrecto: se omite y se advierte."""
+        """A partial product would be an incorrect total: it is skipped and a warning is issued."""
         row = {"Threads": "8"}
         with caplog.at_level(logging.WARNING):
             result = _extract_product_value(row, ["Threads", "Sockets"], config)
         assert result == ""
-        assert "Producto incompleto" in caplog.text
+        assert "Incomplete product" in caplog.text
         assert "Sockets" in caplog.text
 
     def test_non_numeric_raises(self, config: NetBoxMappingConfig) -> None:
-        row = {"Threads": "ocho", "Sockets": "2"}
-        with pytest.raises(RowValidationError, match="campo product"):
+        row = {"Threads": "eight", "Sockets": "2"}
+        with pytest.raises(RowValidationError, match="product field"):
             _extract_product_value(row, ["Threads", "Sockets"], config)
 
 
 class TestGetNodeTypeFromRow:
-    """Verifica la resolución del NodeType desde una fila CSV."""
+    """Verifies the resolution of the NodeType from a CSV row."""
 
     def test_device_type(self, config: NetBoxMappingConfig) -> None:
         col_name = config.csv_columns["machine_type"].source
-        row = {col_name: "Dedicada"}
+        row = {col_name: "Dedicated"}
         assert get_node_type_from_row(row, config) == NodeType.DEVICE
 
     def test_vm_type(self, config: NetBoxMappingConfig) -> None:
@@ -697,21 +697,21 @@ class TestGetNodeTypeFromRow:
 
     def test_unmapped_type_raises_error(self, config: NetBoxMappingConfig) -> None:
         col_name = config.csv_columns["machine_type"].source
-        row = {col_name: "Desconocido"}
+        row = {col_name: "Unrecognized"}
         with pytest.raises(
-            RowValidationError, match="no está definido en el mapa configurado"
+            RowValidationError, match="is not defined in the configured map"
         ):
             get_node_type_from_row(row, config)
 
     def test_missing_key_in_row(self, config: NetBoxMappingConfig) -> None:
         with pytest.raises(
-            RowValidationError, match="El campo 'machine_type' está vacío."
+            RowValidationError, match="The 'machine_type' field is empty."
         ):
             get_node_type_from_row({}, config)
 
 
 class TestCountMachineNames:
-    """Verifica el contador de nombres de máquinas."""
+    """Verifies the counter of machine names."""
 
     def test_correct_count(self, config: NetBoxMappingConfig) -> None:
         col_name = config.csv_columns["machine_name"].source
@@ -734,7 +734,7 @@ class TestCountMachineNames:
 
 
 class TestCountInventoryUuids:
-    """Verifica el contador de UUIDs de inventario."""
+    """Verifies the counter of inventory UUIDs."""
 
     def test_counts_normalized_and_ignores_empty(
         self, config: NetBoxMappingConfig
@@ -755,16 +755,16 @@ class TestCountInventoryUuids:
 
 
 class TestValidateCsvHeaders:
-    """Verifica la validación de los encabezados del CSV."""
+    """Verifies the validation of the CSV headers."""
 
     def test_valid_headers(self, config: NetBoxMappingConfig) -> None:
-        # Extraemos los requeridos de la configuración cargada
+        # We extract the required ones from the loaded configuration
         headers = [
             col.source
             for col in config.csv_columns.values()
             if col.required and col.source
         ]
-        # Debería pasar sin lanzar excepciones
+        # It should pass without raising exceptions
         _validate_csv_headers(headers, config)
 
     def test_headers_with_allowed_extras(self, config: NetBoxMappingConfig) -> None:
@@ -773,110 +773,110 @@ class TestValidateCsvHeaders:
             for col in config.csv_columns.values()
             if col.required and col.source
         ]
-        headers.extend(["Columna Extra 1", "Columna Extra 2"])
+        headers.extend(["Extra Column 1", "Extra Column 2"])
         _validate_csv_headers(headers, config)
 
     def test_missing_required_headers_raises_error(
         self, config: NetBoxMappingConfig
     ) -> None:
-        headers = ["Solo una columna irrelevante"]
+        headers = ["Just one irrelevant column"]
         with pytest.raises(
-            ValueError, match="El CSV no contiene las siguientes columnas obligatorias"
+            ValueError, match="The CSV does not contain the following mandatory columns"
         ):
             _validate_csv_headers(headers, config)
 
 
 class TestFieldMappingConfig:
-    """Verifica las validaciones de configuración de mapeo."""
+    """Verifies the mapping configuration validations."""
 
     def test_list_source_requires_transform(self) -> None:
-        """Una lista en source requiere un transform explícito."""
+        """A list in source requires an explicit transform."""
         with pytest.raises(
-            ValidationError, match="debes definir explícitamente un 'transform'"
+            ValidationError, match="you must explicitly define a 'transform'"
         ):
-            FieldMappingConfig(target="mi_campo", source=["col1", "col2"])
+            FieldMappingConfig(target="my_field", source=["col1", "col2"])
 
     def test_list_source_with_transform_ok(self) -> None:
-        """Una lista en source es válida si tiene transform."""
+        """A list in source is valid if it has a transform."""
         config = FieldMappingConfig(
-            target="mi_campo", source=["col1", "col2"], transform="concat_dot"
+            target="my_field", source=["col1", "col2"], transform="concat_dot"
         )
         assert config.source == ["col1", "col2"]
 
     def test_product_requires_list_source(self) -> None:
-        """El transform product exige explícitamente una lista de fuentes."""
-        with pytest.raises(ValidationError, match="requiere que 'source' sea"):
+        """The product transform explicitly requires a list of sources."""
+        with pytest.raises(ValidationError, match="requires 'source' to be"):
             FieldMappingConfig(target="vcpus", source="Threads", transform="product")
 
 
 class TestLoadConfig:
-    """Verifica la carga y validación del archivo YAML de configuración."""
+    """Verifies the loading and validation of the YAML configuration file."""
 
     def test_successful_real_yaml_load(self, yaml_path) -> None:
-        """Verifica que el archivo yaml del proyecto se carga correctamente."""
+        """Verifies that the project's yaml file loads correctly."""
         config = load_config(yaml_path)
         assert isinstance(config, NetBoxMappingConfig)
         assert len(config.csv_columns) > 0
 
     def test_nonexistent_yaml_raises_error(self, tmp_path) -> None:
-        """Una ruta falsa lanza ConfigValidationError."""
-        with pytest.raises(
-            ConfigValidationError, match="No se encontró el archivo de mapping"
-        ):
-            load_config(tmp_path / "falso.yaml")
+        """A fake path raises ConfigValidationError."""
+        with pytest.raises(ConfigValidationError, match="Mapping file not found"):
+            load_config(tmp_path / "fake.yaml")
 
     def test_invalid_yaml_raises_error(self, tmp_path) -> None:
-        """Un YAML mal formado o que no cumple el esquema lanza ConfigValidationError."""
-        yaml_invalido = tmp_path / "invalido.yaml"
-        yaml_invalido.write_text("csv_columns: [lista_en_lugar_de_dict]")
+        """A malformed YAML or one that does not meet the schema raises ConfigValidationError."""
+        invalid_yaml = tmp_path / "invalid.yaml"
+        invalid_yaml.write_text("csv_columns: [list_instead_of_dict]")
 
-        with pytest.raises(ConfigValidationError, match="Error de validación"):
-            load_config(yaml_invalido)
+        with pytest.raises(ConfigValidationError, match="Validation error"):
+            load_config(invalid_yaml)
 
 
 class TestResolveDefaultOrEmpty:
-    """Verifica la política de fallback (default > None > error)."""
+    """Verifies the fallback policy (default > None > error)."""
 
     def test_with_default(self) -> None:
         assert (
-            _resolve_default_or_empty("mi_default", is_optional=True, target="campo")
-            == "mi_default"
+            _resolve_default_or_empty("my_default", is_optional=True, target="field")
+            == "my_default"
         )
         assert (
-            _resolve_default_or_empty("mi_default", is_optional=False, target="campo")
-            == "mi_default"
+            _resolve_default_or_empty("my_default", is_optional=False, target="field")
+            == "my_default"
         )
 
     def test_optional_without_default_returns_none(self) -> None:
-        assert _resolve_default_or_empty(None, is_optional=True, target="campo") is None
+        assert _resolve_default_or_empty(None, is_optional=True, target="field") is None
 
     def test_required_without_default_raises_error(self) -> None:
-        with pytest.raises(RowValidationError, match="obligatorio 'campo' está vacío"):
-            _resolve_default_or_empty(None, is_optional=False, target="campo")
+        with pytest.raises(
+            RowValidationError, match="mandatory field 'field' is empty"
+        ):
+            _resolve_default_or_empty(None, is_optional=False, target="field")
 
 
 class TestExtractRawSourceValue:
-    """Verifica la extracción cruda de origen simple o multi-columna."""
+    """Verifies the raw extraction of a simple or multi-column source."""
 
     def test_single_source(self) -> None:
-        row = {"ColA": "ValorA"}
-        assert _extract_raw_source_value(row, "ColA") == "ValorA"
+        row = {"ColA": "ValueA"}
+        assert _extract_raw_source_value(row, "ColA") == "ValueA"
 
     def test_list_source_raises_error(self) -> None:
-        # Extraer una lista sin transform explicit no está permitido
-        row = {"ColA": "ValorA", "ColB": "ValorB"}
+        # Extracting a list without an explicit transform is not allowed
+        row = {"ColA": "ValueA", "ColB": "ValueB"}
         with pytest.raises(
-            TypeError, match="No se puede extraer un valor crudo a partir de una lista"
+            TypeError, match="A raw value cannot be extracted from a list"
         ):
             _extract_raw_source_value(row, ["ColA", "ColB"])
 
     def test_missing_key_returns_empty(self) -> None:
-        row = {"ColA": "ValorA"}
+        row = {"ColA": "ValueA"}
         assert _extract_raw_source_value(row, "ColX") == ""
 
 
 class TestValidateSelectChoice:
-    """Verifica la validación contra choice_sets."""
+    """Verifies the validation against choice_sets."""
 
     @pytest.fixture
     def cf_select(self) -> CustomFieldConfig:
@@ -888,23 +888,23 @@ class TestValidateSelectChoice:
             choice_set=ChoiceSetConfig(
                 name="my_choices",
                 choices=[
-                    ChoiceItemConfig(value="Opcion1", label="Op 1"),
-                    ChoiceItemConfig(value="Opcion2", label="Op 2"),
+                    ChoiceItemConfig(value="Option1", label="Op 1"),
+                    ChoiceItemConfig(value="Option2", label="Op 2"),
                 ],
             ),
         )
 
     def test_valid_choice(self, cf_select: CustomFieldConfig) -> None:
         assert (
-            _validate_select_choice("Opcion1", cf_select, "my_cf", is_optional=False)
-            == "Opcion1"
+            _validate_select_choice("Option1", cf_select, "my_cf", is_optional=False)
+            == "Option1"
         )
 
     def test_invalid_choice_optional_returns_none(
         self, cf_select: CustomFieldConfig
     ) -> None:
         assert (
-            _validate_select_choice("OpcionX", cf_select, "my_cf", is_optional=True)
+            _validate_select_choice("OptionX", cf_select, "my_cf", is_optional=True)
             is None
         )
 
@@ -913,9 +913,9 @@ class TestValidateSelectChoice:
     ) -> None:
         with pytest.raises(
             RowValidationError,
-            match="Valor inválido 'OpcionX' para el campo requerido 'my_cf'",
+            match="Invalid value 'OptionX' for the required field 'my_cf'",
         ):
-            _validate_select_choice("OpcionX", cf_select, "my_cf", is_optional=False)
+            _validate_select_choice("OptionX", cf_select, "my_cf", is_optional=False)
 
     @pytest.fixture
     def cf_multiselect(self) -> CustomFieldConfig:
@@ -927,31 +927,31 @@ class TestValidateSelectChoice:
             choice_set=ChoiceSetConfig(
                 name="multi_choices",
                 choices=[
-                    ChoiceItemConfig(value="Opcion1", label="Op 1"),
-                    ChoiceItemConfig(value="Opcion2", label="Op 2"),
-                    ChoiceItemConfig(value="Opcion3", label="Op 3"),
+                    ChoiceItemConfig(value="Option1", label="Op 1"),
+                    ChoiceItemConfig(value="Option2", label="Op 2"),
+                    ChoiceItemConfig(value="Option3", label="Op 3"),
                 ],
             ),
         )
 
     def test_multiselect_valid_single(self, cf_multiselect: CustomFieldConfig) -> None:
         assert _validate_select_choice(
-            "Opcion1", cf_multiselect, "my_cf_multi", is_optional=False
-        ) == ["Opcion1"]
+            "Option1", cf_multiselect, "my_cf_multi", is_optional=False
+        ) == ["Option1"]
 
     def test_multiselect_valid_multiple(
         self, cf_multiselect: CustomFieldConfig
     ) -> None:
         assert _validate_select_choice(
-            "Opcion1, Opcion3", cf_multiselect, "my_cf_multi", is_optional=False
-        ) == ["Opcion1", "Opcion3"]
+            "Option1, Option3", cf_multiselect, "my_cf_multi", is_optional=False
+        ) == ["Option1", "Option3"]
 
     def test_multiselect_invalid_optional_returns_none(
         self, cf_multiselect: CustomFieldConfig
     ) -> None:
         assert (
             _validate_select_choice(
-                "Opcion1, Invalida", cf_multiselect, "my_cf_multi", is_optional=True
+                "Option1, Invalid", cf_multiselect, "my_cf_multi", is_optional=True
             )
             is None
         )
@@ -961,10 +961,10 @@ class TestValidateSelectChoice:
     ) -> None:
         with pytest.raises(
             RowValidationError,
-            match="Valores inválidos '\\['Invalida'\\]' para el campo requerido 'my_cf_multi'",
+            match="Invalid values '\\['Invalid'\\]' for the required field 'my_cf_multi'",
         ):
             _validate_select_choice(
-                "Opcion1, Invalida", cf_multiselect, "my_cf_multi", is_optional=False
+                "Option1, Invalid", cf_multiselect, "my_cf_multi", is_optional=False
             )
 
     def test_non_select_field_is_noop(self) -> None:
@@ -972,28 +972,26 @@ class TestValidateSelectChoice:
             name="my_cf", label="My CF", type="text", required=False
         )
         assert (
-            _validate_select_choice(
-                "CualquierCosa", cf_text, "my_cf", is_optional=False
-            )
-            == "CualquierCosa"
+            _validate_select_choice("AnyThing", cf_text, "my_cf", is_optional=False)
+            == "AnyThing"
         )
 
 
 class TestResolveFieldValue:
-    """Verifica el flujo Pipe-and-Filter de resolución de campos."""
+    """Verifies the Pipe-and-Filter flow of field resolution."""
 
     def test_simple_field(self, config: NetBoxMappingConfig) -> None:
-        row = {"SO": "Ubuntu"}
-        field_def = FieldMappingConfig(target="os", source="SO")
+        row = {"OS": "Ubuntu"}
+        field_def = FieldMappingConfig(target="os", source="OS")
         assert (
             _resolve_field_value(row, field_def, config, is_optional=True) == "Ubuntu"
         )
 
     def test_mapped_field(self, config: NetBoxMappingConfig) -> None:
-        # machine_type ya tiene mapeo en YAML: Dedicada -> dedicated
+        # machine_type already has a mapping in the YAML: Dedicated -> dedicated
         col_name = config.csv_columns["machine_type"].source
-        row = {col_name: "Dedicada"}
-        field_def = FieldMappingConfig(target="tipo", source=col_name)
+        row = {col_name: "Dedicated"}
+        field_def = FieldMappingConfig(target="type", source=col_name)
         assert (
             _resolve_field_value(row, field_def, config, is_optional=True)
             == "dedicated"
@@ -1007,13 +1005,13 @@ class TestResolveFieldValue:
         assert _resolve_field_value(row, field_def, config, is_optional=True) == 8000
 
     def test_concat_dot_field(self, config: NetBoxMappingConfig) -> None:
-        row = {"Nota1": "Hola", "Nota2": "Mundo"}
+        row = {"Note1": "Hello", "Note2": "World"}
         field_def = FieldMappingConfig(
-            target="comments", source=["Nota1", "Nota2"], transform="concat_dot"
+            target="comments", source=["Note1", "Note2"], transform="concat_dot"
         )
         assert (
             _resolve_field_value(row, field_def, config, is_optional=True)
-            == "Hola. Mundo"
+            == "Hello. World"
         )
 
     def test_coalesce_field(self, config: NetBoxMappingConfig) -> None:
@@ -1028,7 +1026,7 @@ class TestResolveFieldValue:
         field_def = FieldMappingConfig(
             target="serial", source=["S1", "S2"], transform="coalesce"
         )
-        with pytest.raises(RowValidationError, match="Conflicto"):
+        with pytest.raises(RowValidationError, match="Conflict"):
             _resolve_field_value(row, field_def, config, is_optional=True)
 
     def test_product_field_with_cast(self, config: NetBoxMappingConfig) -> None:
@@ -1044,7 +1042,7 @@ class TestResolveFieldValue:
     def test_product_field_partial_empty_is_none(
         self, config: NetBoxMappingConfig
     ) -> None:
-        """Un producto incompleto no se envía (None se excluye del payload)."""
+        """An incomplete product is not sent (None is excluded from the payload)."""
         row = {"Threads": "16", "Sockets": ""}
         field_def = FieldMappingConfig(
             target="vcpus", source=["Threads", "Sockets"], transform="product"
@@ -1064,23 +1062,25 @@ class TestResolveFieldValue:
     def test_empty_required_raises_error(self, config: NetBoxMappingConfig) -> None:
         row = {"Col": ""}
         field_def = FieldMappingConfig(target="target", source="Col")
-        with pytest.raises(RowValidationError, match="obligatorio 'target' está vacío"):
+        with pytest.raises(
+            RowValidationError, match="mandatory field 'target' is empty"
+        ):
             _resolve_field_value(row, field_def, config, is_optional=False)
 
 
 class TestBuildPayload:
-    """Verifica la construcción del payload de NetBox."""
+    """Verifies the construction of the NetBox payload."""
 
     def test_valid_payload(self, config: NetBoxMappingConfig) -> None:
-        row = {"hostname": "SRV-01", "memoria": "8", "rack_u": "10"}
+        row = {"hostname": "SRV-01", "memory": "8", "rack_u": "10"}
         native_maps = [
             FieldMappingConfig(target="name", source="hostname"),
             FieldMappingConfig(
-                target="memory", source="memoria", cast=CastType.INT_GB_TO_MB
+                target="memory", source="memory", cast=CastType.INT_GB_TO_MB
             ),
         ]
 
-        # 'inventory_uuid' está definido en el YAML real
+        # 'inventory_uuid' is defined in the real YAML
         custom_maps = [FieldMappingConfig(target="inventory_uuid", source="rack_u")]
 
         payload = build_payload(row, native_maps, custom_maps, config)
@@ -1091,11 +1091,11 @@ class TestBuildPayload:
         assert payload["custom_fields"]["inventory_uuid"] == "10"
 
     def test_none_fields_are_excluded(self, config: NetBoxMappingConfig) -> None:
-        row = {"hostname": "SRV-01", "memoria": ""}
+        row = {"hostname": "SRV-01", "memory": ""}
         native_maps = [
             FieldMappingConfig(target="name", source="hostname"),
-            # Al ser vacío y opcional, resolverá a None
-            FieldMappingConfig(target="memory", source="memoria"),
+            # Being empty and optional, it will resolve to None
+            FieldMappingConfig(target="memory", source="memory"),
         ]
         payload = build_payload(row, native_maps, [], config)
         assert "name" in payload
@@ -1106,7 +1106,7 @@ class TestBuildPayload:
         native_maps = [
             FieldMappingConfig(target="serial", source="serial", is_unique=True)
         ]
-        # Al ser is_unique=True y resolverse como "", el assigner lo pasa a None y lo excluye
+        # Being is_unique=True and resolving to "", the assigner turns it into None and excludes it
         payload = build_payload(row, native_maps, [], config)
         assert "serial" not in payload
 
@@ -1114,20 +1114,20 @@ class TestBuildPayload:
         self, config: NetBoxMappingConfig
     ) -> None:
         row = {"hostname": "SRV-01"}
-        custom_maps = [FieldMappingConfig(target="cf_inexistente", source="hostname")]
+        custom_maps = [FieldMappingConfig(target="nonexistent_cf", source="hostname")]
         with pytest.raises(
-            ConfigValidationError, match="no está definido en custom_field_definitions"
+            ConfigValidationError, match="is not defined in custom_field_definitions"
         ):
             build_payload(row, [], custom_maps, config)
 
     def test_custom_fields_nested(self, config: NetBoxMappingConfig) -> None:
-        # Usando campos reales del mapping (vCPUs y Tipo de maquina)
-        native_map = [FieldMappingConfig(source="Nombre", target="name")]
+        # Using real fields of the mapping (vCPUs and Machine type)
+        native_map = [FieldMappingConfig(source="Name", target="name")]
         custom_map = [
             FieldMappingConfig(source="vCPUs", target="cpu_cores"),
-            FieldMappingConfig(source="Entorno", target="environment"),
+            FieldMappingConfig(source="Environment", target="environment"),
         ]
-        row = {"Nombre": "SRV", "vCPUs": "4", "Entorno": "production"}
+        row = {"Name": "SRV", "vCPUs": "4", "Environment": "production"}
 
         payload = build_payload(row, native_map, custom_map, config)
 
@@ -1137,10 +1137,10 @@ class TestBuildPayload:
         assert payload["custom_fields"]["environment"] == "production"
 
     def test_vm_vcpus_from_real_mapping(self, config: NetBoxMappingConfig) -> None:
-        """Contrato real: vcpus = Threads (por socket) × Sockets.
+        """Real contract: vcpus = Threads (per socket) × Sockets.
 
-        Una VM VMware de 4 vSockets × 1 core reporta 1 thread por socket;
-        usar solo la columna por socket registraría vcpus=1.
+        A VMware VM of 4 vSockets × 1 core reports 1 thread per socket;
+        using only the per-socket column would record vcpus=1.
         """
         vm_maps = config.node_types.virtual_machine.native_mappings
         row = {
@@ -1156,31 +1156,34 @@ class TestBuildPayload:
 
 
 class TestResolveNetboxStatus:
-    """Verifica la resolución del estado en NetBox."""
+    """Verifies the resolution of the status in NetBox."""
 
     def test_mapped_status(self, config: NetBoxMappingConfig) -> None:
         col_name = config.csv_columns["status"].source
         row = {
-            col_name: "Activo",
-            config.csv_columns["machine_type"].source: "Dedicada",
+            col_name: "Active",
+            config.csv_columns["machine_type"].source: "Dedicated",
         }
         assert _resolve_netbox_status(row, config, NodeType.DEVICE) == "active"
 
     def test_unmapped_status_raises_error(self, config: NetBoxMappingConfig) -> None:
         col_name = config.csv_columns["status"].source
-        row = {col_name: "Desconocido", config.csv_columns["machine_type"].source: "VM"}
+        row = {
+            col_name: "Unrecognized",
+            config.csv_columns["machine_type"].source: "VM",
+        }
         with pytest.raises(
-            RowValidationError, match="no está definido en el mapa configurado"
+            RowValidationError, match="is not defined in the configured map"
         ):
             _resolve_netbox_status(row, config, NodeType.VIRTUAL_MACHINE)
 
     def test_empty_status_fallback(self, config: NetBoxMappingConfig) -> None:
-        row = {config.csv_columns["machine_type"].source: "Dedicada"}
+        row = {config.csv_columns["machine_type"].source: "Dedicated"}
         assert _resolve_netbox_status(row, config, NodeType.DEVICE) == "inventory"
 
 
 class TestResolveDeviceRole:
-    """Verifica la búsqueda y fallback de roles."""
+    """Verifies the lookup and fallback of roles."""
 
     def test_role_exists(self, config: NetBoxMappingConfig) -> None:
         col_name = config.csv_columns["role"].source
@@ -1191,7 +1194,7 @@ class TestResolveDeviceRole:
     def test_role_not_exists_uses_others(self, config: NetBoxMappingConfig) -> None:
         col_name = config.csv_columns["role"].source
         row = {
-            col_name: "Inexistente",
+            col_name: "Nonexistent",
             config.csv_columns["machine_name"].source: "SRV-01",
         }
         cache: NameCache = {"others": MockNetBoxRecord(id=99, name="Others")}
@@ -1201,30 +1204,30 @@ class TestResolveDeviceRole:
         row = {config.csv_columns["machine_name"].source: "SRV-01"}
         cache: NameCache = {}
         with pytest.raises(
-            RowValidationError, match="No existe el DeviceRole 'Others'"
+            RowValidationError, match="The DeviceRole 'Others' does not exist"
         ):
             _resolve_device_role(row, cache, config)
 
 
-SITE_ID = 1  # Site configurado usado por las pruebas de resolución de identidad
+SITE_ID = 1  # Configured Site used by the identity resolution tests
 
 
 def _counts(
     names: dict[str, int] | None = None, uuids: dict[str, int] | None = None
 ) -> CsvIdentityCounts:
-    """Construye los conteos globales del CSV para las pruebas de resolución."""
+    """Builds the global CSV counts for the resolution tests."""
     return CsvIdentityCounts(Counter(names or {}), Counter(uuids or {}))
 
 
 def _node(record_id: int, uuid: str = "", name: str = "SRV-01") -> MockNetBoxRecord:
-    """Construye un objeto NetBox simulado con su custom field `inventory_uuid`."""
+    """Builds a simulated NetBox object with its `inventory_uuid` custom field."""
     return MockNetBoxRecord(
         id=record_id, name=name, custom_fields={"inventory_uuid": uuid}
     )
 
 
 class TestFindByUuid:
-    """Verifica la búsqueda por UUID con coincidencia exacta."""
+    """Verifies the lookup by UUID with an exact match."""
 
     def test_returns_exact_matches(self) -> None:
         endpoint = MagicMock()
@@ -1235,7 +1238,7 @@ class TestFindByUuid:
         endpoint.filter.assert_called_once_with(cf_inventory_uuid="uuid-123")
 
     def test_discards_partial_matches_from_loose_filter(self) -> None:
-        """NetBox filtra de forma parcial por defecto: 'abc' no debe resolver 'abc-extra'."""
+        """NetBox filters partially by default: 'abc' must not resolve 'abc-extra'."""
         endpoint = MagicMock()
         endpoint.filter.return_value = [_node(1, "abc-extra"), _node(2, "abc")]
 
@@ -1249,7 +1252,7 @@ class TestFindByUuid:
 
 
 class TestIsUuidSafelyUnique:
-    """Verifica la validación de unicidad de UUIDs."""
+    """Verifies the uniqueness validation of UUIDs."""
 
     def test_unique_in_both(self) -> None:
         endpoint = MagicMock()
@@ -1265,7 +1268,7 @@ class TestIsUuidSafelyUnique:
             assert not _is_uuid_safely_unique(
                 endpoint, existing, "u1", Counter({"u1": 1})
             )
-        assert "no es único" in caplog.text
+        assert "is not unique" in caplog.text
 
     def test_duplicate_in_csv(self) -> None:
         endpoint = MagicMock()
@@ -1276,7 +1279,7 @@ class TestIsUuidSafelyUnique:
     def test_not_in_netbox_is_not_a_warning(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Un nodo nuevo (sin coincidencias en NetBox) no es una ambigüedad."""
+        """A new node (without matches in NetBox) is not an ambiguity."""
         endpoint = MagicMock()
         endpoint.url = "http://test/api/dcim/devices/"
         with caplog.at_level(logging.WARNING):
@@ -1285,13 +1288,13 @@ class TestIsUuidSafelyUnique:
 
 
 class TestResolveExistingObject:
-    """Verifica la resolución de identidad en dos etapas: UUID único y luego nombre único."""
+    """Verifies the two-stage identity resolution: unique UUID and then unique name."""
 
     def test_unique_uuid_resolves_without_name_lookup(
         self, config: NetBoxMappingConfig
     ) -> None:
         endpoint = MagicMock()
-        record = _node(5, "uuid-123", name="OTRO-NOMBRE")
+        record = _node(5, "uuid-123", name="OTHER-NAME")
         endpoint.filter.return_value = [record]
 
         result = _resolve_existing_object(
@@ -1324,7 +1327,7 @@ class TestResolveExistingObject:
 
         assert result == [by_name]
         assert endpoint.filter.call_count == 2
-        # La etapa de nombre se acota al Site configurado.
+        # The name stage is scoped to the configured Site.
         endpoint.filter.assert_called_with(name="SRV-01", site_id=SITE_ID)
 
     def test_name_stage_accepts_uuid_with_different_case(
@@ -1377,9 +1380,9 @@ class TestResolveExistingObject:
     def test_duplicated_uuid_in_csv_falls_back_to_name(
         self, config: NetBoxMappingConfig
     ) -> None:
-        """Dos filas con el mismo UUID no se pisan: cada una se resuelve por su nombre."""
+        """Two rows with the same UUID do not clobber each other: each one is resolved by its name."""
         endpoint = MagicMock()
-        # Etapa UUID: el nodo de la otra fila ya existe con ese UUID; etapa nombre: no existe.
+        # UUID stage: the node of the other row already exists with that UUID; name stage: it does not exist.
         endpoint.filter.side_effect = [[_node(1, "dup", name="SRV-A")], []]
 
         result = _resolve_existing_object(
@@ -1422,7 +1425,7 @@ class TestResolveExistingObject:
             [_node(1, "", name="SRV"), _node(2, "", name="SRV")],
         ]
 
-        # TODO: me aparece este warning de sonarqube: Refactor this exception test to have only one invocation possibly throwing an exception
+        # TODO: sonarqube shows this warning: Refactor this exception test to have only one invocation possibly throwing an exception
         with pytest.raises(RowSkipCondition):
             _resolve_existing_object(
                 endpoint,
@@ -1446,12 +1449,12 @@ class TestResolveExistingObject:
     def test_name_match_with_different_uuid_skips(
         self, config: NetBoxMappingConfig
     ) -> None:
-        """No se suplanta la identidad de un nodo que ya tiene otro UUID."""
+        """The identity of a node that already has another UUID is not impersonated."""
         endpoint = MagicMock()
         endpoint.name = "devices"
-        endpoint.filter.side_effect = [[], [_node(1, "otro-uuid")]]
+        endpoint.filter.side_effect = [[], [_node(1, "other-uuid")]]
 
-        with pytest.raises(RowSkipCondition, match="distinto UUID"):
+        with pytest.raises(RowSkipCondition, match="different UUID"):
             _resolve_existing_object(
                 endpoint,
                 "SRV-01",
@@ -1481,7 +1484,7 @@ class TestResolveExistingObject:
     def test_uuid_owned_by_other_site_skips_without_name_fallback(
         self, config: NetBoxMappingConfig
     ) -> None:
-        """Un UUID que ya existe en otro Site no se actualiza ni se duplica."""
+        """A UUID that already exists in another Site is neither updated nor duplicated."""
         endpoint = MagicMock()
         foreign = MockNetBoxRecord.model_validate(
             {
@@ -1493,7 +1496,7 @@ class TestResolveExistingObject:
         )
         endpoint.filter.return_value = [foreign]
 
-        with pytest.raises(RowSkipCondition, match="otro Site"):
+        with pytest.raises(RowSkipCondition, match="another Site"):
             _resolve_existing_object(
                 endpoint,
                 "SRV-01",
@@ -1502,7 +1505,7 @@ class TestResolveExistingObject:
                 config,
                 SITE_ID,
             )
-        endpoint.filter.assert_called_once()  # no cae a la etapa de nombre
+        endpoint.filter.assert_called_once()  # does not fall through to the name stage
 
     def test_uuid_in_configured_site_resolves(
         self, config: NetBoxMappingConfig
@@ -1530,7 +1533,7 @@ class TestResolveExistingObject:
     def test_same_name_in_other_site_is_not_a_match(
         self, config: NetBoxMappingConfig
     ) -> None:
-        """El filtro por Site excluye homónimos de otros Sites: el nodo se crea."""
+        """The Site filter excludes namesakes from other Sites: the node is created."""
         endpoint = MagicMock()
         endpoint.filter.return_value = []
 
@@ -1544,7 +1547,7 @@ class TestResolveExistingObject:
     def test_nonexistent_site_has_no_nodes_to_match(
         self, config: NetBoxMappingConfig
     ) -> None:
-        """Site simulado (ID 0, dry-run): no se consulta por nombre."""
+        """Simulated Site (ID 0, dry-run): no lookup by name is made."""
         endpoint = MagicMock()
 
         result = _resolve_existing_object(
@@ -1565,13 +1568,13 @@ def _sync_node(
     site_id: int,
     dry_run: bool,
 ) -> SyncResult:
-    """Fases 2 y 3 de la sincronización de un nodo: resolver identidad y ejecutar."""
+    """Phases 2 and 3 of the synchronization of a node: resolve identity and execute."""
     existing = _resolve_existing_object(endpoint, name, uuid, counts, config, site_id)
     return _execute_sync(endpoint, payload, existing, name, uuid, dry_run)
 
 
 class _FakeNodeEndpoint:
-    """Endpoint en memoria con estado, para validar el flujo completo de identidad."""
+    """Stateful in-memory endpoint, to validate the full identity flow."""
 
     name = "devices"
     url = "http://test/api/dcim/devices/"
@@ -1591,7 +1594,7 @@ class _FakeNodeEndpoint:
         ]
 
     def create(self, **payload: Any) -> MockNetBoxRecord:
-        """Crea el registro; `site` se guarda como objeto anidado, como hace pynetbox."""
+        """Creates the record; `site` is stored as a nested object, as pynetbox does."""
         site_ref = SimpleNamespace(id=payload.pop("site", SITE_ID))
         record = MockNetBoxRecord(id=len(self.records) + 1, site=site_ref, **payload)  # type: ignore[call-arg]
         self.records.append(record)
@@ -1603,7 +1606,7 @@ def _uuid_of(record: MockNetBoxRecord) -> str:
 
 
 class TestValidateSyncDuplicatedUuid:
-    """Escenario end-to-end: dos filas del CSV con el mismo UUID y nombres distintos."""
+    """End-to-end scenario: two CSV rows with the same UUID and different names."""
 
     @staticmethod
     def _payload(name: str, uuid: str) -> dict[str, Any]:
@@ -1643,7 +1646,7 @@ class TestValidateSyncDuplicatedUuid:
 
 
 class TestValidateSyncMultiSite:
-    """Escenario end-to-end: nodos homónimos o con el mismo UUID en otro Site."""
+    """End-to-end scenario: nodes with the same name or the same UUID in another Site."""
 
     OTHER_SITE_ID = SITE_ID + 1
 
@@ -1685,7 +1688,7 @@ class TestValidateSyncMultiSite:
         endpoint = _FakeNodeEndpoint()
         endpoint.create(**self._payload("SRV-01", "uuid-1", self.OTHER_SITE_ID))
 
-        with pytest.raises(RowSkipCondition, match="otro Site"):
+        with pytest.raises(RowSkipCondition, match="another Site"):
             _sync_node(
                 cast(Endpoint, endpoint),
                 self._payload("SRV-01", "uuid-1", SITE_ID),
@@ -1702,7 +1705,7 @@ class TestValidateSyncMultiSite:
 
 
 class TestEnsureCustomFieldFilterLogic:
-    """Verifica que `filter_logic` del YAML se envíe a NetBox al crear el Custom Field."""
+    """Verifies that the YAML `filter_logic` is sent to NetBox when creating the Custom Field."""
 
     @pytest.mark.parametrize(
         ("filter_logic", "expected_in_payload"), [("exact", True), (None, False)]
@@ -1736,7 +1739,7 @@ class TestEnsureCustomFieldFilterLogic:
 
 
 class TestIsNameSafelyUnique:
-    """Verifica la validación de unicidad de nombres."""
+    """Verifies the uniqueness validation of names."""
 
     def test_unique_in_both(self) -> None:
         endpoint = MagicMock()
@@ -1761,7 +1764,7 @@ class TestIsNameSafelyUnique:
 
 
 class TestExecuteSync:
-    """Verifica el flujo de creación, actualización y dry-run."""
+    """Verifies the creation, update and dry-run flow."""
 
     def test_create(self) -> None:
         endpoint = MagicMock()
@@ -1785,11 +1788,11 @@ class TestExecuteSync:
         mock_existing.status = "active"  # Unchanged field
         mock_existing.name = "SRV-01"  # Changed field
         del mock_existing._init_cache
-        mock_existing.update.return_value = True  # Hubo cambios
+        mock_existing.update.return_value = True  # There were changes
 
         payload = {
-            "name": "SRV-01-nuevo",
-            "status": "active",  # Debe ser ignorado por el diff
+            "name": "SRV-01-new",
+            "status": "active",  # Must be ignored by the diff
         }
 
         status, obj_id, _ = _execute_sync(
@@ -1802,8 +1805,8 @@ class TestExecuteSync:
         )
         assert status == SyncStatus.UPDATED
         assert obj_id == 50
-        # Se asegura que solo se envía el diff parcial, excluyendo "status"
-        mock_existing.update.assert_called_once_with({"name": "SRV-01-nuevo"})
+        # Makes sure only the partial diff is sent, excluding "status"
+        mock_existing.update.assert_called_once_with({"name": "SRV-01-new"})
 
     def test_unchanged(self) -> None:
         endpoint = MagicMock()
@@ -1835,12 +1838,12 @@ class TestExecuteSync:
         mock_existing.name = "SRV-01"
         del mock_existing._init_cache
         mock_existing.update.return_value = (
-            False  # Hubo diff, pero update devolvió False
+            False  # There was a diff, but update returned False
         )
 
         status, obj_id, _ = _execute_sync(
             endpoint,
-            {"name": "SRV-01-nuevo"},
+            {"name": "SRV-01-new"},
             [mock_existing],
             "SRV-01",
             "uuid-1",
@@ -1848,7 +1851,7 @@ class TestExecuteSync:
         )
         assert status == SyncStatus.UNCHANGED
         assert obj_id == 50
-        mock_existing.update.assert_called_once_with({"name": "SRV-01-nuevo"})
+        mock_existing.update.assert_called_once_with({"name": "SRV-01-new"})
 
     def test_dry_run_create(self) -> None:
         endpoint = MagicMock()
@@ -1858,7 +1861,7 @@ class TestExecuteSync:
             endpoint, {"name": "SRV-01"}, [], "SRV-01", "uuid-1", dry_run=True
         )
         assert status == SyncStatus.CREATED
-        assert obj_id == 0  # obj_id simulado es 0
+        assert obj_id == 0  # the simulated obj_id is 0
         endpoint.create.assert_not_called()
 
     def test_dry_run_update(self) -> None:
@@ -1869,10 +1872,10 @@ class TestExecuteSync:
         mock_existing.id = 50
         mock_existing.status = "active"
         mock_existing.name = "SRV-01"
-        # Eliminar _init_cache para forzar el fallback de _check_record_changes
+        # Remove _init_cache to force the fallback of _check_record_changes
         del mock_existing._init_cache
 
-        payload = {"name": "SRV-01-nuevo", "status": "active"}
+        payload = {"name": "SRV-01-new", "status": "active"}
 
         status, obj_id, _ = _execute_sync(
             endpoint,
@@ -1890,7 +1893,7 @@ class TestExecuteSync:
         endpoint = MagicMock()
         mock_existing = MagicMock()
         mock_existing.id = 50
-        # Simula cambio (para que haga update) y que update() falle
+        # Simulates a change (so that it updates) and update() failing
 
         mock_existing.update.side_effect = RequestError(
             MagicMock(status_code=400, reason="NetBox Reject")
@@ -1898,11 +1901,11 @@ class TestExecuteSync:
         del mock_existing._init_cache
 
         with pytest.raises(
-            NetBoxApiError, match="Error actualizando NodeType.VIRTUAL_MACHINE 'SRV'"
+            NetBoxApiError, match="Error updating NodeType.VIRTUAL_MACHINE 'SRV'"
         ):
             _execute_sync(
                 endpoint,
-                {"name": "SRV-nuevo"},
+                {"name": "SRV-new"},
                 [mock_existing],
                 "SRV",
                 "uuid",
@@ -1917,7 +1920,7 @@ class TestExecuteSync:
         )
 
         with pytest.raises(
-            NetBoxApiError, match="Error al crear NodeType.VIRTUAL_MACHINE 'SRV'"
+            NetBoxApiError, match="Error creating NodeType.VIRTUAL_MACHINE 'SRV'"
         ):
             _execute_sync(
                 endpoint,
@@ -1930,7 +1933,7 @@ class TestExecuteSync:
 
 
 class TestValidateInterfaceIp:
-    """Verifica la validación de direcciones IP crudas."""
+    """Verifies the validation of raw IP addresses."""
 
     def test_valid_ipv4(self) -> None:
         assert _validate_interface_ip("192.168.1.10", "eth0") == "192.168.1.10"
@@ -1939,33 +1942,35 @@ class TestValidateInterfaceIp:
         assert _validate_interface_ip("2001:db8::1", "eth0") == "2001:db8::1"
 
     def test_invalid_ip_raises_error(self) -> None:
-        with pytest.raises(FieldParseError, match="no es una dirección IP válida"):
+        with pytest.raises(FieldParseError, match="is not a valid IP address"):
             _validate_interface_ip("256.0.0.1", "eth0")
 
 
 class TestBuildInterfaceCidr:
-    """Verifica la combinación de IP y prefijo/máscara a CIDR canónico."""
+    """Verifies the combination of IP and prefix/mask into a canonical CIDR."""
 
     def test_prefix_only(self) -> None:
         assert _build_interface_cidr("192.168.1.10", "24", "eth0") == "192.168.1.10/24"
 
     def test_network_and_prefix(self) -> None:
-        # Extrae el '26'
+        # Extracts the '26'
         assert (
             _build_interface_cidr("136.12.34.129", "136.12.34.128/26", "eth0")
             == "136.12.34.129/26"
         )
 
     def test_network_and_mask(self) -> None:
-        # Extrae la máscara y la convierte a prefijo CIDR equivalente
+        # Extracts the mask and converts it into the equivalent CIDR prefix
         assert (
             _build_interface_cidr("192.168.1.5", "192.168.1.0/255.255.255.0", "eth0")
             == "192.168.1.5/24"
         )
 
     def test_invalid_prefix_raises_error(self) -> None:
-        with pytest.raises(FieldParseError, match="Prefijo o CIDR inválido"):
-            _build_interface_cidr("192.168.1.5", "33", "eth0")  # /33 no existe en IPv4
+        with pytest.raises(FieldParseError, match="Invalid prefix or CIDR"):
+            _build_interface_cidr(
+                "192.168.1.5", "33", "eth0"
+            )  # /33 does not exist in IPv4
 
     def test_mask_only(self) -> None:
         assert (
@@ -1974,23 +1979,27 @@ class TestBuildInterfaceCidr:
         )
 
     def test_network_with_host_bits_is_tolerated(self) -> None:
-        """'192.168.1.5/24' como Red IP se interpreta como la red 192.168.1.0/24."""
+        """'192.168.1.5/24' as IP network is interpreted as the network 192.168.1.0/24."""
         assert (
             _build_interface_cidr("192.168.1.10", "192.168.1.5/24", "eth0")
             == "192.168.1.10/24"
         )
 
     def test_ip_outside_declared_network_raises_error(self) -> None:
-        with pytest.raises(FieldParseError, match="no pertenece a la 'Red IP'"):
+        with pytest.raises(
+            FieldParseError, match="does not belong to the 'IP network'"
+        ):
             _build_interface_cidr("192.168.1.10", "10.0.0.0/8", "eth0")
 
     def test_ipv6_in_ipv4_network_raises_error(self) -> None:
-        with pytest.raises(FieldParseError, match="no pertenece a la 'Red IP'"):
+        with pytest.raises(
+            FieldParseError, match="does not belong to the 'IP network'"
+        ):
             _build_interface_cidr("2001:db8::1", "10.0.0.0/8", "eth0")
 
     @pytest.mark.parametrize("pfx", ["0.0.0.0/0", "0", "0.0.0.0"])
     def test_zero_prefix_raises_error(self, pfx: str) -> None:
-        with pytest.raises(FieldParseError, match="/0 no permitido"):
+        with pytest.raises(FieldParseError, match="/0 is not allowed"):
             _build_interface_cidr("192.168.1.5", pfx, "eth0")
 
 
@@ -2008,7 +2017,7 @@ class TestNetworkFromCidr:
 
 
 class TestEnsurePrefix:
-    """Verifica el get-or-create idempotente del Prefix en NetBox."""
+    """Verifies the idempotent get-or-create of the Prefix in NetBox."""
 
     def test_existing_prefix_is_not_recreated(self) -> None:
         endpoint = MagicMock()
@@ -2045,7 +2054,7 @@ class TestEnsurePrefix:
 
 
 class TestCreateRecord:
-    """Verifica la primitiva de creación compartida (real y dry-run)."""
+    """Verifies the shared creation primitive (real and dry-run)."""
 
     def test_creates_in_netbox(self) -> None:
         endpoint = MagicMock()
@@ -2069,7 +2078,7 @@ class TestCreateRecord:
 
 
 class TestApplyUpdate:
-    """Verifica la primitiva de escritura para diffs precalculados."""
+    """Verifies the write primitive for precomputed diffs."""
 
     def test_propagates_false_when_netbox_applies_nothing(self) -> None:
         existing = MagicMock()
@@ -2084,7 +2093,7 @@ class TestApplyUpdate:
 
 
 class TestUpdateIfChanged:
-    """Verifica la primitiva de actualización basada en diff."""
+    """Verifies the diff-based update primitive."""
 
     def test_no_diff_does_not_update(self) -> None:
         existing = MagicMock(enabled=True)
@@ -2121,7 +2130,7 @@ class TestUpdateIfChanged:
 
 
 class TestUpsertInterfaceRecord:
-    """Verifica que el upsert de interfaces componga creación y actualización."""
+    """Verifies that the interface upsert composes creation and update."""
 
     def test_creates_when_not_cached(self) -> None:
         endpoint = MagicMock()
@@ -2154,34 +2163,34 @@ class TestUpsertInterfaceRecord:
 
 
 class TestSanitizeMacAddress:
-    """Verifica el saneamiento y validación de direcciones MAC."""
+    """Verifies the sanitization and validation of MAC addresses."""
 
     def test_valid_macs(self) -> None:
-        # Formato canónico
+        # Canonical format
         assert _sanitize_mac_address("AA:BB:CC:DD:EE:FF", "eth0") == "AA:BB:CC:DD:EE:FF"
-        # Formato Windows (guiones)
+        # Windows format (hyphens)
         assert _sanitize_mac_address("aa-bb-cc-dd-ee-ff", "eth0") == "AA:BB:CC:DD:EE:FF"
-        # Formato Cisco (puntos)
+        # Cisco format (dots)
         assert _sanitize_mac_address("aabb.ccdd.eeff", "eth0") == "AA:BB:CC:DD:EE:FF"
-        # Sin separadores
+        # Without separators
         assert _sanitize_mac_address("AABBCCDDEEFF", "eth0") == "AA:BB:CC:DD:EE:FF"
 
     def test_invalid_macs(self) -> None:
-        # Basura (no hexa)
-        with pytest.raises(FieldParseError, match="no es válida"):
+        # Garbage (non-hex)
+        with pytest.raises(FieldParseError, match="is not valid"):
             _sanitize_mac_address("N/A", "eth0")
 
-        # Demasiado corta
-        with pytest.raises(FieldParseError, match="no es válida"):
+        # Too short
+        with pytest.raises(FieldParseError, match="is not valid"):
             _sanitize_mac_address("AA:BB:CC:DD:EE", "eth0")
 
-        # Demasiado larga
-        with pytest.raises(FieldParseError, match="no es válida"):
+        # Too long
+        with pytest.raises(FieldParseError, match="is not valid"):
             _sanitize_mac_address("AA:BB:CC:DD:EE:FF:11", "eth0")
 
 
 class TestParseSingleNetworkInterface:
-    """Verifica el parseo de una única interfaz."""
+    """Verifies the parsing of a single interface."""
 
     def test_complete_interface(self, config: NetBoxMappingConfig) -> None:
         status_map = {"up": True, "down": False}
@@ -2219,54 +2228,54 @@ class TestParseSingleNetworkInterface:
     def test_empty_name_raises_error(self, config: NetBoxMappingConfig) -> None:
         with pytest.raises(
             RowValidationError,
-            match="El nombre de una interfaz de red no puede estar vacío",
+            match="The name of a network interface cannot be empty",
         ):
             _parse_single_network_interface("", "up", "1.1.1.1", "24", "", {}, config)
 
     def test_prefix_without_ip_is_discarded_with_warning(
         self, config: NetBoxMappingConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """'Red IP' sin 'IP': no hay CIDR y se advierte del descarte."""
+        """'IP network' without 'IP': there is no CIDR and the discard is warned about."""
         with caplog.at_level(logging.WARNING):
             parsed = _parse_single_network_interface(
                 "eth0", "up", "", "192.168.1.0/24", "", {}, config
             )
         assert parsed["cidr"] is None
         assert parsed["ip"] is None
-        assert "sin 'IP'" in caplog.text
+        assert "without 'IP'" in caplog.text
 
     def test_prefix_without_ip_is_not_validated(
         self, config: NetBoxMappingConfig
     ) -> None:
-        """Una 'Red IP' basura sin 'IP' no debe romper la fila."""
+        """A garbage 'IP network' without 'IP' must not break the row."""
         parsed = _parse_single_network_interface(
-            "eth0", "up", "N/A", "basura", "", {}, config
+            "eth0", "up", "N/A", "garbage", "", {}, config
         )
         assert parsed["cidr"] is None
 
     def test_ip_without_prefix_warns_and_skips_cidr(
         self, config: NetBoxMappingConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """IP pura sin 'Red IP': no se inventa prefijo y se advierte."""
+        """Plain IP without 'IP network': no prefix is made up and a warning is issued."""
         with caplog.at_level(logging.WARNING):
             parsed = _parse_single_network_interface(
                 "eth0", "up", "10.0.0.5", "N/A", "", {}, config
             )
         assert parsed["ip"] == "10.0.0.5"
         assert parsed["cidr"] is None
-        assert "sin 'Red IP' ni prefijo" in caplog.text
+        assert "without 'IP network' or prefix" in caplog.text
 
     def test_ip_with_embedded_prefix_builds_cidr(
         self, config: NetBoxMappingConfig
     ) -> None:
-        """IP en notación CIDR y sin 'Red IP': el prefijo embebido se usa."""
+        """IP in CIDR notation and without 'IP network': the embedded prefix is used."""
         parsed = _parse_single_network_interface(
             "eth0", "up", "10.0.0.5/24", "", "", {}, config
         )
         assert parsed["ip"] == "10.0.0.5"
         assert parsed["cidr"] == "10.0.0.5/24"
 
-    def test_red_ip_has_priority_over_embedded_prefix(
+    def test_ip_network_has_priority_over_embedded_prefix(
         self, config: NetBoxMappingConfig
     ) -> None:
         parsed = _parse_single_network_interface(
@@ -2277,31 +2286,33 @@ class TestParseSingleNetworkInterface:
     def test_ip_with_empty_embedded_prefix_warns(
         self, config: NetBoxMappingConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """'10.0.0.5/' no aporta prefijo: se trata como IP sin prefijo."""
+        """'10.0.0.5/' provides no prefix: it is treated as an IP without a prefix."""
         with caplog.at_level(logging.WARNING):
             parsed = _parse_single_network_interface(
                 "eth0", "up", "10.0.0.5/", "", "", {}, config
             )
         assert parsed["cidr"] is None
-        assert "sin 'Red IP' ni prefijo" in caplog.text
+        assert "without 'IP network' or prefix" in caplog.text
 
     def test_ip_with_invalid_embedded_prefix_raises(
         self, config: NetBoxMappingConfig
     ) -> None:
-        with pytest.raises(RowValidationError, match="inválido"):
+        with pytest.raises(RowValidationError, match="Invalid prefix or CIDR"):
             _parse_single_network_interface(
                 "eth0", "up", "10.0.0.5/99", "", "", {}, config
             )
 
-    def test_ip_outside_red_ip_raises_row_validation_error(
+    def test_ip_outside_ip_network_raises_row_validation_error(
         self, config: NetBoxMappingConfig
     ) -> None:
-        with pytest.raises(RowValidationError, match="no pertenece a la 'Red IP'"):
+        with pytest.raises(
+            RowValidationError, match="does not belong to the 'IP network'"
+        ):
             _parse_single_network_interface(
                 "eth0", "up", "192.168.1.10", "10.0.0.0/8", "", {}, config
             )
 
-    def test_network_derived_from_full_red_ip(
+    def test_network_derived_from_full_ip_network(
         self, config: NetBoxMappingConfig
     ) -> None:
         parsed = _parse_single_network_interface(
@@ -2324,7 +2335,7 @@ class TestParseSingleNetworkInterface:
 
 
 class TestSplitIpAndEmbeddedPrefix:
-    """Verifica la separación de IP y prefijo embebido."""
+    """Verifies the splitting of IP and embedded prefix."""
 
     @pytest.mark.parametrize(
         ("raw", "expected"),
@@ -2341,7 +2352,7 @@ class TestSplitIpAndEmbeddedPrefix:
 
 
 class TestParseNetworkInterfaces:
-    """Verifica el procesamiento de columnas CSV enteras de red."""
+    """Verifies the processing of whole network CSV columns."""
 
     def test_multiple_interfaces(self, config: NetBoxMappingConfig) -> None:
         row = {
@@ -2370,17 +2381,15 @@ class TestParseNetworkInterfaces:
     ) -> None:
         row = {
             config.csv_columns["iface_names"].source: "eth0, eth1",
-            config.csv_columns["iface_ip"].source: "192.168.1.1",  # falta una IP
+            config.csv_columns["iface_ip"].source: "192.168.1.1",  # one IP is missing
         }
-        with pytest.raises(
-            RowValidationError, match="Discrepancia de elementos en red"
-        ):
+        with pytest.raises(RowValidationError, match="Network element mismatch"):
             _parse_network_interfaces(row, config)
 
     def test_empty_columns_filled(self, config: NetBoxMappingConfig) -> None:
         row = {
             config.csv_columns["iface_names"].source: "eth0, eth1",
-            config.csv_columns["iface_ip"].source: "",  # Completamente vacío
+            config.csv_columns["iface_ip"].source: "",  # Completely empty
         }
         interfaces = _parse_network_interfaces(row, config)
         assert len(interfaces) == 2
@@ -2401,18 +2410,18 @@ class TestParseNetworkInterfaces:
     def test_missing_status_key_filled_with_default(
         self, config: NetBoxMappingConfig
     ) -> None:
-        # Fila donde la columna de status ni siquiera existe en el dict (ej. N/A en pandas/DictReader)
+        # Row where the status column does not even exist in the dict (e.g. N/A in pandas/DictReader)
         row = {
             config.csv_columns["iface_names"].source: "eth0",
             config.csv_columns["iface_ip"].source: "1.1.1.1",
         }
         interfaces = _parse_network_interfaces(row, config)
         assert len(interfaces) == 1
-        assert interfaces[0]["enabled"] is True  # Por default
+        assert interfaces[0]["enabled"] is True  # By default
 
 
 class TestEnsureSite:
-    """Verifica la lógica de ensure_site (búsqueda, creación y dry-run)."""
+    """Verifies the ensure_site logic (lookup, creation and dry-run)."""
 
     def test_site_exists(self) -> None:
         endpoints = MagicMock()
@@ -2454,7 +2463,7 @@ class TestEnsureSite:
 
 
 class TestEnsureManufacturer:
-    """Verifica la lógica de ensure_manufacturer con cache y fallback de slug."""
+    """Verifies the ensure_manufacturer logic with cache and slug fallback."""
 
     def test_found_in_cache(self) -> None:
         endpoint = MagicMock()
@@ -2484,7 +2493,7 @@ class TestEnsureManufacturer:
 
     def test_found_by_slug_fallback(self) -> None:
         endpoint = MagicMock()
-        # filter(name="H.P.") retorna vacío, pero filter(slug="hp") retorna un registro
+        # filter(name="H.P.") returns empty, but filter(slug="hp") returns a record
         mock_mfg = MockNetBoxRecord(id=7, name="HP")
         endpoint.filter.side_effect = [[], [mock_mfg]]
         cache: NameCache = {}
@@ -2515,13 +2524,13 @@ class TestEnsureManufacturer:
 
 
 class TestEnsureRack:
-    """Verifica que ensure_rack capture RequestError al crear."""
+    """Verifies that ensure_rack catches RequestError on creation."""
 
     def test_ensure_rack_request_error(self) -> None:
         endpoint = MagicMock()
         endpoint.filter.return_value = []
         endpoint.name = "racks"
-        # Simulamos que la creación falla
+        # We simulate that the creation fails
         endpoint.create.side_effect = RequestError(
             MagicMock(status_code=400, reason="Bad Request")
         )
@@ -2531,7 +2540,7 @@ class TestEnsureRack:
 
         with pytest.raises(
             NetBoxApiError,
-            match="No se pudo crear el objeto en 'racks' con nombre 'Rack1'",
+            match="Could not create the object in 'racks' with name 'Rack1'",
         ):
             ensure_rack(endpoint, "Rack1", site_mock, cache, dry_run=False)
 
@@ -2583,10 +2592,10 @@ class TestEnsureRack:
 
 
 class TestSyncRackLocation:
-    """Verifica la lógica de _sync_rack_location."""
+    """Verifies the _sync_rack_location logic."""
 
     def test_sync_rack_location_different(self) -> None:
-        mock_old_loc = MockNetBoxRecord(id=88, name="Fila B")
+        mock_old_loc = MockNetBoxRecord(id=88, name="Row B")
         mock_rack = MagicMock(id=5, name="Rack1", location=mock_old_loc)
 
         result = _sync_rack_location(mock_rack, "Rack1", 99, dry_run=False)
@@ -2603,7 +2612,7 @@ class TestSyncRackLocation:
         mock_rack.update.assert_called_once_with({"location": 99})
 
     def test_sync_rack_location_matches(self) -> None:
-        mock_loc = MockNetBoxRecord(id=99, name="Fila A")
+        mock_loc = MockNetBoxRecord(id=99, name="Row A")
         mock_rack = MagicMock(id=5, name="Rack1", location=mock_loc)
 
         result = _sync_rack_location(mock_rack, "Rack1", 99, dry_run=False)
@@ -2627,30 +2636,30 @@ class TestSyncRackLocation:
 
         with pytest.raises(
             NetBoxApiError,
-            match="Error actualizando rack 'Rack1'",
+            match="Error updating rack 'Rack1'",
         ):
             _sync_rack_location(mock_rack, "Rack1", 99, dry_run=False)
 
 
 class TestEnsureLocation:
-    """Verifica que ensure_location cree o recupere localizaciones correctamente."""
+    """Verifies that ensure_location creates or retrieves locations correctly."""
 
     @patch("inventory_pipeline.export_to_netbox.get_or_create_cached")
     def test_ensure_location_calls_get_or_create(self, mock_get: MagicMock) -> None:
         endpoint = MagicMock()
         site_mock = MockNetBoxRecord(id=10, name="Site1")
         cache: SiteNameCache = {}
-        mock_get.return_value = (MockNetBoxRecord(id=5, name="Fila A"), cache)
+        mock_get.return_value = (MockNetBoxRecord(id=5, name="Row A"), cache)
 
-        obj, _ = ensure_location(endpoint, "Fila A", site_mock, cache, False)
+        obj, _ = ensure_location(endpoint, "Row A", site_mock, cache, False)
 
         mock_get.assert_called_once_with(
             endpoint=endpoint,
             cache=cache,
-            cache_key=(10, "Fila A"),
-            filter_kwargs={"name": "Fila A", "site_id": 10},
-            create_kwargs={"name": "Fila A", "site": 10},
-            name="Fila A",
+            cache_key=(10, "Row A"),
+            filter_kwargs={"name": "Row A", "site_id": 10},
+            create_kwargs={"name": "Row A", "site": 10},
+            name="Row A",
             dry_run=False,
             skip_filter=False,
         )
@@ -2658,7 +2667,7 @@ class TestEnsureLocation:
 
 
 class TestEnsureCluster:
-    """Verifica que ensure_cluster capture RequestError al crear."""
+    """Verifies that ensure_cluster catches RequestError on creation."""
 
     def test_ensure_cluster_request_error(self) -> None:
         endpoint = MagicMock()
@@ -2673,7 +2682,7 @@ class TestEnsureCluster:
 
         with pytest.raises(
             NetBoxApiError,
-            match="No se pudo crear el objeto en 'clusters' con nombre 'Cluster1'",
+            match="Could not create the object in 'clusters' with name 'Cluster1'",
         ):
             ensure_cluster(
                 endpoint, "Cluster1", cluster_type_mock, cache, dry_run=False
@@ -2681,19 +2690,19 @@ class TestEnsureCluster:
 
 
 class TestEnsureDynamicClusterTypesEdgeCases:
-    """Verifica que la caché se propague correctamente y evite peticiones N+1."""
+    """Verifies that the cache is propagated correctly and avoids N+1 requests."""
 
     def test_cache_efficiency_no_extra_api_calls(self) -> None:
         """
-        Escenario destructivo/Edge case: Verifica que cuando el caché ya contiene
-        objetos, no haya avalanchas O(N) hacia NetBox.
+        Destructive scenario/Edge case: Verifies that when the cache already contains
+        objects, there are no O(N) avalanches towards NetBox.
         """
         endpoints = MagicMock()
         mock_ct_endpoint = MagicMock()
         mock_ct_endpoint.name = "cluster_types"
         endpoints.cluster_types = mock_ct_endpoint
 
-        # Simula que los objetos NO existen en NetBox (requieren create si no hay caché)
+        # Simulates that the objects do NOT exist in NetBox (they require create if there is no cache)
         mock_ct_endpoint.filter.return_value = []
 
         fallback_cfg = MagicMock()
@@ -2702,7 +2711,7 @@ class TestEnsureDynamicClusterTypesEdgeCases:
 
         cluster_type_map = {"vm1": "Ubuntu", "vm2": "Debian"}
 
-        # Ya existe Ubuntu en el caché
+        # Ubuntu already exists in the cache
         mock_ubuntu = MagicMock()
         cache: dict[str, Any] = {"Ubuntu": mock_ubuntu}
 
@@ -2718,7 +2727,7 @@ class TestEnsureDynamicClusterTypesEdgeCases:
         assert "Debian" in updated_cache
         assert updated_cache["Ubuntu"] == mock_ubuntu
 
-        # Fallback y Debian se crearon, Ubuntu usó caché
+        # Fallback and Debian were created, Ubuntu used the cache
         assert mock_ct_endpoint.create.call_count == 2
         call_names = [
             call.kwargs.get("name") for call in mock_ct_endpoint.create.call_args_list
@@ -2754,7 +2763,7 @@ class TestAssignPrimaryIPv4:
 
 
 class TestResolveCluster:
-    """Verifica los edge cases de _resolve_cluster."""
+    """Verifies the edge cases of _resolve_cluster."""
 
     @pytest.fixture
     def mock_endpoints(self) -> MagicMock:
@@ -2768,7 +2777,7 @@ class TestResolveCluster:
         config = MagicMock(spec=NetBoxMappingConfig)
         config.fields = {
             "cluster_name": MagicMock(
-                source="Nombre Cluster",
+                source="Cluster Name",
                 target="cluster_name",
                 default=None,
                 transform=None,
@@ -2789,8 +2798,8 @@ class TestResolveCluster:
         mock_endpoints: MagicMock,
         mock_config: MagicMock,
     ) -> None:
-        """Si cluster_name está presente pero SO está vacío, debe usar fallback_cluster_type."""
-        row = {"Nombre Cluster": "Cluster 1", "SO hipervisor": ""}
+        """If cluster_name is present but the OS is empty, it must use fallback_cluster_type."""
+        row = {"Cluster Name": "Cluster 1", "Hypervisor OS": ""}
         mock_extract.side_effect = lambda r, k, c: (
             "Cluster 1" if k == "cluster_name" else ""
         )
@@ -2828,8 +2837,8 @@ class TestResolveCluster:
     def test_cluster_name_empty_os_present(
         self, mock_extract: MagicMock, mock_endpoints: MagicMock, mock_config: MagicMock
     ) -> None:
-        """Si cluster_name está vacío (incluso si SO está presente), aborta y retorna None."""
-        row = {"Nombre Cluster": "", "SO hipervisor": "VMware"}
+        """If cluster_name is empty (even if the OS is present), it aborts and returns None."""
+        row = {"Cluster Name": "", "Hypervisor OS": "VMware"}
         mock_extract.side_effect = lambda r, k, c: (
             "" if k == "cluster_name" else "VMware"
         )
@@ -2859,8 +2868,8 @@ class TestResolveCluster:
     def test_both_empty(
         self, mock_extract: MagicMock, mock_endpoints: MagicMock, mock_config: MagicMock
     ) -> None:
-        """Si ambos están vacíos, aborta y retorna None."""
-        row = {"Nombre Cluster": "", "SO hipervisor": ""}
+        """If both are empty, it aborts and returns None."""
+        row = {"Cluster Name": "", "Hypervisor OS": ""}
         mock_extract.side_effect = lambda r, k, c: ""
 
         cluster_type_map: dict[str, str] = {}
@@ -2884,7 +2893,7 @@ class TestResolveCluster:
 
 
 class TestSyncDeviceTypeAttributes:
-    """Verifica la sincronización de atributos en DeviceTypes."""
+    """Verifies the synchronization of attributes in DeviceTypes."""
 
     def test_sync_no_update_needed(self) -> None:
         existing = MagicMock()
@@ -2908,7 +2917,7 @@ class TestSyncDeviceTypeAttributes:
 
 
 class TestSelectDeviceTypeAttributes:
-    """Qué atributos se sincronizan en el DeviceType a partir de la fila."""
+    """Which attributes are synchronized in the DeviceType from the row."""
 
     KEY = DeviceTypeKey("Dell", "R740")
 
@@ -2926,7 +2935,7 @@ class TestSelectDeviceTypeAttributes:
         assert attrs == DeviceTypeAttributes(1.5, None)
 
     def test_empty_u_height_is_not_informed(self, config: NetBoxMappingConfig) -> None:
-        """Una altura vacía ya no se convierte en 1.0: se conserva la del tipo existente."""
+        """An empty height is no longer converted to 1.0: that of the existing type is kept."""
         attrs = select_device_type_attributes(
             self._row(config, ""), self.KEY, {}, config
         )
@@ -2973,7 +2982,7 @@ class TestSelectDeviceTypeAttributes:
 
 
 class TestParseDeviceTypeAttributes:
-    """Validación por fila de 'height_u' y 'part_number'."""
+    """Per-row validation of 'height_u' and 'part_number'."""
 
     @staticmethod
     def _row(config: NetBoxMappingConfig, height: str, pn: str = "") -> CsvRow:
@@ -2989,7 +2998,7 @@ class TestParseDeviceTypeAttributes:
     def test_heights(
         self, config: NetBoxMappingConfig, height: str, expected: float | None
     ) -> None:
-        """El 0 es un valor explícito (blades 0U); el vacío es 'no informado'."""
+        """0 is an explicit value (0U blades); empty is 'not reported'."""
         attrs = parse_device_type_attributes(self._row(config, height), config)
         assert attrs.u_height == expected
 
@@ -3004,12 +3013,12 @@ class TestParseDeviceTypeAttributes:
         assert parse_device_type_attributes(self._row(config, "1"), config) == (
             DeviceTypeAttributes(1.0, None)
         )
-        with pytest.raises(RowValidationError, match="50 caracteres"):
+        with pytest.raises(RowValidationError, match="50 characters"):
             parse_device_type_attributes(self._row(config, "1", "x" * 51), config)
 
 
 class TestCompositeKeys:
-    """Las claves con nombre siguen siendo tuplas: compatibles como clave de diccionario."""
+    """Named keys are still tuples: compatible as a dictionary key."""
 
     def test_device_type_key_is_tuple_compatible_and_has_label(self) -> None:
         key = DeviceTypeKey("Dell", "R640")
@@ -3023,7 +3032,7 @@ class TestCompositeKeys:
 
 
 class TestPrecomputeDeviceTypeAttributes:
-    """Consolidación por modelo: primer valor no vacío, por atributo, con aviso de conflictos."""
+    """Consolidation per model: first non-empty value, per attribute, with a conflict warning."""
 
     @staticmethod
     def _row(config: NetBoxMappingConfig, model: str, height: str, pn: str) -> CsvRow:
@@ -3049,8 +3058,8 @@ class TestPrecomputeDeviceTypeAttributes:
         assert result == {
             DeviceTypeKey("Dell", "R640"): DeviceTypeAttributes(1.0, "PN-A")
         }
-        assert "'Altura (U)' = 1.0 (línea 2) vs 2.0 (línea 4)" in caplog.text
-        assert "'P/N' = 'PN-A' (línea 3) vs 'PN-B' (línea 4)" in caplog.text
+        assert "'Height (U)' = 1.0 (line 2) vs 2.0 (line 4)" in caplog.text
+        assert "'P/N' = 'PN-A' (line 3) vs 'PN-B' (line 4)" in caplog.text
 
     def test_models_are_independent_and_zero_is_a_value(
         self, config: NetBoxMappingConfig, caplog: pytest.LogCaptureFixture
@@ -3067,12 +3076,12 @@ class TestPrecomputeDeviceTypeAttributes:
             10.0, None
         )
         assert result[DeviceTypeKey("Dell", "M630")] == DeviceTypeAttributes(0.0, None)
-        assert "Conflicto" not in caplog.text
+        assert "Conflict" not in caplog.text
 
     def test_invalid_and_incomplete_rows_are_ignored_without_raising(
         self, config: NetBoxMappingConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """El pre-escaneo global nunca aborta: esas filas fallan al sincronizarse."""
+        """The global pre-scan never aborts: those rows fail when synchronized."""
         rows = [
             NumberedRow(2, self._row(config, "R640", "1.25", "PN-X")),
             NumberedRow(3, self._row(config, "", "1", "PN-Y")),
@@ -3084,15 +3093,16 @@ class TestPrecomputeDeviceTypeAttributes:
         assert result == {
             DeviceTypeKey("Dell", "R640"): DeviceTypeAttributes(2.0, "PN-OK")
         }
-        # La fila inválida no aporta valores, pero deja traza (solo visible con --verbose).
-        assert "Línea 2 ignorada en la consolidación del DeviceType 'Dell / R640'" in (
-            caplog.text
+        # The invalid row provides no values, but leaves a trace (only visible with --verbose).
+        assert (
+            "Line 2 ignored in the consolidation of the DeviceType 'Dell / R640'"
+            in (caplog.text)
         )
         assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
 class _FakeDeviceType:
-    """DeviceType simulado: update() aplica los cambios in-place, como pynetbox."""
+    """Simulated DeviceType: update() applies the changes in-place, like pynetbox."""
 
     def __init__(self, u_height: float, part_number: str) -> None:
         self.id = 5
@@ -3109,7 +3119,7 @@ class _FakeDeviceType:
 
 
 class TestEnsureDeviceTypeIdempotency:
-    """El DeviceType compartido se escribe una vez por modelo y nunca oscila."""
+    """The shared DeviceType is written once per model and never oscillates."""
 
     MANUFACTURER = MockNetBoxRecord(id=1, name="Dell")
 
@@ -3121,7 +3131,7 @@ class TestEnsureDeviceTypeIdempotency:
         return endpoint
 
     def _run(self, dt: _FakeDeviceType, attrs: DeviceTypeAttributes, rows: int) -> None:
-        """Simula una ejecución: `rows` filas del mismo modelo con caché compartida."""
+        """Simulates a run: `rows` rows of the same model with a shared cache."""
         cache: ManufModelCache = {}
         endpoint = self._endpoint(dt)
         for _ in range(rows):
@@ -3141,7 +3151,7 @@ class TestEnsureDeviceTypeIdempotency:
         assert dt.patches == []
 
     def test_empty_values_never_overwrite_existing(self) -> None:
-        """P/N cargado a mano y tipo hijo 0U se conservan si el CSV no los informa."""
+        """A P/N loaded by hand and a 0U child type are kept if the CSV does not report them."""
         dt = _FakeDeviceType(0.0, "PN-MANUAL")
         self._run(dt, DeviceTypeAttributes(None, None), rows=2)
         assert dt.patches == []
@@ -3170,7 +3180,7 @@ class TestEnsureDeviceTypeIdempotency:
             )
 
         assert obj is dt
-        assert "rechazó actualizar el DeviceType 'Dell / R640'" in caplog.text
+        assert "refused to update the DeviceType 'Dell / R640'" in caplog.text
 
     def test_new_type_with_empty_height_uses_default_and_warns(
         self, caplog: pytest.LogCaptureFixture
@@ -3193,7 +3203,7 @@ class TestEnsureDeviceTypeIdempotency:
         create_kwargs = endpoint.create.call_args.kwargs
         assert create_kwargs["u_height"] == DEFAULT_DEVICE_TYPE_U_HEIGHT
         assert create_kwargs["part_number"] == ""
-        assert "Altura (U) vacía para el modelo 'Dell / R750'" in caplog.text
+        assert "Empty height (U) for the model 'Dell / R750'" in caplog.text
 
     def test_dry_run_reports_without_writing(self) -> None:
         dt = _FakeDeviceType(2.0, "PN-MANUAL")
@@ -3209,7 +3219,7 @@ class TestEnsureDeviceTypeIdempotency:
 
 
 class TestPruneNetworkOrphans:
-    """Verifica la poda de interfaces, IPs y MACs huérfanas."""
+    """Verifies the pruning of orphan interfaces, IPs and MACs."""
 
     def test_pruning_removes_orphans(self) -> None:
         mock_iface1 = MagicMock(id=101)
@@ -3226,7 +3236,7 @@ class TestPruneNetworkOrphans:
         mock_ip_orphan = MagicMock(address="192.168.1.5/24", role=None)
         mock_ip_valid = MagicMock(address="10.0.0.1/24", role=None)
 
-        # Simula que eth0 tiene una IP válida y una IP huérfana
+        # Simulates that eth0 has a valid IP and an orphan IP
         def filter_ips(**kwargs):
             if kwargs.get("assigned_object_id") == 101:
                 return [mock_ip_valid, mock_ip_orphan]
@@ -3258,17 +3268,17 @@ class TestPruneNetworkOrphans:
         assert metrics.pruned_macs == 1
         assert metrics.errors == 0
 
-        # Interfaz 1 no se borra, la 2 sí
+        # Interface 1 is not deleted, interface 2 is
         mock_iface1.delete.assert_not_called()
         mock_iface2.delete.assert_called_once()
 
-        # IP huérfana se desvincula, válida no
+        # The orphan IP is unassigned, the valid one is not
         mock_ip_orphan.update.assert_called_once_with(
             {"assigned_object_type": None, "assigned_object_id": None}
         )
         mock_ip_valid.update.assert_not_called()
 
-        # MAC huérfana se borra
+        # The orphan MAC is deleted
         mock_mac_orphan.delete.assert_called_once()
 
     def test_pruning_dry_run_skips_actions(self) -> None:
@@ -3294,7 +3304,9 @@ class TestPruneNetworkOrphans:
         )
 
         assert metrics.pruned_interfaces == 1
-        assert metrics.pruned_ips == 0  # No se evalúan IPs/MACs si la interfaz se poda
+        assert (
+            metrics.pruned_ips == 0
+        )  # IPs/MACs are not evaluated if the interface is pruned
         assert metrics.pruned_macs == 0
         assert metrics.errors == 0
 
@@ -3317,8 +3329,8 @@ class TestSyncSkips:
             "machine_type": MagicMock(source="machine_type"),
         }
 
-        # Fallará porque falta manufacturer o model
-        with pytest.raises(RowSkipCondition, match="Falta 'manufacturer' o 'model'"):
+        # It will fail because manufacturer or model is missing
+        with pytest.raises(RowSkipCondition, match="Missing 'manufacturer' or 'model'"):
             sync_device(
                 endpoints=MagicMock(),
                 row=row,
@@ -3344,8 +3356,8 @@ class TestSyncSkips:
             "inventory_uuid": MagicMock(source="inventory_uuid"),
         }
 
-        # Fallará porque falta cluster_name
-        with pytest.raises(RowSkipCondition, match="Falta 'cluster_name'"):
+        # It will fail because cluster_name is missing
+        with pytest.raises(RowSkipCondition, match="Missing 'cluster_name'"):
             sync_vm(
                 endpoints=MagicMock(),
                 row=row,
@@ -3360,7 +3372,7 @@ class TestSyncSkips:
 
 
 def _keep_payload(*args: Any) -> tuple[Any, Any]:
-    """Doble de `_resolve_common_dependencies`: devuelve el payload y la caché sin tocar."""
+    """Double of `_resolve_common_dependencies`: returns the payload and the cache untouched."""
     return args[2], args[3]
 
 
@@ -3410,7 +3422,9 @@ class TestSyncDevice:
             "machine_name": "srv1",
             "inventory_uuid": "1234",
             "machine_type": "server",
-            "payload": {"position": 10},  # NetBox API exige face si hay position
+            "payload": {
+                "position": 10
+            },  # NetBox API requires face if there is a position
         }
         mock_device_type.return_value = (1, mock_caches)
         mock_execute_sync.return_value = SyncResult(SyncStatus.CREATED, 1, MagicMock())
@@ -3428,7 +3442,7 @@ class TestSyncDevice:
             dry_run=False,
         )
 
-        # Validar que payload haya sido inyectado con 'face' = 'front'
+        # Validate that the payload was injected with 'face' = 'front'
         payload_passed = mock_execute_sync.call_args[0][1]
         assert payload_passed["face"] == "front"
         assert payload_passed["position"] == 10
@@ -3436,7 +3450,7 @@ class TestSyncDevice:
 
 
 class TestNodeLogFormat:
-    """Los logs no deben repetir el nivel (el formateador del logger ya lo imprime)."""
+    """Logs must not repeat the level (the logger formatter already prints it)."""
 
     def test_hypervisor_without_cluster_message(
         self, config: NetBoxMappingConfig, caplog: pytest.LogCaptureFixture
@@ -3491,7 +3505,7 @@ class TestNodeLogFormat:
             )
 
         assert (
-            "Hipervisor 'hv-01' sin cluster asignado: la columna 'Cluster' está vacía."
+            "Hypervisor 'hv-01' without an assigned cluster: the column 'Cluster' is empty."
             in caplog.text
         )
         assert "INFO (" not in caplog.text
@@ -3517,10 +3531,10 @@ class TestNodeLogFormat:
 
         assert dev_id is None
         assert (
-            "El dispositivo host 'hv-02' de la VM 'vm-01' no se encontró en el site"
+            "The host device 'hv-02' of the VM 'vm-01' was not found in the site"
             in caplog.text
         )
-        assert "ADVERTENCIA" not in caplog.text
+        assert "WARNING (" not in caplog.text
 
 
 class TestGetOrCreateCached:
@@ -3580,7 +3594,7 @@ class TestGetOrCreateCached:
         endpoint.name = "test_endpoints"
         with pytest.raises(
             NetBoxApiError,
-            match="No se pudo crear el objeto en 'test_endpoints' con nombre 'Test'",
+            match="Could not create the object in 'test_endpoints' with name 'Test'",
         ):
             get_or_create_cached(
                 endpoint, cache, "key1", {}, {"name": "Test"}, "Test", False
@@ -3591,17 +3605,17 @@ class TestGetOrCreateCached:
         self, mock_sleep: MagicMock
     ) -> None:
         """
-        Simula una colisión de unicidad donde otro hilo crea el objeto entre
-        nuestro primer filter y el create.
+        Simulates a uniqueness collision where another thread creates the object between
+        our first filter and the create.
         """
         endpoint = MagicMock()
         endpoint.name = "test_endpoints"
 
-        # El primer filter no encuentra nada. El segundo filter lo encuentra.
+        # The first filter finds nothing. The second filter finds it.
         mock_obj = MockNetBoxRecord(id=99, name="Test")
         endpoint.filter.side_effect = [[], [mock_obj]]
 
-        # Simular que el endpoint.create levanta un RequestError 400 por nombre duplicado.
+        # Simulate that endpoint.create raises a 400 RequestError due to a duplicate name.
         mock_req = MagicMock(status_code=400)
         mock_req.json.return_value = {
             "name": ["Manufacturer with this name already exists."]
@@ -3614,7 +3628,7 @@ class TestGetOrCreateCached:
             endpoint, cache, "key1", {"name": "Test"}, {"name": "Test"}, "Test", False
         )
 
-        # Verificamos que se manejó la carrera
+        # We verify that the race was handled
         assert result == mock_obj
         assert returned_cache["key1"] == mock_obj
         assert endpoint.filter.call_count == 2
@@ -3623,12 +3637,12 @@ class TestGetOrCreateCached:
 
     def test_collision_error_malformed_json_fallback(self) -> None:
         """
-        Escenario destructivo: La API devuelve un error 400 pero el body no es un JSON válido.
-        Se debe verificar que _is_collision_error captura el ValueError de json() y usa el fallback de texto.
+        Destructive scenario: The API returns a 400 error but the body is not valid JSON.
+        It must be verified that _is_collision_error catches the ValueError of json() and uses the text fallback.
         """
         mock_req = MagicMock(status_code=400)
         mock_req.json.side_effect = ValueError("Invalid JSON")
-        # Simula el atributo error que usa pynetbox como fallback
+        # Simulates the error attribute that pynetbox uses as a fallback
         mock_error = RequestError(mock_req)
         mock_error.error = "The slug already exists."
 
@@ -3636,8 +3650,8 @@ class TestGetOrCreateCached:
 
     def test_collision_error_non_dict_json(self) -> None:
         """
-        Escenario destructivo: La API devuelve un JSON que no es un diccionario (e.g. una lista).
-        _is_collision_error debería manejarlo sin crashear y hacer fallback al texto de error.
+        Destructive scenario: The API returns a JSON that is not a dictionary (e.g. a list).
+        _is_collision_error should handle it without crashing and fall back to the error text.
         """
         mock_req = MagicMock(status_code=400)
         mock_req.json.return_value = ["An unexpected error array"]
@@ -3648,25 +3662,25 @@ class TestGetOrCreateCached:
 
     def test_create_with_fallback_slug_double_collision(self) -> None:
         """
-        Escenario destructivo: Ocurre una colisión de slug, se genera un fallback slug,
-        pero el fallback slug TAMBIÉN colisiona. Debe levantar RequestError.
+        Destructive scenario: A slug collision occurs, a fallback slug is generated,
+        but the fallback slug ALSO collides. It must raise RequestError.
         """
         endpoint = MagicMock()
         endpoint.name = "test_endpoint"
 
-        # Simula RequestError 400 por slug colisionando SIEMPRE
+        # Simulates a 400 RequestError due to the slug ALWAYS colliding
         mock_req = MagicMock(status_code=400)
         mock_req.json.return_value = {"slug": ["Slug already exists."]}
         endpoint.create.side_effect = RequestError(mock_req)
 
         with pytest.raises(
-            NetBoxApiError, match="colisión persistente de slug o rechazo"
+            NetBoxApiError, match="persistent slug collision or a NetBox rejection"
         ):
             _create_with_fallback_slug(
                 endpoint, "Test Node", name="Test Node", slug="test-node"
             )
 
-        # Debería haber intentado crear 2 veces (original y fallback)
+        # It should have tried to create 2 times (original and fallback)
         assert endpoint.create.call_count == 2
 
     @patch("time.sleep", return_value=None)
@@ -3674,8 +3688,8 @@ class TestGetOrCreateCached:
         self, mock_sleep: MagicMock
     ) -> None:
         """
-        Escenario destructivo: La creación colisiona por concurrencia y los retries fallan
-        continuamente hasta exceder MAX_RETRIES. Debe lanzar NetBoxApiError.
+        Destructive scenario: The creation collides due to concurrency and the retries fail
+        continuously until MAX_RETRIES is exceeded. It must raise NetBoxApiError.
         """
         endpoint = MagicMock()
         endpoint.name = "test_endpoint"
@@ -3689,7 +3703,7 @@ class TestGetOrCreateCached:
 
         with pytest.raises(
             NetBoxApiError,
-            match="No se pudo crear el objeto en 'test_endpoint' con nombre 'Test Node'",
+            match="Could not create the object in 'test_endpoint' with name 'Test Node'",
         ):
             get_or_create_cached(
                 endpoint,
@@ -3701,23 +3715,23 @@ class TestGetOrCreateCached:
                 False,
             )
 
-        # El filter se llama 3 veces (1 por cada intento de retry)
+        # The filter is called 3 times (1 per retry attempt)
         assert endpoint.filter.call_count == 3
-        # El create se intenta 3 veces
+        # The create is attempted 3 times
         assert endpoint.create.call_count == 3
-        # Hace sleep 2 veces (antes del intento 2 y 3)
+        # It sleeps 2 times (before attempts 2 and 3)
         assert mock_sleep.call_count == 2
 
     def test_preventive_slug_search_hit(self) -> None:
         """
-        Escenario destructivo/Edge case: El objeto no se encuentra por su filtro primario (ej. nombre),
-        pero preventive_slug_search encuentra una colisión inminente de slug y reutiliza el objeto.
+        Destructive scenario/Edge case: The object is not found by its primary filter (e.g. name),
+        but preventive_slug_search finds an imminent slug collision and reuses the object.
         """
         endpoint = MagicMock()
         mock_obj = MockNetBoxRecord(id=5, name="Mock Name", slug="mock-slug")
 
-        # side_effect: Primera llamada (filter por name) -> vacío.
-        # Segunda llamada (filter por slug) -> devuelve el mock_obj.
+        # side_effect: First call (filter by name) -> empty.
+        # Second call (filter by slug) -> returns the mock_obj.
         def mock_filter(**kwargs: Any) -> list[MockNetBoxRecord]:
             if "slug" in kwargs:
                 return [mock_obj]
@@ -3739,8 +3753,8 @@ class TestGetOrCreateCached:
 
 class TestInvalidMachineTypeDoesNotAbortPipeline:
     """
-    Un 'machine_type' fuera del mapa debe contarse como ERROR de su fila
-    (vía _classify_rows) y no abortar el pipeline desde el pre-escaneo global.
+    A 'machine_type' outside the map must be counted as an ERROR of its row
+    (via _classify_rows) and not abort the pipeline from the global pre-scan.
     """
 
     @staticmethod
@@ -3758,8 +3772,8 @@ class TestInvalidMachineTypeDoesNotAbortPipeline:
         self, config: NetBoxMappingConfig
     ) -> None:
         rows = [
-            self._row(config, "Contenedor", name="srv-x", hypervisor_os="ESXi"),
-            self._row(config, "Hipervisor", name="hv-1", hypervisor_os="Proxmox VE"),
+            self._row(config, "Container", name="srv-x", hypervisor_os="ESXi"),
+            self._row(config, "Hypervisor", name="hv-1", hypervisor_os="Proxmox VE"),
         ]
         assert precompute_cluster_type_map(rows, config) == {"Cluster-A": "Proxmox VE"}
 
@@ -3770,8 +3784,8 @@ class TestInvalidMachineTypeDoesNotAbortPipeline:
         tmp_path: Path,
     ) -> None:
         rows = [
-            self._row(config, "Contenedor", name="srv-x"),
-            self._row(config, "Dedicada", name="srv-ok"),
+            self._row(config, "Container", name="srv-x"),
+            self._row(config, "Dedicated", name="srv-ok"),
         ]
         synced: list[str] = []
         name_col = config.csv_columns["machine_name"].source
@@ -3820,7 +3834,7 @@ class TestInvalidMachineTypeDoesNotAbortPipeline:
             main()
 
         assert synced == ["srv-ok"]
-        assert exit_info.value.code == 1  # la fila inválida cuenta como ERROR
+        assert exit_info.value.code == 1  # the invalid row counts as an ERROR
 
     def test_main_excludes_discarded_rows_from_identity_counts(
         self,
@@ -3828,11 +3842,11 @@ class TestInvalidMachineTypeDoesNotAbortPipeline:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        """Una fila descartada con el mismo nombre/UUID no debe volver ambigua a la válida."""
+        """A discarded row with the same name/UUID must not make the valid one ambiguous."""
         uuid_col = config.csv_columns["inventory_uuid"].source
         rows = [
-            self._row(config, "Contenedor", name="srv-a") | {uuid_col: "U-1"},
-            self._row(config, "Dedicada", name="srv-a") | {uuid_col: "U-1"},
+            self._row(config, "Container", name="srv-a") | {uuid_col: "U-1"},
+            self._row(config, "Dedicated", name="srv-a") | {uuid_col: "U-1"},
         ]
         seen: list[CsvIdentityCounts] = []
 
@@ -3887,7 +3901,7 @@ class TestInvalidMachineTypeDoesNotAbortPipeline:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        rows = [self._row(config, "Dedicada", name="srv-ok")]
+        rows = [self._row(config, "Dedicated", name="srv-ok")]
         monkeypatch.setattr(
             sys, "argv", ["export_to_netbox.py", str(tmp_path / "in.csv")]
         )
@@ -3935,7 +3949,7 @@ class TestInvalidMachineTypeDoesNotAbortPipeline:
 
 
 class TestReadCsvLineNumbers:
-    """Las líneas reportadas deben ser las del archivo, aun con celdas multilínea."""
+    """The reported lines must be those of the file, even with multiline cells."""
 
     @staticmethod
     def _write(path: Path, content: str, encoding: str = "utf-8") -> Path:
@@ -3951,7 +3965,7 @@ class TestReadCsvLineNumbers:
     def test_multiline_cell_and_blank_line(self, tmp_path: Path) -> None:
         content = 'A,B\n"x\ny\nz",1\n\nq,2\nr,3\n'
         _, data = _read_csv(self._write(tmp_path / "b.csv", content))
-        # El 1.er registro ocupa las líneas 2-4; la línea 5 está en blanco.
+        # The 1st record spans lines 2-4; line 5 is blank.
         assert data.line_numbers == [2, 6, 7]
 
     def test_utf8_bom_does_not_shift_lines(self, tmp_path: Path) -> None:
@@ -3963,33 +3977,33 @@ class TestReadCsvLineNumbers:
     def test_short_record_is_padded_with_empty_strings(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Una fila corta no debe dejar celdas None (rompían .strip() aguas abajo)."""
-        content = "A,B,C\n1,2,3\nsolo-a\n"
+        """A short row must not leave None cells (they broke .strip() downstream)."""
+        content = "A,B,C\n1,2,3\nonly-a\n"
         with caplog.at_level(logging.WARNING):
             _, data = _read_csv(self._write(tmp_path / "e.csv", content))
 
-        assert data.rows[1] == {"A": "solo-a", "B": "", "C": ""}
+        assert data.rows[1] == {"A": "only-a", "B": "", "C": ""}
         assert all(isinstance(v, str) for r in data.rows for v in r.values())
         assert data.rejected_rows == 0
-        assert "Línea 3: faltan 2 campo(s)" in caplog.text
+        assert "Line 3: 2 trailing field(s) are missing" in caplog.text
 
     def test_long_record_is_rejected_and_counted(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Campos sobrantes (coma sin comillas) desplazan columnas: se descarta la fila."""
+        """Extra fields (unquoted comma) shift columns: the row is discarded."""
         content = "A,B\n1,2\n3,4,5\n6,7\n"
         with caplog.at_level(logging.ERROR):
             _, data = _read_csv(self._write(tmp_path / "f.csv", content))
 
         assert data.rows == [{"A": "1", "B": "2"}, {"A": "6", "B": "7"}]
-        assert data.line_numbers == [2, 4]  # paralelas a las filas conservadas
+        assert data.line_numbers == [2, 4]  # parallel to the kept rows
         assert data.rejected_rows == 1
-        assert "línea 3" in caplog.text
+        assert "line 3" in caplog.text
 
     def test_short_record_after_multiline_cell_keeps_line_numbers(
         self, tmp_path: Path
     ) -> None:
-        content = 'A,B\n"x\ny",1\nsolo\n'
+        content = 'A,B\n"x\ny",1\nonly\n'
         _, data = _read_csv(self._write(tmp_path / "g.csv", content))
         assert data.line_numbers == [2, 4]
 
@@ -4000,13 +4014,13 @@ class TestReadCsvLineNumbers:
 
 class TestEnsureTaxonomyQACases:
     """
-    Pruebas QA destructivas y de edge cases para el código de taxonomía (ensure_*).
+    Destructive QA and edge case tests for the taxonomy code (ensure_*).
     """
 
     def test_precompute_cluster_type_map_conflict(self) -> None:
         """
-        Escenario: Inconsistencia en el inventario maestro para SO de hipervisores.
-        Dos nodos del mismo cluster reportan SO distintos. Debe explotar ruidosamente.
+        Scenario: Inconsistency in the master inventory for the hypervisor OS.
+        Two nodes of the same cluster report different OSes. It must blow up loudly.
         """
         config = MagicMock()
 
@@ -4036,15 +4050,15 @@ class TestEnsureTaxonomyQACases:
                 side_effect=mock_extract,
             ),
             pytest.raises(
-                ConfigValidationError, match="Conflicto de SO en el clúster 'Cluster-X'"
+                ConfigValidationError, match="OS conflict in the cluster 'Cluster-X'"
             ),
         ):
             precompute_cluster_type_map(cast(Any, rows), config)
 
     def test_sync_single_device_role_api_error_wrap(self) -> None:
         """
-        Escenario: La creación de un DeviceRole falla a nivel API.
-        _sync_single_device_role debe atrapar NetBoxApiError y envolverlo en ConfigValidationError.
+        Scenario: The creation of a DeviceRole fails at the API level.
+        _sync_single_device_role must catch NetBoxApiError and wrap it in ConfigValidationError.
         """
         endpoints = MagicMock()
         endpoints.device_roles.name = "device_roles"
@@ -4058,7 +4072,7 @@ class TestEnsureTaxonomyQACases:
         )
 
         with pytest.raises(
-            ConfigValidationError, match="Error procesando DeviceRole 'CoreRouter'"
+            ConfigValidationError, match="Error processing DeviceRole 'CoreRouter'"
         ):
             _sync_single_device_role(endpoints, role_def, {}, dry_run=False)
 
@@ -4067,12 +4081,12 @@ class TestEnsureTaxonomyQACases:
         self, mock_get_or_create: MagicMock
     ) -> None:
         """
-        Escenario: Un DeviceRole ya existe en caché, pero tiene vm_role distinto al YAML.
-        _sync_single_device_role debe mutarlo in-place invocando .update(),
-        y la caché debe retornar con el objeto correcto sin reasignaciones redundantes.
+        Scenario: A DeviceRole already exists in the cache, but has a vm_role different from the YAML.
+        _sync_single_device_role must mutate it in-place by invoking .update(),
+        and the cache must return with the right object without redundant reassignments.
         """
         endpoints = MagicMock()
-        # En el yaml, este rol dice vm_role=True
+        # In the yaml, this role says vm_role=True
         role_def = DeviceRoleConfig(
             name="AccessSwitch", slug="access", color="000000", vm_role=True
         )
@@ -4094,8 +4108,8 @@ class TestEnsureTaxonomyQACases:
         self, mock_get_or_create: MagicMock
     ) -> None:
         """
-        Escenario: Un DeviceRole tiene vm_role=False en el YAML, pero True en NetBox.
-        Debe actualizarse hacia False.
+        Scenario: A DeviceRole has vm_role=False in the YAML, but True in NetBox.
+        It must be updated to False.
         """
         endpoints = MagicMock()
         role_def = DeviceRoleConfig(
@@ -4115,8 +4129,8 @@ class TestEnsureTaxonomyQACases:
 
     def test_get_or_create_preventive_slug_without_slug_kwarg(self) -> None:
         """
-        Escenario: Búsqueda preventiva por slug activa, pero omitiendo 'slug' en create_kwargs.
-        Debe omitir la búsqueda por slug (sin KeyError) y crear el objeto de todos modos.
+        Scenario: Preventive search by slug enabled, but omitting 'slug' in create_kwargs.
+        It must skip the search by slug (without KeyError) and create the object anyway.
         """
         endpoint = MagicMock()
         endpoint.name = "generic"
@@ -4130,7 +4144,7 @@ class TestEnsureTaxonomyQACases:
             cache=cache,
             cache_key="key",
             filter_kwargs={"name": "NoSlug"},
-            create_kwargs={"name": "NoSlug"},  # Falta 'slug' intencionalmente
+            create_kwargs={"name": "NoSlug"},  # 'slug' is missing intentionally
             name="NoSlug",
             dry_run=False,
             preventive_slug_search=True,
@@ -4142,9 +4156,9 @@ class TestEnsureTaxonomyQACases:
 
     def test_ensure_device_type_blade_0u_overwrite_bug(self) -> None:
         """
-        Escenario Edge Case Lógico: NetBox permite U-Height de 0.0 para blades lógicos.
-        Validamos que `ensure_device_type` pase correctamente `0.0` en la creación sin
-        sobrescribirlo erróneamente por un `or 1.0`.
+        Logical Edge Case scenario: NetBox allows a U-Height of 0.0 for logical blades.
+        We validate that `ensure_device_type` correctly passes `0.0` on creation without
+        wrongly overwriting it with an `or 1.0`.
         """
         endpoint = MagicMock()
         endpoint.name = "device_types"
@@ -4173,16 +4187,14 @@ class TestEnsureTaxonomyQACases:
 
     def test_sync_device_type_attributes_update_failure(self) -> None:
         """
-        Escenario: Actualización de u_height/part_number falla debido a un problema con NetBox.
+        Scenario: The update of u_height/part_number fails due to a problem with NetBox.
         """
         mock_record = MagicMock()
         mock_record.u_height = 1.0
         mock_record.part_number = ""
         mock_record.update.side_effect = RequestError(MagicMock(status_code=500))
 
-        with pytest.raises(
-            NetBoxApiError, match="Error actualizando DeviceType 'R640'"
-        ):
+        with pytest.raises(NetBoxApiError, match="Error updating DeviceType 'R640'"):
             _sync_device_type_attributes(
                 existing_dt=mock_record,
                 model="R640",
@@ -4256,12 +4268,12 @@ class TestProcessInterfacesAndIps:
         mock_assign_ipv4: MagicMock,
         mock_sync_ifaces: MagicMock,
     ) -> None:
-        # Configurar mock_sync_ifaces para retornar (errores=2, ipv4_candidates=[...], ifaces_changed=False)
+        # Configure mock_sync_ifaces to return (errors=2, ipv4_candidates=[...], ifaces_changed=False)
         mock_iface = MagicMock()
         mock_mac = MagicMock()
         mock_sync_ifaces.return_value = (2, [(10, mock_iface, mock_mac)], False)
 
-        # Simular que se cambió la IP pero no la MAC
+        # Simulate that the IP was changed but not the MAC
         mock_assign_ipv4.return_value = True
         mock_assign_mac.return_value = False
 
@@ -4286,7 +4298,7 @@ def _ip_record(
     iface_name: str = "eth0",
     parent_name: str = "SRV-A",
 ) -> MockNetBoxRecord:
-    """Construye un registro IP simulado de NetBox, asignado o libre."""
+    """Builds a simulated NetBox IP record, assigned or free."""
     data: dict[str, Any] = {
         "id": 1,
         "address": "10.0.0.5/26",
@@ -4303,11 +4315,11 @@ def _ip_record(
 
 
 class TestDescribeAssignment:
-    """Verifica la descripción (para logs) del dueño de un recurso asignado."""
+    """Verifies the description (for logs) of the owner of an assigned resource."""
 
     def test_full_description(self) -> None:
         assert (
-            _describe_assignment(_ip_record(99)) == "interfaz 'eth0' del nodo 'SRV-A'"
+            _describe_assignment(_ip_record(99)) == "interface 'eth0' of node 'SRV-A'"
         )
 
     def test_without_parent(self) -> None:
@@ -4318,15 +4330,15 @@ class TestDescribeAssignment:
                 "assigned_object": SimpleNamespace(name="eth0"),
             }
         )
-        assert _describe_assignment(record) == "interfaz 'eth0'"
+        assert _describe_assignment(record) == "interface 'eth0'"
 
     def test_without_nested_object_falls_back_to_id(self) -> None:
         record = MockNetBoxRecord(id=1, assigned_object_id=5)
-        assert _describe_assignment(record) == "objeto ID=5"
+        assert _describe_assignment(record) == "object ID=5"
 
 
 class TestAssignIpAssignedElsewhere:
-    """Una IP ya asignada a otra interfaz se omite con WARNING en lugar de fallar con HTTP 400."""
+    """An IP already assigned to another interface is skipped with a WARNING instead of failing with HTTP 400."""
 
     IFACE = MockNetBoxRecord(id=10, name="eth0")
 
@@ -4341,8 +4353,8 @@ class TestAssignIpAssignedElsewhere:
 
         assert result == (None, False)
         endpoint.create.assert_not_called()
-        assert "interfaz 'eth0' del nodo 'SRV-A'" in caplog.text
-        assert "se omite" in caplog.text
+        assert "interface 'eth0' of node 'SRV-A'" in caplog.text
+        assert "it is skipped" in caplog.text
 
     def test_dry_run_also_skips_without_writing(self) -> None:
         endpoint = MagicMock()
@@ -4389,7 +4401,7 @@ class TestAssignIpAssignedElsewhere:
         assert changed is True
 
     def test_mac_shared_between_interfaces_is_still_created(self) -> None:
-        """Las MAC no son únicas en NetBox: no se aplica la regla de IPs."""
+        """MACs are not unique in NetBox: the IP rule does not apply."""
         endpoint = MagicMock()
         endpoint.filter.return_value = [_ip_record(99)]
 
@@ -4409,7 +4421,7 @@ class TestSyncSingleInterface:
         mock_assign_ip: MagicMock,
         mock_upsert: MagicMock,
     ) -> None:
-        # Configurar mocks
+        # Configure mocks
         mock_iface = MagicMock()
         mock_upsert.return_value = (mock_iface, True)
         mock_assign_ip.return_value = (MagicMock(), False)
@@ -4495,7 +4507,7 @@ class TestSyncSingleInterfaceSkippedIp:
 
 
 class TestSyncSingleInterfacePrefix:
-    """Verifica que el Prefix se asegure antes de asignar la IP."""
+    """Verifies that the Prefix is ensured before assigning the IP."""
 
     @staticmethod
     def _run(iface_data: dict[str, Any]) -> tuple[MagicMock, MagicMock, MagicMock]:
@@ -4566,10 +4578,10 @@ class TestSyncSingleInterfacePrefix:
 
 
 class TestClassifyRows:
-    """QA Tester verification para _classify_rows."""
+    """QA Tester verification for _classify_rows."""
 
     def test_classify_rows_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Verifica que las filas se dividan correctamente según su NodeType."""
+        """Verifies that the rows are split correctly according to their NodeType."""
 
         def mock_get_node_type(row: dict[str, str], config: Any) -> NodeType:
             if row.get("type") == "vm":
@@ -4593,7 +4605,7 @@ class TestClassifyRows:
         assert len(result.device_rows) == 2
         assert len(result.vm_rows) == 1
         assert new_counts[SyncStatus.ERROR] == 0
-        # Se propagan las líneas reales recibidas, no el índice de la lista
+        # The real lines received are propagated, not the index of the list
         assert result.device_rows[0][0] == 2
         assert result.vm_rows[0][0] == 3
         assert result.device_rows[1][0] == 4
@@ -4601,7 +4613,7 @@ class TestClassifyRows:
     def test_classify_rows_validation_error(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Verifica el caso de borde destructivo: Una fila corrompida lanza RowValidationError."""
+        """Verifies the destructive edge case: A corrupted row raises RowValidationError."""
 
         def mock_get_node_type(row: dict[str, str], config: Any) -> NodeType:
             if row.get("type") == "invalid":
@@ -4622,7 +4634,7 @@ class TestClassifyRows:
             {"type": "device", "machine_name": "host1"},
         ]
 
-        counts = {SyncStatus.ERROR: 5}  # Empezamos con un estado previo
+        counts = {SyncStatus.ERROR: 5}  # We start with a previous state
 
         result, new_counts = _classify_rows(
             rows,
@@ -4633,183 +4645,183 @@ class TestClassifyRows:
 
         assert len(result.device_rows) == 1
         assert len(result.vm_rows) == 0
-        assert new_counts[SyncStatus.ERROR] == 6  # Se sumó 1 error
-        # La fila válida conserva su línea real (7), no su índice en la lista
+        assert new_counts[SyncStatus.ERROR] == 6  # 1 error was added
+        # The valid row keeps its real line (7), not its index in the list
         assert result.device_rows[0][0] == 7
-        assert "línea 2 ('broken_host')" in caplog.text
+        assert "line 2 ('broken_host')" in caplog.text
 
 
 class TestFormatDiffKeys:
-    """Pruebas exhaustivas (qa-tester) para la utilidad format_diff_keys."""
+    """Exhaustive tests (qa-tester) for the format_diff_keys utility."""
 
     def test_format_diff_keys_simple(self) -> None:
-        """Caso 1: Llaves planas sin anidación."""
+        """Case 1: Flat keys without nesting."""
         obj = MagicMock(status="active", serial="123")
         diff = {"status": "planned", "serial": "456"}
         keys = format_diff_keys(obj, diff)
         assert keys == ["status", "serial"]
 
     def test_format_diff_keys_custom_fields_partial(self) -> None:
-        """Caso 2: Subdiccionario donde solo cambia una subllave específica."""
-        # El record actual tiene un custom_field "ambiente" y "prioridad"
+        """Case 2: Sub-dictionary where only one specific subkey changes."""
+        # The current record has a custom_field "environment" and "priority"
         obj = MagicMock()
-        obj.custom_fields = {"ambiente": "PROD", "prioridad": 1}
+        obj.custom_fields = {"environment": "PROD", "priority": 1}
 
-        # El payload actualiza "ambiente" a "DEV", y vuelve a enviar "prioridad" igual, y añade "nuevo"
-        diff = {"custom_fields": {"ambiente": "DEV", "prioridad": 1, "nuevo": "test"}}
+        # The payload updates "environment" to "DEV", sends "priority" again unchanged, and adds "new"
+        diff = {"custom_fields": {"environment": "DEV", "priority": 1, "new": "test"}}
 
         keys = format_diff_keys(obj, diff)
-        # Solo deben reportarse los que realmente cambiaron respecto al original
-        assert keys == ["custom_fields.ambiente", "custom_fields.nuevo"]
+        # Only those that actually changed with respect to the original must be reported
+        assert keys == ["custom_fields.environment", "custom_fields.new"]
 
     def test_format_diff_keys_dict_attribute_missing(self) -> None:
-        """Caso 3: El objeto no tiene el atributo anidado (fallback a key padre)."""
+        """Case 3: The object does not have the nested attribute (fallback to parent key)."""
         obj = MagicMock()
-        del obj.custom_fields  # Simulamos que no existe la propiedad
+        del obj.custom_fields  # We simulate that the property does not exist
 
-        diff = {"custom_fields": {"ambiente": "DEV"}}
+        diff = {"custom_fields": {"environment": "DEV"}}
         keys = format_diff_keys(obj, diff)
 
         assert keys == ["custom_fields"]
 
     def test_format_diff_keys_attribute_not_dict(self) -> None:
-        """Caso 4: El objeto tiene el atributo pero NO es un diccionario (fallback)."""
+        """Case 4: The object has the attribute but it is NOT a dictionary (fallback)."""
         obj = MagicMock()
-        obj.custom_fields = "esto es un string, no un dict"
+        obj.custom_fields = "this is a string, not a dict"
 
-        diff = {"custom_fields": {"ambiente": "DEV"}}
+        diff = {"custom_fields": {"environment": "DEV"}}
         keys = format_diff_keys(obj, diff)
 
         assert keys == ["custom_fields"]
 
     def test_format_diff_keys_empty_diff(self) -> None:
-        """Caso 5: Diff completamente vacío."""
+        """Case 5: Completely empty diff."""
         obj = MagicMock()
         keys = format_diff_keys(obj, {})
         assert keys == []
 
 
 class TestCheckRecordChanges:
-    """QA Tester verification para check_record_changes (Pure Attribute Comparison)."""
+    """QA Tester verification for check_record_changes (Pure Attribute Comparison)."""
 
     def test_primitive_changes(self) -> None:
-        """Verifica que detecte cambios o igualdades en strings y enteros."""
+        """Verifies that it detects changes or equalities in strings and integers."""
         record = MagicMock()
         record.name = "Host 1"
         record.u_height = 2
 
-        # Sin cambios
+        # Without changes
         diff1 = check_record_changes(record, {"name": "Host 1", "u_height": 2})
         assert diff1 == {}
 
-        # Con cambios
+        # With changes
         diff2 = check_record_changes(record, {"name": "Host 2", "u_height": 3})
         assert diff2 == {"name": "Host 2", "u_height": 3}
 
     def test_nested_object_changes(self) -> None:
-        """Verifica la lógica de FK anidadas (ej. record.cluster.id vs payload['cluster'])."""
+        """Verifies the nested FK logic (e.g. record.cluster.id vs payload['cluster'])."""
         record = MagicMock()
         record.cluster = MagicMock(id=5)
         record.status = MagicMock(value="active")
 
-        # 1. Payload pasa ID int
+        # 1. Payload passes an int ID
         diff = check_record_changes(record, {"cluster": 5})
         assert diff == {}
         diff = check_record_changes(record, {"cluster": 6})
         assert diff == {"cluster": 6}
 
-        # 2. Payload pasa dict {"id": X}
+        # 2. Payload passes a dict {"id": X}
         diff = check_record_changes(record, {"cluster": {"id": 5}})
         assert diff == {}
         diff = check_record_changes(record, {"cluster": {"id": 6}})
         assert diff == {"cluster": {"id": 6}}
 
-        # 3. Selectores por Value
+        # 3. Selectors by Value
         diff = check_record_changes(record, {"status": "active"})
         assert diff == {}
         diff = check_record_changes(record, {"status": "offline"})
         assert diff == {"status": "offline"}
 
     def test_custom_fields_changes(self) -> None:
-        """Verifica la lógica de merge e igualdades en custom_fields."""
+        """Verifies the merge and equality logic in custom_fields."""
         record = MagicMock()
         record.custom_fields = {"env": "prod", "owner": "IT"}
 
-        # Sin cambios (payload solo manda 1 campo, pero es igual)
+        # Without changes (the payload only sends 1 field, but it is equal)
         diff = check_record_changes(record, {"custom_fields": {"env": "prod"}})
         assert diff == {}
 
-        # Con cambios (payload cambia 1 campo)
+        # With changes (the payload changes 1 field)
         diff = check_record_changes(record, {"custom_fields": {"env": "dev"}})
         assert diff == {"custom_fields": {"env": "dev"}}
 
-        # Con cambios (añade 1 campo nuevo)
+        # With changes (adds 1 new field)
         diff = check_record_changes(record, {"custom_fields": {"new_tag": "test"}})
         assert diff == {"custom_fields": {"new_tag": "test"}}
 
 
 class TestIsCustomFieldChanged:
-    """QA Tester verification para _is_custom_field_changed."""
+    """QA Tester verification for _is_custom_field_changed."""
 
     def test_custom_field_changed(self) -> None:
-        """Verifica la lógica de detección de cambios en custom_fields."""
-        # 1. new_val no es dict
+        """Verifies the change detection logic in custom_fields."""
+        # 1. new_val is not a dict
         assert _is_custom_field_changed("prod", "dev") is True
         assert _is_custom_field_changed("prod", "prod") is False
 
-        # 2. curr_val no es dict
+        # 2. curr_val is not a dict
         assert _is_custom_field_changed(None, {"env": "prod"}) is True
 
-        # 3. Ambos dicts, sin cambios en las llaves especificadas
+        # 3. Both dicts, without changes in the specified keys
         assert (
             _is_custom_field_changed({"env": "prod", "owner": "IT"}, {"env": "prod"})
             is False
         )
 
-        # 4. Ambos dicts, con cambios en valor
+        # 4. Both dicts, with changes in value
         assert _is_custom_field_changed({"env": "prod"}, {"env": "dev"}) is True
 
-        # 5. Ambos dicts, llave nueva en new_val
+        # 5. Both dicts, new key in new_val
         assert _is_custom_field_changed({"env": "prod"}, {"new_tag": "test"}) is True
 
 
 class TestIsRelationChanged:
-    """QA Tester verification para _is_relation_changed."""
+    """QA Tester verification for _is_relation_changed."""
 
     def test_relation_changed(self) -> None:
-        """Verifica la lógica de detección de cambios en FKs y Choices."""
-        # 1. curr_val es None
+        """Verifies the change detection logic in FKs and Choices."""
+        # 1. curr_val is None
         assert _is_relation_changed(None, 5) is True
         assert _is_relation_changed(None, None) is False
 
-        # 2. Atributos primitivos (sin id ni value)
+        # 2. Primitive attributes (without id or value)
         curr_val_str = "simple_string"
         assert _is_relation_changed(curr_val_str, 5) is None
 
-        # 3. ID de FK
+        # 3. FK ID
         curr_val_fk = MagicMock(id=5)
         assert _is_relation_changed(curr_val_fk, 5) is False
         assert _is_relation_changed(curr_val_fk, 6) is True
         assert _is_relation_changed(curr_val_fk, None) is True
 
-        # 4. ID dentro de un dict
+        # 4. ID inside a dict
         assert _is_relation_changed(curr_val_fk, {"id": 5}) is False
         assert _is_relation_changed(curr_val_fk, {"id": 6}) is True
 
-        # 5. Selector por value
+        # 5. Selector by value
         curr_val_choice = MagicMock(value="active")
         assert _is_relation_changed(curr_val_choice, "active") is False
         assert _is_relation_changed(curr_val_choice, "offline") is True
         assert _is_relation_changed(curr_val_choice, None) is True
 
-        # 6. Tipo no manejable (ej. new_val es lista, falla el isinstance)
+        # 6. Unmanageable type (e.g. new_val is a list, the isinstance fails)
         assert _is_relation_changed(curr_val_fk, [5]) is None
 
 
 class TestSyncRowEdgeCases:
     """
-    Casos destructivos para _sync_row, validando especialmente la lógica
-    de escalación de contadores y el manejo de excepciones.
+    Destructive cases for _sync_row, validating especially the counter
+    escalation logic and the exception handling.
     """
 
     @patch("inventory_pipeline.export_to_netbox.extract_csv_value")
@@ -4824,16 +4836,16 @@ class TestSyncRowEdgeCases:
         mock_extract_csv_value: MagicMock,
     ) -> None:
         """
-        Escenario destructivo: El nodo base no tuvo cambios (UNCHANGED).
-        Las interfaces sí tuvieron cambios (any_changes=True), PERO hubieron errores (iface_errors=2).
-        Verifica que el error prevenga que el nodo se escale engañosamente a UPDATED.
+        Destructive scenario: The base node had no changes (UNCHANGED).
+        The interfaces did have changes (any_changes=True), BUT there were errors (iface_errors=2).
+        Verifies that the error prevents the node from being misleadingly escalated to UPDATED.
         """
         mock_process_node.return_value = (
             (SyncStatus.UNCHANGED, 123, MagicMock()),
             MagicMock(),
         )
         mock_parse_interfaces.return_value = [{"name": "eth0"}]
-        # Devuelve iface_errors=2, any_changes=True
+        # Returns iface_errors=2, any_changes=True
         mock_process_interfaces.return_value = (2, True)
 
         counts = {
@@ -4860,10 +4872,10 @@ class TestSyncRowEdgeCases:
             args=MagicMock(dry_run=False, prune_network_orphans=False),
         )
 
-        # El status UNCHANGED debe incrementar (porque no se escaló a UPDATED)
+        # The UNCHANGED status must increase (because it was not escalated to UPDATED)
         assert counts[SyncStatus.UNCHANGED] == 1
         assert counts[SyncStatus.UPDATED] == 0
-        # Los errores de interfaz deben sumarse
+        # The interface errors must be added
         assert counts[SyncStatus.ERROR] == 2
 
     @patch("inventory_pipeline.export_to_netbox.extract_csv_value")
@@ -4878,15 +4890,15 @@ class TestSyncRowEdgeCases:
         mock_extract_csv_value: MagicMock,
     ) -> None:
         """
-        Happy path de escalación: El nodo base es UNCHANGED, hay cambios en interfaces,
-        y NO hay errores (iface_errors=0). Se debe descontar UNCHANGED y sumar UPDATED.
+        Escalation happy path: The base node is UNCHANGED, there are changes in interfaces,
+        and there are NO errors (iface_errors=0). UNCHANGED must be decremented and UPDATED incremented.
         """
         mock_process_node.return_value = (
             (SyncStatus.UNCHANGED, 123, MagicMock()),
             MagicMock(),
         )
         mock_parse_interfaces.return_value = [{"name": "eth0"}]
-        # Devuelve iface_errors=0, any_changes=True
+        # Returns iface_errors=0, any_changes=True
         mock_process_interfaces.return_value = (0, True)
 
         counts = {
@@ -4919,21 +4931,21 @@ class TestSyncRowEdgeCases:
 
 
 class TestNetBoxMappingConfig:
-    """QA-Tester: Valida el comportamiento de mapeo normalizado y fall-through."""
+    """QA-Tester: Validates the normalized mapping and fall-through behavior."""
 
     @pytest.fixture
     def config(self) -> NetBoxMappingConfig:
         return NetBoxMappingConfig(
             csv_columns={
                 "status": CsvColumnDef(
-                    source="Estado",
+                    source="Status",
                     map={
-                        "activo": "active",
-                        "en baja": "decommissioning",
+                        "in service": "active",
+                        "being retired": "decommissioning",
                     },
                 ),
-                "desc": CsvColumnDef(source="Descripcion"),
-                "machine_type": CsvColumnDef(source="Tipo", map={"vm": "vm"}),
+                "desc": CsvColumnDef(source="Description"),
+                "machine_type": CsvColumnDef(source="Type", map={"vm": "vm"}),
             },
             node_types=NodeTypesConfig(
                 device=NodeMappingConfig(
@@ -4956,46 +4968,48 @@ class TestNetBoxMappingConfig:
         )
 
     def test_apply_map_exact_match(self, config: NetBoxMappingConfig) -> None:
-        assert config.map_value("status", "activo") == "active"
+        assert config.map_value("status", "in service") == "active"
 
     def test_apply_map_case_insensitive_and_spaces(
         self, config: NetBoxMappingConfig
     ) -> None:
-        """Simula un edge case común en CSV: mayúsculas y espacios basura."""
-        assert config.map_value("status", "  ACTIVO  ") == "active"
-        assert config.map_value("status", "En Baja") == "decommissioning"
+        """Simulates a common CSV edge case: uppercase and garbage spaces."""
+        assert config.map_value("status", "  IN SERVICE  ") == "active"
+        assert config.map_value("status", "Being Retired") == "decommissioning"
 
     def test_apply_map_fall_through(self, config: NetBoxMappingConfig) -> None:
-        """Si el valor ingresado ya es un valor destino válido, debe pasar directo (fall-through)."""
+        """If the entered value is already a valid target value, it must pass straight through (fall-through)."""
         assert config.map_value("status", "active") == "active"
         assert config.map_value("status", "  DECOMMISSIONING  ") == "decommissioning"
 
     def test_apply_map_no_map_defined(self, config: NetBoxMappingConfig) -> None:
-        """Si la columna no tiene map configurado, retorna el valor crudo."""
-        assert config.map_value("desc", "Cualquier cosa") == "Cualquier cosa"
+        """If the column has no map configured, it returns the raw value."""
+        assert config.map_value("desc", "Anything") == "Anything"
 
     def test_apply_map_strict_violation(self, config: NetBoxMappingConfig) -> None:
-        """Si no coincide ni en llaves ni en valores destino, y strict=True, explota."""
-        with pytest.raises(RowValidationError, match="no está definido en el mapa"):
-            config.map_value("status", "desconocido")
+        """If it matches neither keys nor target values, and strict=True, it blows up."""
+        with pytest.raises(
+            RowValidationError, match="is not defined in the configured map"
+        ):
+            config.map_value("status", "unknown")
 
     def test_apply_map_non_strict(self, config: NetBoxMappingConfig) -> None:
-        """Si strict=False, valores desconocidos retornan None."""
-        assert config.map_value("status", "desconocido", strict=False) is None
+        """If strict=False, unknown values return None."""
+        assert config.map_value("status", "unknown", strict=False) is None
 
 
 # ============================================================
-# DETECCIÓN DE RENOMBRES DE INTERFACES
+# DETECTION OF INTERFACE RENAMES
 # ============================================================
 
 
 def _fp(ips: tuple[str, ...] = (), macs: tuple[str, ...] = ()) -> InterfaceFingerprint:
-    """Construye una huella de interfaz con IPs (host) y MACs."""
+    """Builds an interface fingerprint with (host) IPs and MACs."""
     return InterfaceFingerprint(frozenset(ips), frozenset(macs))
 
 
 class TestDetectInterfaceRenames:
-    """Núcleo puro: empareja interfaces huérfanas y nuevas por IP/MAC únicas y 1:1."""
+    """Pure core: pairs orphan and new interfaces by unique, 1:1 IP/MAC."""
 
     def test_rename_by_ip(self) -> None:
         renames = detect_interface_renames(
@@ -5020,7 +5034,7 @@ class TestDetectInterfaceRenames:
     def test_contradicting_signals_do_not_rename(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """La IP apunta a una interfaz nueva y la MAC a otra: no se adivina."""
+        """The IP points to one new interface and the MAC to another: no guessing."""
         with caplog.at_level(logging.WARNING):
             renames = detect_interface_renames(
                 {"ens18": _fp(ips=("10.0.0.5",), macs=("AA:AA:AA:AA:AA:AA",))},
@@ -5030,8 +5044,8 @@ class TestDetectInterfaceRenames:
                 },
             )
         assert renames == []
-        assert caplog.text.count("Renombre ambiguo") == 1  # una vez, no por pareja
-        assert "'ens18' coincide con ['eth0', 'eth1']" in caplog.text
+        assert caplog.text.count("Ambiguous rename") == 1  # once, not per pair
+        assert "'ens18' matches ['eth0', 'eth1']" in caplog.text
 
     def test_two_orphans_claiming_one_newcomer_do_not_rename(
         self, caplog: pytest.LogCaptureFixture
@@ -5045,10 +5059,10 @@ class TestDetectInterfaceRenames:
                 {"eth0": _fp(ips=("10.0.0.5",), macs=("AA:AA:AA:AA:AA:AA",))},
             )
         assert renames == []
-        assert "la interfaz nueva 'eth0' coincide con ['ens18', 'ens19']" in caplog.text
+        assert "the new interface 'eth0' matches ['ens18', 'ens19']" in caplog.text
 
     def test_mac_shared_by_bond_is_ignored_and_ip_decides(self) -> None:
-        """bond0 y su miembro comparten MAC: la MAC no identifica; decide la IP."""
+        """bond0 and its member share a MAC: the MAC does not identify; the IP decides."""
         shared_mac = "AA:BB:CC:DD:EE:FF"
         renames = detect_interface_renames(
             {"bond-old": _fp(ips=("10.0.0.5",), macs=(shared_mac,))},
@@ -5074,7 +5088,7 @@ class TestDetectInterfaceRenames:
 
 
 class TestCsvInterfaceFingerprint:
-    """Identidad de red de una interfaz del CSV (IP host y MAC normalizada)."""
+    """Network identity of a CSV interface (host IP and normalized MAC)."""
 
     @staticmethod
     def _iface(cidr: str | None, mac: str | None) -> NetworkInterfaceData:
@@ -5121,7 +5135,7 @@ class TestRekeyInterfacesCache:
 
 
 class TestResolveInterfaceRenamesQueries:
-    """Las huellas de NetBox solo se consultan cuando puede haber un renombre."""
+    """The NetBox fingerprints are only queried when there may be a rename."""
 
     @staticmethod
     def _iface(name: str, cidr: str | None = None) -> NetworkInterfaceData:
@@ -5142,10 +5156,10 @@ class TestResolveInterfaceRenamesQueries:
     @pytest.mark.parametrize(
         ("obj_id", "csv_names", "cache_names"),
         [
-            (0, ["eth0"], ["ens18"]),  # nodo nuevo: no hay interfaces en NetBox
-            (7, ["eth0"], ["eth0"]),  # sin huérfanas ni nuevas
-            (7, ["eth0", "eth1"], ["eth0"]),  # solo nuevas
-            (7, ["eth0"], ["eth0", "ens18"]),  # solo huérfanas
+            (0, ["eth0"], ["ens18"]),  # new node: there are no interfaces in NetBox
+            (7, ["eth0"], ["eth0"]),  # neither orphans nor new ones
+            (7, ["eth0", "eth1"], ["eth0"]),  # only new ones
+            (7, ["eth0"], ["eth0", "ens18"]),  # only orphans
         ],
     )
     def test_no_queries_without_orphans_and_newcomers(
@@ -5170,7 +5184,7 @@ class TestResolveInterfaceRenamesQueries:
 
 
 class _FakeRecord:
-    """Objeto NetBox en memoria: update()/delete() modifican el almacén compartido."""
+    """In-memory NetBox object: update()/delete() modify the shared store."""
 
     def __init__(self, store: "_FakeNetBox", kind: str, **attrs: Any) -> None:
         self._store = store
@@ -5179,7 +5193,7 @@ class _FakeRecord:
             setattr(self, key, value)
 
     def __getattr__(self, name: str) -> Any:
-        """Atributos dinámicos (como en pynetbox); los inexistentes siguen fallando."""
+        """Dynamic attributes (as in pynetbox); nonexistent ones still fail."""
         raise AttributeError(name)
 
     def update(self, data: dict[str, Any]) -> bool:
@@ -5195,7 +5209,7 @@ class _FakeRecord:
 
 
 class _FakeEndpoint:
-    """Endpoint en memoria con los filtros que usa la sincronización de interfaces."""
+    """In-memory endpoint with the filters used by the interface synchronization."""
 
     def __init__(self, store: "_FakeNetBox", kind: str, url: str) -> None:
         self._store = store
@@ -5206,7 +5220,7 @@ class _FakeEndpoint:
     def _matches(self, record: _FakeRecord, key: str, value: Any) -> bool:
         if key == "device_id" and self._kind == "interfaces":
             return record.device.id == value
-        if key == "device_id":  # IPs/MACs: asignadas a interfaces del Device
+        if key == "device_id":  # IPs/MACs: assigned to interfaces of the Device
             return self._store.interface_device_id(record) == value
         return getattr(record, key, None) == value
 
@@ -5229,7 +5243,7 @@ class _FakeEndpoint:
 
 
 class _FakeNetBox:
-    """NetBox mínimo en memoria: interfaces, IPs, MACs y prefixes de un Device."""
+    """Minimal in-memory NetBox: interfaces, IPs, MACs and prefixes of a Device."""
 
     def __init__(self) -> None:
         self.records: dict[str, list[_FakeRecord]] = {
@@ -5297,7 +5311,7 @@ class _FakeNetBox:
 
 
 class TestInterfaceRenameEndToEnd:
-    """Escenario completo: el maestro renombra ens18 → eth0 conservando IP y MAC."""
+    """Full scenario: the master renames ens18 → eth0 keeping IP and MAC."""
 
     DEVICE_ID = 7
     CIDR = "10.0.0.5/24"
@@ -5345,8 +5359,8 @@ class TestInterfaceRenameEndToEnd:
         result = self._sync(nb, csv)
 
         assert result.errors == 0 and result.any_changes is True
-        assert iface.name == "eth0"  # mismo objeto, renombrado
-        assert len(nb.records["interfaces"]) == 1  # no se creó ni se podó nada
+        assert iface.name == "eth0"  # same object, renamed
+        assert len(nb.records["interfaces"]) == 1  # nothing was created or pruned
         assert [w for w in nb.writes if w[0] != "update"] == []
         assert len(nb.records["ips"]) == 1 and len(nb.records["macs"]) == 1
         ip_record = nb.records["ips"][0]
@@ -5373,7 +5387,7 @@ class TestInterfaceRenameEndToEnd:
         assert iface.name == "ens18"
 
     def test_unrelated_new_interface_keeps_previous_behaviour(self) -> None:
-        """Sin señales compartidas no hay renombre: se crea la nueva y se poda la vieja."""
+        """Without shared signals there is no rename: the new one is created and the old one is pruned."""
         nb = _FakeNetBox()
         nb.add_interface(self.DEVICE_ID, "ens18", "10.0.9.9/24", "11:11:11:11:11:11")
 
@@ -5384,19 +5398,19 @@ class TestInterfaceRenameEndToEnd:
 
 
 # ============================================================
-# PODA: IPs CON ROL ASIGNADO (curadas a mano en NetBox)
+# PRUNING: IPs WITH AN ASSIGNED ROLE (curated by hand in NetBox)
 # ============================================================
 
 
 class TestIpRoleProtection:
-    """Las IPs con rol nunca se desasignan; sin rol, la poda sigue igual."""
+    """IPs with a role are never unassigned; without a role, the pruning stays the same."""
 
     @pytest.mark.parametrize(
         ("role", "expected"),
         [
             (None, None),
             (SimpleNamespace(value="secondary", label="Secondary"), "secondary"),
-            ("vip", "vip"),  # string plano
+            ("vip", "vip"),  # plain string
             (SimpleNamespace(value=None), None),
         ],
     )
@@ -5421,7 +5435,7 @@ class TestIpRoleProtection:
         assert (pruned, errors) == (1, 0)
         secondary.update.assert_not_called()
         plain_orphan.update.assert_called_once()
-        assert "Se conserva la IP '10.0.0.6/24' (rol 'secondary')" in caplog.text
+        assert "The IP '10.0.0.6/24' (role 'secondary') is kept" in caplog.text
 
     def test_dry_run_also_respects_protection(self) -> None:
         vip = MagicMock(address="10.0.0.6/24", role=SimpleNamespace(value="vip"))
@@ -5433,7 +5447,7 @@ class TestIpRoleProtection:
 
 
 class TestIpRoleProtectionEndToEnd:
-    """Con --prune-network-orphans, sobre un NetBox en memoria."""
+    """With --prune-network-orphans, over an in-memory NetBox."""
 
     DEVICE_ID = 7
 
@@ -5484,8 +5498,8 @@ class TestIpRoleProtectionEndToEnd:
 
         assigned = {ip.address: ip.assigned_object_id for ip in nb.records["ips"]}
         assert result.errors == 0
-        assert assigned["10.0.0.6/24"] == eth0.id  # protegida
-        assert assigned["10.0.0.7/24"] is None  # huérfana sin rol: desasignada
+        assert assigned["10.0.0.6/24"] == eth0.id  # protected
+        assert assigned["10.0.0.7/24"] is None  # orphan without a role: unassigned
 
     def test_orphan_interface_hosting_a_protected_ip_is_not_deleted(
         self, caplog: pytest.LogCaptureFixture
@@ -5500,7 +5514,7 @@ class TestIpRoleProtectionEndToEnd:
 
         assert "eth9" in [iface.name for iface in nb.records["interfaces"]]
         assert ("delete", "interfaces") not in [(w[0], w[1]) for w in nb.writes]
-        assert "Se conserva la interfaz huérfana 'eth9'" in caplog.text
+        assert "The orphan interface 'eth9' is kept" in caplog.text
 
     def test_orphan_interface_without_protected_ips_is_still_deleted(self) -> None:
         nb = _FakeNetBox()
@@ -5516,7 +5530,7 @@ class TestKeepOrphanInterfaceFailSafe:
     def test_unverifiable_interface_is_kept(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Si NetBox falla al consultar sus IPs, no se borra (borrar es irreversible)."""
+        """If NetBox fails when querying its IPs, it is not deleted (deleting is irreversible)."""
         endpoints = MagicMock()
         endpoints.ip_addresses.filter.side_effect = RequestError(
             MagicMock(status_code=500)
@@ -5530,19 +5544,19 @@ class TestKeepOrphanInterfaceFailSafe:
 
         iface.delete.assert_not_called()
         assert metrics.pruned_interfaces == 0
-        assert "no se pudo verificar" in caplog.text
+        assert "could not be verified" in caplog.text
 
 
 # ============================================================
-# SINCRONIZACIÓN EN TRES FASES: validar → identidad → escribir
+# THREE-PHASE SYNCHRONIZATION: validate → identity → write
 # ============================================================
 
 
 class TestNoWritesBeforeRowIsAccepted:
     """
-    Una fila que termina en SKIP (identidad) o en ERROR (datos inválidos) no debe dejar
-    dependencias escritas en NetBox: Platform, Location, Rack, Cluster, Manufacturer
-    ni DeviceType.
+    A row that ends in SKIP (identity) or in ERROR (invalid data) must not leave
+    dependencies written in NetBox: Platform, Location, Rack, Cluster, Manufacturer
+    or DeviceType.
     """
 
     DEPENDENCY_ENDPOINTS = (
@@ -5559,20 +5573,20 @@ class TestNoWritesBeforeRowIsAccepted:
         cols = {k: v.source for k, v in config.csv_columns.items()}
         values = {
             "machine_name": "srv-01",
-            "machine_type": "Dedicada",
+            "machine_type": "Dedicated",
             "inventory_uuid": "",
             "os": "Ubuntu",
             "manufacturer": "Dell",
             "model": "R640",
             "rack": "Rack-A1",
-            "rack_location": "Fila A",
+            "rack_location": "Row A",
             "cluster_name": "Cluster-1",
         } | overrides
         return {cols[alias]: value for alias, value in values.items()}
 
     @staticmethod
     def _endpoints(nodes_by_name: list[Any]) -> MagicMock:
-        """Endpoints sin dependencias existentes; `filter` de nodos devuelve `nodes_by_name`."""
+        """Endpoints without existing dependencies; the node `filter` returns `nodes_by_name`."""
         endpoints = MagicMock()
         for endpoint in (endpoints.devices, endpoints.virtual_machines):
             endpoint.url = "http://nb/api/dcim/devices/"
@@ -5589,7 +5603,7 @@ class TestNoWritesBeforeRowIsAccepted:
     def _assert_no_dependency_writes(self, endpoints: MagicMock) -> None:
         for name in self.DEPENDENCY_ENDPOINTS:
             endpoint = getattr(endpoints, name)
-            assert not endpoint.create.called, f"se creó un objeto en '{name}'"
+            assert not endpoint.create.called, f"an object was created in '{name}'"
 
     def _sync_device(
         self, endpoints: MagicMock, row: CsvRow, config: NetBoxMappingConfig
@@ -5612,7 +5626,7 @@ class TestNoWritesBeforeRowIsAccepted:
     def test_device_skipped_by_ambiguous_name_writes_nothing(
         self, config: NetBoxMappingConfig
     ) -> None:
-        endpoints = self._endpoints([_node(1, ""), _node(2, "")])  # nombre ambiguo
+        endpoints = self._endpoints([_node(1, ""), _node(2, "")])  # ambiguous name
 
         with pytest.raises(RowSkipCondition):
             self._sync_device(endpoints, self._row(config), config)
@@ -5637,7 +5651,7 @@ class TestNoWritesBeforeRowIsAccepted:
         caches = CacheStore(device_roles={"others": MockNetBoxRecord(id=9)})
         row = self._row(config, machine_type="VM", inventory_uuid="uuid-1")
 
-        with pytest.raises(RowSkipCondition, match="otro Site"):
+        with pytest.raises(RowSkipCondition, match="another Site"):
             sync_vm(
                 endpoints,
                 row,
@@ -5655,7 +5669,7 @@ class TestNoWritesBeforeRowIsAccepted:
     @pytest.mark.parametrize(
         ("overrides", "match"),
         [
-            ({"status": "Inexistente"}, "Estado|status"),
+            ({"status": "Nonexistent"}, "Status|status"),
             ({"height_u": "1.25"}, "height_u"),
         ],
     )

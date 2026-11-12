@@ -2,7 +2,7 @@
 # Data / generated files
 # =========================
 
-# Entradas del usuario y artefactos del pipeline (solo se versiona .gitkeep)
+# User inputs and pipeline artifacts (only .gitkeep is versioned)
 input/*
 !input/.gitkeep
 output/*
@@ -85,7 +85,7 @@ dist/
 # =========================
 .agents/*
 
-# Permitir exclusivamente el versionado de skills
+# Allow versioning the skills only
 !.agents/skills/
 !.agents/skills/**
 

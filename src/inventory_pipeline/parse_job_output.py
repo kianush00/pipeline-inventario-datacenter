@@ -1,46 +1,46 @@
 """
 parse_job_output.py
 =====================
-Normaliza la salida cruda del job de Rundeck a un CSV con el layout de
-columnas definido en rundeck_header_list.txt.
+Normalizes the raw output of the Rundeck job into a CSV with the column
+layout defined in rundeck_header_list.txt.
 
-Cada línea válida del log debe contener campos en formato:
+Each valid log line must contain fields in the format:
 
-    CLAVE="VALOR",CLAVE="VALOR",...
+    KEY="VALUE",KEY="VALUE",...
 
-Las claves deben corresponder exactamente con las entradas definidas
-en rundeck_header_list.txt.
+The keys must match exactly the entries defined
+in rundeck_header_list.txt.
 
-El orden de las claves en la salida de Rundeck NO importa. Cada valor
-se asigna a la columna correspondiente según el nombre de la clave
-definido en rundeck_header_list.txt.
+The order of the keys in the Rundeck output does NOT matter. Each value
+is assigned to the corresponding column according to the key name
+defined in rundeck_header_list.txt.
 
-El segundo valor de cada entrada de rundeck_header_list.txt determina el
-comportamiento de la columna:
+The second value of each rundeck_header_list.txt entry determines the
+behavior of the column:
 
-    0 -> la columna queda vacía en el CSV de salida.
-    1 -> la columna se procesa normalmente.
-    2 -> la columna se procesa normalmente y corresponde a la clave
-         utilizada para identificar la fila en el proceso de fusión.
+    0 -> the column is left empty in the output CSV.
+    1 -> the column is processed normally.
+    2 -> the column is processed normally and is the key
+         used to identify the row in the merge process.
 
-Si una clave definida en rundeck_header_list.txt tiene flag 1 o 2 pero no
-aparece en una línea válida, su valor se establece como "N/A".
+If a key defined in rundeck_header_list.txt has flag 1 or 2 but does not
+appear in a valid line, its value is set to "N/A".
 
-Las líneas que no correspondan a una fila válida son ignoradas.
+Lines that do not correspond to a valid row are ignored.
 
-Una clave que aparezca en la salida de Rundeck pero que NO exista
-exactamente en rundeck_header_list.txt provoca un error fatal y el script
-termina con código de salida 1.
+A key that appears in the Rundeck output but does NOT exist
+exactly in rundeck_header_list.txt causes a fatal error and the script
+exits with exit code 1.
 
-Uso:
+Usage:
     python -m inventory_pipeline.parse_job_output \
         job_output.log \
         [parsed_job_output.csv] \
         [rundeck_header_list.txt]
 
-Si no se indica la salida, se escribe output/parsed_job_output.csv. Si no se
-indica la ruta de rundeck_header_list.txt, se usa config/rundeck_header_list.txt
-(ver inventory_pipeline.paths).
+If the output is not given, output/parsed_job_output.csv is written. If the
+rundeck_header_list.txt path is not given, config/rundeck_header_list.txt is
+used (see inventory_pipeline.paths).
 """
 
 import os
@@ -63,14 +63,14 @@ from inventory_pipeline.paths import (
 
 
 def csv_field(value: str) -> str:
-    """Convierte un valor a un campo CSV válido.
+    """Converts a value into a valid CSV field.
 
-    El campo siempre queda entre comillas dobles.
-    Las comillas dobles internas se escapan duplicándolas.
+    The field is always wrapped in double quotes.
+    Inner double quotes are escaped by doubling them.
 
-    Ejemplos:
+    Examples:
         hello -> "hello"
-        say "hi" -> CSV con comillas duplicadas
+        say "hi" -> CSV with doubled quotes
         N/A -> "N/A"
     """
     value = value.replace('"', '""')
@@ -79,20 +79,20 @@ def csv_field(value: str) -> str:
 
 def parse_key_value_field(field: str) -> tuple[str, str] | None:
     """
-    Parsea un campo individual con formato:
+    Parses a single field with the format:
 
-        CLAVE="VALOR"
+        KEY="VALUE"
 
-    Retorna:
-        (clave, valor)
+    Returns:
+        (key, value)
 
-    o:
+    or:
         None
 
-    si el formato no es válido.
+    if the format is not valid.
 
-    La clave debe aparecer sin comillas y el valor debe estar
-    delimitado por comillas dobles.
+    The key must appear unquoted and the value must be
+    delimited by double quotes.
     """
 
     separator_index = field.find("=")
@@ -120,14 +120,14 @@ def parse_key_value_field(field: str) -> tuple[str, str] | None:
 def main() -> None:
     if len(sys.argv) < 2:
         usage(
-            f"Uso: {sys.argv[0]} "
+            f"Usage: {sys.argv[0]} "
             "job_output.log [parsed_job_output.csv] [rundeck_header_list.txt]"
         )
 
     if len(sys.argv) > 4:
         usage(
-            f"Cantidad de argumentos inválida.\n"
-            f"Uso: {sys.argv[0]} "
+            f"Invalid number of arguments.\n"
+            f"Usage: {sys.argv[0]} "
             "job_output.log [parsed_job_output.csv] [rundeck_header_list.txt]"
         )
 
@@ -140,45 +140,45 @@ def main() -> None:
     )
 
     if not input_path.is_file():
-        error(f"No se encontró el archivo de entrada: {input_path}")
+        error(f"Input file not found: {input_path}")
 
     # --------------------------------------------------------
-    # Validar colisión entre archivo de entrada y salida.
+    # Validate collision between the input and output files.
     # --------------------------------------------------------
     resolved_input = input_path.resolve()
     resolved_output = output_path.resolve()
 
     if resolved_input == resolved_output:
         error(
-            "El archivo de salida no puede ser el mismo archivo "
-            "que el archivo de entrada:\n"
+            "The output file cannot be the same file "
+            "as the input file:\n"
             f"  {output_path}"
         )
 
     # --------------------------------------------------------
-    # Cargar rundeck_header_list: [(nombre, flag), ...]
+    # Load rundeck_header_list: [(name, flag), ...]
     #
-    # El flag determina si la columna se procesa:
+    # The flag determines whether the column is processed:
     #
-    #   0 -> columna vacía
-    #   1 -> procesamiento normal
-    #   2 -> procesamiento normal y clave de fusión
+    #   0 -> empty column
+    #   1 -> normal processing
+    #   2 -> normal processing and merge key
     #
-    # El orden de rundeck_header_list determina el orden de las
-    # columnas del CSV de salida.
+    # The order of rundeck_header_list determines the order of the
+    # columns of the output CSV.
     # --------------------------------------------------------
     rundeck_header_list = load_rundeck_header_list(rundeck_header_list_path)
     defined_fields = len(rundeck_header_list)
 
     # --------------------------------------------------------
-    # Construir mapas:
+    # Build maps:
     #
-    #     nombre_columna -> posición CSV
-    #     nombre_columna -> flag
+    #     column_name -> CSV position
+    #     column_name -> flag
     #
-    # Esto permite que el orden de las claves provenientes
-    # de Rundeck sea completamente independiente del orden
-    # de las columnas del CSV final.
+    # This makes the order of the keys coming from Rundeck
+    # completely independent of the order of the columns
+    # of the final CSV.
     # --------------------------------------------------------
     header_positions = {
         name: index for index, (name, _flag) in enumerate(rundeck_header_list)
@@ -187,18 +187,18 @@ def main() -> None:
     header_flags = dict(rundeck_header_list)
 
     # --------------------------------------------------------
-    # Construir la línea de header del CSV de salida.
-    # Los nombres vienen directamente de rundeck_header_list, en orden.
+    # Build the header line of the output CSV.
+    # The names come directly from rundeck_header_list, in order.
     # --------------------------------------------------------
     header_line = ",".join(csv_field(name) for name, _flag in rundeck_header_list)
 
-    print("Header final:")
+    print("Final header:")
     print(header_line)
-    print(f"Cantidad de columnas definidas: {defined_fields}")
+    print(f"Number of defined columns: {defined_fields}")
 
     # --------------------------------------------------------
-    # Crear archivo temporal en el mismo directorio que la
-    # salida para permitir un reemplazo atómico mediante
+    # Create a temporary file in the same directory as the
+    # output to allow an atomic replacement through
     # os.replace().
     # --------------------------------------------------------
     temporary_output_path: Path | None = None
@@ -218,22 +218,22 @@ def main() -> None:
             out_f.write(header_line + "\n")
 
             # ------------------------------------------------
-            # Procesar el archivo de entrada línea a línea.
+            # Process the input file line by line.
             #
-            # Una línea válida debe:
+            # A valid line must:
             #
-            #   - Contener campos separados por comas.
-            #   - Cada campo debe tener formato CLAVE="VALOR".
-            #   - Cada clave debe existir exactamente en rundeck_header_list.
-            #   - No puede repetirse una misma clave.
+            #   - Contain comma-separated fields.
+            #   - Each field must have the format KEY="VALUE".
+            #   - Each key must exist exactly in rundeck_header_list.
+            #   - The same key cannot be repeated.
             #
-            # Las claves con flag 0 quedan vacías.
+            # Keys with flag 0 are left empty.
             #
-            # Las claves con flag 1 o 2 que no aparezcan en una línea
-            # válida se rellenan automáticamente con "N/A".
+            # Keys with flag 1 or 2 that do not appear in a valid
+            # line are automatically filled with "N/A".
             #
-            # Una clave desconocida o una clave duplicada provoca
-            # un error fatal y termina el script con exit 1.
+            # An unknown key or a duplicate key causes
+            # a fatal error and ends the script with exit 1.
             # ------------------------------------------------
             with input_path.open("r", encoding="utf-8", errors="replace") as in_f:
                 for line_number, raw_line in enumerate(in_f, start=1):
@@ -243,12 +243,12 @@ def main() -> None:
                         continue
 
                     # ------------------------------------------------
-                    # Ignorar líneas que claramente no corresponden
-                    # a una fila de datos de Rundeck.
+                    # Skip lines that clearly do not correspond
+                    # to a Rundeck data row.
                     #
-                    # Primero se intenta separar la línea como CSV.
-                    # Si contiene al menos una clave conocida, se
-                    # considera una posible fila de inventario.
+                    # First, the line is split as CSV.
+                    # If it contains at least one known key, it is
+                    # considered a possible inventory row.
                     # ------------------------------------------------
                     fields = split_quoted_csv_line(line)
 
@@ -271,14 +271,14 @@ def main() -> None:
                         continue
 
                     # ------------------------------------------------
-                    # Inicializar las columnas según su flag.
+                    # Initialize the columns according to their flag.
                     #
-                    #   flag 0 -> vacío
+                    #   flag 0 -> empty
                     #   flag 1 -> N/A
                     #   flag 2 -> N/A
                     #
-                    # De esta forma, una clave con flag 0 nunca
-                    # recibirá un valor desde la salida de Rundeck.
+                    # This way, a key with flag 0 will never
+                    # receive a value from the Rundeck output.
                     # ------------------------------------------------
                     output_values = [
                         "" if flag == 0 else "N/A"
@@ -288,75 +288,75 @@ def main() -> None:
                     seen_keys: set[str] = set()
 
                     # ------------------------------------------------
-                    # Procesar cada campo CLAVE="VALOR".
+                    # Process each KEY="VALUE" field.
                     # ------------------------------------------------
                     for field in fields:
                         parsed = parse_key_value_field(field)
 
                         if parsed is None:
-                            error(f"Línea {line_number}: campo inválido: {field}")
+                            error(f"Line {line_number}: invalid field: {field}")
 
                         key, value = parsed
 
                         # ------------------------------------------------
-                        # La clave debe coincidir EXACTAMENTE con una
-                        # entrada de rundeck_header_list.txt.
+                        # The key must match EXACTLY an
+                        # entry of rundeck_header_list.txt.
                         #
-                        # Si no existe, es un error fatal.
+                        # If it does not exist, it is a fatal error.
                         # ------------------------------------------------
                         if key not in header_positions:
                             error(
-                                f"Línea {line_number}: "
-                                f"clave no definida en rundeck_header_list.txt: "
+                                f"Line {line_number}: "
+                                f"key not defined in rundeck_header_list.txt: "
                                 f"'{key}'"
                             )
 
                         # ------------------------------------------------
-                        # No permitir claves duplicadas dentro de la
-                        # misma fila.
+                        # Do not allow duplicate keys within the
+                        # same row.
                         # ------------------------------------------------
                         if key in seen_keys:
-                            error(f"Línea {line_number}: clave duplicada: '{key}'")
+                            error(f"Line {line_number}: duplicate key: '{key}'")
 
                         seen_keys.add(key)
 
                         # ------------------------------------------------
-                        # Si la columna tiene flag 0, se ignora el valor
-                        # recibido desde Rundeck y permanece vacía.
+                        # If the column has flag 0, the value received
+                        # from Rundeck is ignored and it stays empty.
                         # ------------------------------------------------
                         if header_flags[key] == 0:
                             continue
 
                         # ------------------------------------------------
-                        # Si la columna tiene flag 1 o 2, colocar el
-                        # valor en la posición correspondiente según
+                        # If the column has flag 1 or 2, place the
+                        # value at the corresponding position according to
                         # rundeck_header_list.txt.
                         # ------------------------------------------------
                         position = header_positions[key]
                         output_values[position] = value
 
                     # ------------------------------------------------
-                    # Escribir la fila CSV final.
+                    # Write the final CSV row.
                     #
-                    # Todos los valores se escriben como campos CSV
-                    # verdaderos, independientemente de cómo hayan
-                    # llegado desde Rundeck.
+                    # All values are written as true CSV
+                    # fields, regardless of how they
+                    # arrived from Rundeck.
                     # ------------------------------------------------
                     out_f.write(
                         ",".join(csv_field(value) for value in output_values) + "\n"
                     )
 
         # --------------------------------------------------------
-        # El archivo temporal solo reemplaza la salida definitiva
-        # si todo el procesamiento anterior terminó correctamente.
+        # The temporary file only replaces the final output
+        # if all the previous processing finished successfully.
         # --------------------------------------------------------
         os.replace(temporary_output_path, output_path)
         temporary_output_path = None
 
     finally:
         # --------------------------------------------------------
-        # Si el proceso falló antes del reemplazo, eliminar el
-        # archivo temporal para no dejar residuos.
+        # If the process failed before the replacement, remove the
+        # temporary file so no leftovers remain.
         # --------------------------------------------------------
         if temporary_output_path is not None:
             try:
@@ -365,9 +365,9 @@ def main() -> None:
                 pass
 
     print()
-    print("[OK] Proceso completado.")
-    print(f"Log de entrada : {input_path}")
-    print(f"CSV de salida  : {output_path}")
+    print("[OK] Process completed.")
+    print(f"Input log  : {input_path}")
+    print(f"Output CSV : {output_path}")
 
 
 if __name__ == "__main__":

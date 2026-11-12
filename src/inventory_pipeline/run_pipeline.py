@@ -1,42 +1,42 @@
 """
 run_pipeline.py
 ===============
-Orquestador del pipeline completo. Encadena todas las etapas en un único
-comando y se detiene ante la primera que termine con código de salida
-distinto de 0:
+Orchestrator of the whole pipeline. It chains all the stages in a single
+command and stops at the first one that ends with a non-zero exit
+code:
 
     1. parse_job_output          input/<job>.log          → output/parsed_job_output.csv
-    2. prepare_master_inventory  input/<maestro>.ods|xlsx → output/prepared_master_inventory.csv
-    3. merge_inventories         ambos CSV                → output/merged_inventory.csv
+    2. prepare_master_inventory  input/<master>.ods|xlsx  → output/prepared_master_inventory.csv
+    3. merge_inventories         both CSVs                → output/merged_inventory.csv
     4. export_to_netbox --dry-run
-       (confirmación interactiva, u omitida con --yes)
-    5. export_to_netbox          aplica los cambios en NetBox
-    6. update_master_inventory   solo con --update-master → output/<maestro>_updated.<ext>
+       (interactive confirmation, or skipped with --yes)
+    5. export_to_netbox          applies the changes in NetBox
+    6. update_master_inventory   only with --update-master → output/<master>_updated.<ext>
 
-Las entradas se autodetectan en input/: debe existir exactamente un *.log y
-exactamente un *.ods/*.xlsx (los archivos ocultos, como .gitkeep o los locks
-de LibreOffice, se ignoran). --job-log y --master permiten indicarlas
-explícitamente.
+The inputs are auto-detected in input/: there must be exactly one *.log and
+exactly one *.ods/*.xlsx (hidden files, such as .gitkeep or the LibreOffice
+locks, are ignored). --job-log and --master allow specifying them
+explicitly.
 
-Cada etapa se ejecuta como subproceso (`python -m inventory_pipeline.<módulo>`)
-en lugar de importarse: las etapas terminan con sys.exit() ante errores y
-export_to_netbox configura logging a nivel global, por lo que aislarlas
-garantiza que cada una se comporte exactamente igual que al ejecutarla a
-mano, y que su código de salida sea la única señal de éxito o fallo.
+Each stage runs as a subprocess (`python -m inventory_pipeline.<module>`)
+instead of being imported: the stages end with sys.exit() on errors and
+export_to_netbox configures logging globally, so isolating them
+guarantees that each one behaves exactly the same as when run by
+hand, and that its exit code is the only signal of success or failure.
 
-La copia actualizada del maestro se genera al final y solo si el export real
-terminó bien, para que refleje un ciclo completo y consistente con NetBox.
+The updated copy of the master is generated at the end and only if the real export
+finished fine, so that it reflects a complete cycle consistent with NetBox.
 
-Uso:
-    inventory-pipeline [--job-log RUTA] [--master RUTA] [--update-master]
+Usage:
+    inventory-pipeline [--job-log PATH] [--master PATH] [--update-master]
                        [--prune-network-orphans] [--yes] [--verbose]
 
-Códigos de salida:
-    0   → pipeline completo, o cambios no aplicados por decisión del usuario
-    1   → error del orquestador (entradas ausentes o ambiguas, confirmación
-          imposible sin terminal interactiva)
-    N   → código de salida de la primera etapa que falló
-    130 → interrumpido por el usuario (Ctrl+C)
+Exit codes:
+    0   → pipeline complete, or changes not applied by the user's decision
+    1   → orchestrator error (missing or ambiguous inputs, confirmation
+          impossible without an interactive terminal)
+    N   → exit code of the first stage that failed
+    130 → interrupted by the user (Ctrl+C)
 """
 
 import argparse
@@ -73,7 +73,7 @@ logging.basicConfig(
 log = logging.getLogger("run_pipeline")
 
 # ============================================================
-# CONSTANTES
+# CONSTANTS
 # ============================================================
 
 PACKAGE: Final[str] = "inventory_pipeline"
@@ -81,7 +81,7 @@ PACKAGE: Final[str] = "inventory_pipeline"
 JOB_LOG_SUFFIXES: Final[frozenset[str]] = frozenset({".log"})
 MASTER_SUFFIXES: Final[frozenset[str]] = frozenset(SUPPORTED_EXTENSIONS)
 
-AFFIRMATIVE_ANSWERS: Final[frozenset[str]] = frozenset({"s", "si", "sí", "y", "yes"})
+AFFIRMATIVE_ANSWERS: Final[frozenset[str]] = frozenset({"y", "yes"})
 
 EXIT_SUCCESS: Final[int] = 0
 EXIT_FAILURE: Final[int] = 1
@@ -89,16 +89,16 @@ EXIT_INTERRUPTED: Final[int] = 130
 SIGNAL_EXIT_BASE: Final[int] = 128
 
 # ============================================================
-# ESTRUCTURAS DE DATOS
+# DATA STRUCTURES
 # ============================================================
 
 
 class PipelineError(Exception):
-    """Error propio del orquestador, previo o ajeno a la ejecución de una etapa."""
+    """Error of the orchestrator itself, prior or unrelated to the execution of a stage."""
 
 
 class PipelineStep(NamedTuple):
-    """Etapa del pipeline: un módulo del paquete y sus argumentos de línea de comandos."""
+    """Pipeline stage: a module of the package and its command-line arguments."""
 
     name: str
     module: str
@@ -106,19 +106,17 @@ class PipelineStep(NamedTuple):
 
 
 class PipelineStepError(Exception):
-    """Una etapa terminó con código de salida distinto de 0."""
+    """A stage ended with a non-zero exit code."""
 
     def __init__(self, step: PipelineStep, returncode: int) -> None:
-        super().__init__(
-            f"La etapa '{step.name}' terminó con código de salida {returncode}."
-        )
+        super().__init__(f"The stage '{step.name}' ended with exit code {returncode}.")
         self.step = step
         self.returncode = returncode
 
 
 @dataclass(frozen=True)
 class PipelineOptions:
-    """Opciones resueltas del pipeline, con las rutas de entrada ya validadas."""
+    """Resolved pipeline options, with the input paths already validated."""
 
     job_log: Path
     master: Path
@@ -129,7 +127,7 @@ class PipelineOptions:
 
 
 class ArtifactPaths(NamedTuple):
-    """Rutas de los artefactos que genera cada etapa."""
+    """Paths of the artifacts generated by each stage."""
 
     parsed_csv: Path
     prepared_csv: Path
@@ -138,64 +136,64 @@ class ArtifactPaths(NamedTuple):
 
 
 # ============================================================
-# ARGUMENTOS Y RESOLUCIÓN DE ENTRADAS
+# ARGUMENTS AND INPUT RESOLUTION
 # ============================================================
 
 
 def parse_cli_arguments(argv: Sequence[str]) -> argparse.Namespace:
-    """Interpreta los argumentos de línea de comandos (sin el nombre del programa)."""
+    """Parses the command-line arguments (without the program name)."""
     parser = argparse.ArgumentParser(
         prog="inventory-pipeline",
         description=(
-            "Ejecuta el pipeline completo: parseo, preparación del maestro, "
-            "fusión, export a NetBox (dry-run y real) y, opcionalmente, "
-            "actualización del maestro."
+            "Runs the whole pipeline: parsing, master preparation, "
+            "merge, export to NetBox (dry-run and real) and, optionally, "
+            "master update."
         ),
     )
     parser.add_argument(
         "--job-log",
         type=Path,
         default=None,
-        help="Salida cruda del job de Rundeck (por defecto: el único *.log en input/).",
+        help="Raw output of the Rundeck job (default: the only *.log in input/).",
     )
     parser.add_argument(
         "--master",
         type=Path,
         default=None,
-        help="Inventario maestro .ods/.xlsx (por defecto: el único en input/).",
+        help="Master inventory .ods/.xlsx (default: the only one in input/).",
     )
     parser.add_argument(
         "--update-master",
         action="store_true",
         help=(
-            "Al final, genera output/<maestro>_updated.<ext> con el inventario "
-            "fusionado (solo si el export real terminó bien)."
+            "At the end, generates output/<master>_updated.<ext> with the merged "
+            "inventory (only if the real export finished fine)."
         ),
     )
     parser.add_argument(
         "--prune-network-orphans",
         action="store_true",
-        help="Se propaga a ambos exports (dry-run y real). Ver export_to_netbox.",
+        help="Propagated to both exports (dry-run and real). See export_to_netbox.",
     )
     parser.add_argument(
         "-y",
         "--yes",
         action="store_true",
-        help="Aplica los cambios en NetBox sin pedir confirmación tras el dry-run.",
+        help="Applies the changes in NetBox without asking for confirmation after the dry-run.",
     )
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Activa logs DEBUG en el orquestador y en export_to_netbox.",
+        help="Enables DEBUG logs in the orchestrator and in export_to_netbox.",
     )
     return parser.parse_args(argv)
 
 
 def _is_candidate_input(path: Path, suffixes: frozenset[str]) -> bool:
-    """Indica si un archivo de input/ puede ser una entrada del pipeline.
+    """Tells whether a file of input/ can be a pipeline input.
 
-    Los archivos ocultos se descartan: cubren .gitkeep y los locks que
-    LibreOffice crea mientras el maestro está abierto (.~lock.<nombre>#).
+    Hidden files are discarded: they cover .gitkeep and the locks that
+    LibreOffice creates while the master is open (.~lock.<name>#).
     """
     return (
         path.is_file()
@@ -211,13 +209,13 @@ def discover_single_input(
     override_flag: str,
 ) -> Path:
     """
-    Busca en `directory` el único archivo con alguna de las extensiones dadas.
+    Looks in `directory` for the only file with any of the given extensions.
 
-    Falla si no hay ninguno o si hay más de uno: elegir uno arbitrariamente
-    podría procesar un inventario desactualizado sin aviso.
+    It fails if there is none or if there is more than one: picking one arbitrarily
+    could process an outdated inventory without warning.
     """
     if not directory.is_dir():
-        raise PipelineError(f"No existe el directorio de entradas: {directory}")
+        raise PipelineError(f"The input directory does not exist: {directory}")
 
     candidates = sorted(
         path for path in directory.iterdir() if _is_candidate_input(path, suffixes)
@@ -226,14 +224,14 @@ def discover_single_input(
 
     if not candidates:
         raise PipelineError(
-            f"No se encontró ningún {label} ({expected}) en {directory}. "
-            f"Cópialo allí o indícalo con {override_flag}."
+            f"No {label} ({expected}) was found in {directory}. "
+            f"Copy it there or specify it with {override_flag}."
         )
     if len(candidates) > 1:
         listed = "\n".join(f"  - {path.name}" for path in candidates)
         raise PipelineError(
-            f"Se encontró más de un {label} ({expected}) en {directory}. "
-            f"Deja solo uno o indícalo con {override_flag}:\n{listed}"
+            f"More than one {label} ({expected}) was found in {directory}. "
+            f"Leave only one or specify it with {override_flag}:\n{listed}"
         )
     return candidates[0]
 
@@ -242,39 +240,39 @@ def _require_file(
     path: Path, label: str, suffixes: frozenset[str] | None = None
 ) -> Path:
     """
-    Valida una entrada indicada explícitamente (fail-fast) y la retorna absoluta.
+    Validates an explicitly given input (fail-fast) and returns it as absolute.
 
-    La ruta se resuelve contra el directorio actual del usuario porque las
-    etapas corren con cwd=PROJECT_ROOT, donde una ruta relativa apuntaría a
-    otro archivo. Si se indican `suffixes`, también se valida la extensión,
-    para no ejecutar etapas previas antes de que la etapa que la exige falle.
+    The path is resolved against the user's current directory because the
+    stages run with cwd=PROJECT_ROOT, where a relative path would point to
+    another file. If `suffixes` are given, the extension is also validated,
+    so that previous stages are not run before the stage that requires it fails.
     """
     if not path.is_file():
-        raise PipelineError(f"No se encontró el {label}: {path}")
+        raise PipelineError(f"The {label} was not found: {path}")
     if suffixes is not None and path.suffix.lower() not in suffixes:
         expected = ", ".join(sorted(suffixes))
-        raise PipelineError(f"El {label} debe tener extensión {expected}: {path}")
+        raise PipelineError(f"The {label} must have extension {expected}: {path}")
     return path.resolve()
 
 
 def resolve_options(args: argparse.Namespace, input_dir: Path) -> PipelineOptions:
     """
-    Resuelve las entradas (explícitas o autodetectadas en `input_dir`) antes de
-    ejecutar cualquier etapa, para no dejar el pipeline a medias por una
-    entrada faltante descubierta tarde.
+    Resolves the inputs (explicit or auto-detected in `input_dir`) before
+    running any stage, so that the pipeline is not left halfway because of a
+    missing input discovered late.
     """
     job_log: Path = (
-        _require_file(args.job_log, "log del job de Rundeck")
+        _require_file(args.job_log, "Rundeck job log")
         if args.job_log is not None
         else discover_single_input(
-            input_dir, JOB_LOG_SUFFIXES, "log del job de Rundeck", "--job-log"
+            input_dir, JOB_LOG_SUFFIXES, "Rundeck job log", "--job-log"
         )
     )
     master: Path = (
-        _require_file(args.master, "inventario maestro", MASTER_SUFFIXES)
+        _require_file(args.master, "master inventory", MASTER_SUFFIXES)
         if args.master is not None
         else discover_single_input(
-            input_dir, MASTER_SUFFIXES, "inventario maestro", "--master"
+            input_dir, MASTER_SUFFIXES, "master inventory", "--master"
         )
     )
     return PipelineOptions(
@@ -288,12 +286,12 @@ def resolve_options(args: argparse.Namespace, input_dir: Path) -> PipelineOption
 
 
 # ============================================================
-# CONSTRUCCIÓN DE ETAPAS
+# STAGE CONSTRUCTION
 # ============================================================
 
 
 def build_artifact_paths(master: Path, output_dir: Path) -> ArtifactPaths:
-    """Calcula las rutas de los artefactos generados, todos dentro de `output_dir`."""
+    """Computes the paths of the generated artifacts, all within `output_dir`."""
     return ArtifactPaths(
         parsed_csv=output_dir / PARSED_CSV_NAME,
         prepared_csv=output_dir / PREPARED_CSV_NAME,
@@ -305,21 +303,21 @@ def build_artifact_paths(master: Path, output_dir: Path) -> ArtifactPaths:
 def build_pre_export_steps(
     options: PipelineOptions, artifacts: ArtifactPaths
 ) -> tuple[PipelineStep, ...]:
-    """Etapas locales que producen merged_inventory.csv."""
+    """Local stages that produce merged_inventory.csv."""
     header_list = str(DEFAULT_HEADER_LIST_PATH)
     return (
         PipelineStep(
-            name="Parseo de la salida de Rundeck",
+            name="Rundeck output parsing",
             module=f"{PACKAGE}.parse_job_output",
             args=(str(options.job_log), str(artifacts.parsed_csv), header_list),
         ),
         PipelineStep(
-            name="Preparación del inventario maestro",
+            name="Master inventory preparation",
             module=f"{PACKAGE}.prepare_master_inventory",
             args=(str(options.master), str(artifacts.prepared_csv), header_list),
         ),
         PipelineStep(
-            name="Fusión de inventarios",
+            name="Inventory merge",
             module=f"{PACKAGE}.merge_inventories",
             args=(
                 "--parsed",
@@ -338,7 +336,7 @@ def build_pre_export_steps(
 def build_export_step(
     options: PipelineOptions, artifacts: ArtifactPaths, dry_run: bool
 ) -> PipelineStep:
-    """Etapa de exportación a NetBox, en modo dry-run o real."""
+    """Export stage to NetBox, in dry-run or real mode."""
     args = [str(artifacts.merged_csv), str(DEFAULT_MAPPING_PATH)]
     if dry_run:
         args.append("--dry-run")
@@ -348,16 +346,16 @@ def build_export_step(
         args.append("--verbose")
 
     return PipelineStep(
-        name="Exportación a NetBox (dry-run)" if dry_run else "Exportación a NetBox",
+        name="NetBox export (dry-run)" if dry_run else "NetBox export",
         module=f"{PACKAGE}.export_to_netbox",
         args=tuple(args),
     )
 
 
 def build_update_master_step(artifacts: ArtifactPaths, master: Path) -> PipelineStep:
-    """Etapa que deposita el inventario fusionado sobre una copia del maestro."""
+    """Stage that lays the merged inventory over a copy of the master."""
     return PipelineStep(
-        name="Actualización del inventario maestro",
+        name="Master inventory update",
         module=f"{PACKAGE}.update_master_inventory",
         args=(
             "--merged",
@@ -373,7 +371,7 @@ def build_update_master_step(artifacts: ArtifactPaths, master: Path) -> Pipeline
 def build_apply_steps(
     options: PipelineOptions, artifacts: ArtifactPaths
 ) -> tuple[PipelineStep, ...]:
-    """Etapas que solo se ejecutan tras confirmar los cambios del dry-run."""
+    """Stages that only run after confirming the dry-run changes."""
     steps = [build_export_step(options, artifacts, dry_run=False)]
     if options.update_master:
         steps.append(build_update_master_step(artifacts, options.master))
@@ -381,20 +379,20 @@ def build_apply_steps(
 
 
 # ============================================================
-# EJECUCIÓN
+# EXECUTION
 # ============================================================
 
 
 def build_command(step: PipelineStep) -> list[str]:
-    """Comando del subproceso, con el mismo intérprete (y venv) del orquestador."""
+    """Subprocess command, with the same interpreter (and venv) as the orchestrator."""
     return [sys.executable, "-m", step.module, *step.args]
 
 
 def _normalize_exit_code(returncode: int) -> int:
     """
-    Traduce un código negativo de subprocess (proceso terminado por la señal N)
-    a la convención de shell 128 + N; un código negativo no es un exit status
-    válido para el proceso del orquestador.
+    Translates a negative subprocess code (process terminated by signal N)
+    into the shell convention 128 + N; a negative code is not a valid exit
+    status for the orchestrator process.
     """
     if returncode < 0:
         return SIGNAL_EXIT_BASE + abs(returncode)
@@ -402,10 +400,10 @@ def _normalize_exit_code(returncode: int) -> int:
 
 
 def run_step(step: PipelineStep, position: int, total: int) -> None:
-    """Ejecuta una etapa y lanza PipelineStepError si no termina con código 0."""
+    """Runs a stage and raises PipelineStepError if it does not end with code 0."""
     command = build_command(step)
-    log.info("[%d/%d] Iniciando: %s", position, total, step.name)
-    log.debug("Comando: %s", " ".join(command))
+    log.info("[%d/%d] Starting: %s", position, total, step.name)
+    log.debug("Command: %s", " ".join(command))
 
     started = time.monotonic()
     result = subprocess.run(command, cwd=PROJECT_ROOT, check=False)
@@ -414,43 +412,43 @@ def run_step(step: PipelineStep, position: int, total: int) -> None:
     if result.returncode != 0:
         raise PipelineStepError(step, _normalize_exit_code(result.returncode))
 
-    log.info("[%d/%d] Completada: %s (%.1f s)", position, total, step.name, elapsed)
+    log.info("[%d/%d] Completed: %s (%.1f s)", position, total, step.name, elapsed)
 
 
 def run_steps(steps: Sequence[PipelineStep], first_position: int, total: int) -> None:
-    """Ejecuta las etapas en orden; la primera que falle detiene la secuencia."""
+    """Runs the stages in order; the first one that fails stops the sequence."""
     for offset, step in enumerate(steps):
         run_step(step, first_position + offset, total)
 
 
 def ensure_confirmation_possible(assume_yes: bool, is_interactive: bool) -> None:
     """
-    Falla si la confirmación posterior al dry-run no podrá obtenerse.
+    Fails if the confirmation after the dry-run cannot be obtained.
 
-    Sin terminal interactiva y sin --yes se aborta en lugar de asumir una
-    respuesta: aplicar sin querer escribiría en NetBox, y esperar una
-    respuesta que nunca llega colgaría la ejecución. Se evalúa antes de la
-    primera etapa porque la condición se conoce desde el inicio.
+    Without an interactive terminal and without --yes it aborts instead of assuming
+    an answer: applying unintentionally would write to NetBox, and waiting for an
+    answer that never arrives would hang the execution. It is evaluated before the
+    first stage because the condition is known from the start.
     """
     if assume_yes or is_interactive:
         return
     raise PipelineError(
-        "Se requiere confirmación para aplicar los cambios en NetBox, pero la "
-        "entrada estándar no es interactiva. Usa --yes para ejecuciones "
-        "desatendidas."
+        "Confirmation is required to apply the changes in NetBox, but "
+        "standard input is not interactive. Use --yes for unattended "
+        "runs."
     )
 
 
 def confirm_apply(assume_yes: bool, is_interactive: bool) -> bool:
-    """Decide si se aplican en NetBox los cambios revisados en el dry-run."""
+    """Decides whether the changes reviewed in the dry-run are applied in NetBox."""
     ensure_confirmation_possible(assume_yes, is_interactive)
 
     if assume_yes:
-        log.info("Confirmación omitida (--yes): se aplicarán los cambios.")
+        log.info("Confirmation skipped (--yes): the changes will be applied.")
         return True
 
     try:
-        answer = input("¿Aplicar los cambios en NetBox? [s/N]: ")
+        answer = input("Apply the changes in NetBox? [y/N]: ")
     except EOFError:
         return False
     return answer.strip().lower() in AFFIRMATIVE_ANSWERS
@@ -460,11 +458,11 @@ def run_pipeline(
     options: PipelineOptions, output_dir: Path, is_interactive: bool
 ) -> bool:
     """
-    Ejecuta el pipeline completo.
+    Runs the whole pipeline.
 
-    Retorna True si los cambios se aplicaron en NetBox, o False si el usuario
-    los rechazó tras el dry-run. Lanza PipelineStepError ante la primera
-    etapa fallida.
+    Returns True if the changes were applied in NetBox, or False if the user
+    rejected them after the dry-run. Raises PipelineStepError at the first
+    failed stage.
     """
     ensure_confirmation_possible(options.assume_yes, is_interactive)
 
@@ -476,9 +474,9 @@ def run_pipeline(
     apply_steps = build_apply_steps(options, artifacts)
     total = len(validation_steps) + len(apply_steps)
 
-    log.info("Log del job de Rundeck : %s", options.job_log)
-    log.info("Inventario maestro     : %s", options.master)
-    log.info("Directorio de salida   : %s", output_dir)
+    log.info("Rundeck job log   : %s", options.job_log)
+    log.info("Master inventory  : %s", options.master)
+    log.info("Output directory  : %s", output_dir)
 
     run_steps(validation_steps, first_position=1, total=total)
 
@@ -490,7 +488,7 @@ def run_pipeline(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Punto de entrada del comando `inventory-pipeline`. Retorna el código de salida."""
+    """Entry point of the `inventory-pipeline` command. Returns the exit code."""
     args = parse_cli_arguments(sys.argv[1:] if argv is None else argv)
     if args.verbose:
         log.setLevel(logging.DEBUG)
@@ -503,20 +501,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         log.error("%s", exc)
         return EXIT_FAILURE
     except PipelineStepError as exc:
-        log.error("PIPELINE ABORTADO: %s Las etapas siguientes no se ejecutaron.", exc)
+        log.error("PIPELINE ABORTED: %s The following stages were not run.", exc)
         return exc.returncode
     except KeyboardInterrupt:
-        log.error("Pipeline interrumpido por el usuario.")
+        log.error("Pipeline interrupted by the user.")
         return EXIT_INTERRUPTED
 
     if not applied:
         log.warning(
-            "Cambios NO aplicados en NetBox por decisión del usuario; "
-            "las etapas posteriores al dry-run no se ejecutaron."
+            "Changes NOT applied in NetBox by the user's decision; "
+            "the stages after the dry-run were not run."
         )
         return EXIT_SUCCESS
 
-    log.info("Pipeline completado correctamente. Artefactos en: %s", OUTPUT_DIR)
+    log.info("Pipeline completed successfully. Artifacts in: %s", OUTPUT_DIR)
     return EXIT_SUCCESS
 
 

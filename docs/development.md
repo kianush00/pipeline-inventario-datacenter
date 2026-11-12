@@ -61,7 +61,7 @@ Ruff infers its target (Python 3.12) from `requires-python` in [`pyproject.toml`
 ## Code Conventions
 
 - **Strong typing:** All Python code uses annotations from the `typing` module. Unjustified `Any` is avoided.
-- **Source code in English:** Variables, functions, and classes in English. Comments, logs, and user messages in Spanish.
+- **Everything in English:** Identifiers (variables, functions, classes), comments, docstrings, logs, user messages and documentation are written in English.
 - **Single Responsibility Principle (SRP):** Functions should do one thing and do it well.
 - **Pure Functions & No Silent Side-Effects:** Functions should be as pure as possible, especially in an ETL context. Avoid mutating arguments passed by reference (like caches, dicts, or lists) silently. If a function modifies state or external data structures, it must explicitly return the modified structure (or a tuple containing it) to make the data flow predictable, testable, and to prevent side-effect bugs.
 - **Early Returns / Fail-Fast:** Nesting is reduced by returning early in error cases.

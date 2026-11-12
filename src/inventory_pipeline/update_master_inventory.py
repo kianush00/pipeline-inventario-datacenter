@@ -1,54 +1,54 @@
 """
 update_master_inventory.py
 =============================
-Último paso del pipeline ETL: toma el inventario fusionado
-(merged_inventory.csv, salida de merge_inventories.py) y lo
-deposita sobre una COPIA del spreadsheet maestro (.ods/.xlsx),
-sin modificar jamás el archivo maestro original.
+Last step of the ETL pipeline: it takes the merged inventory
+(merged_inventory.csv, output of merge_inventories.py) and
+lays it over a COPY of the master spreadsheet (.ods/.xlsx),
+without ever modifying the original master file.
 
-El script:
-1. Crea una copia física del spreadsheet maestro.
-2. Localiza, dentro del maestro, la fila que corresponde al header
-   real, buscando la primera fila cuyo contenido (en el mismo
-   orden) coincida EXACTAMENTE con el header de
-   merged_inventory.csv. Esto valida simultáneamente que los
-   nombres de columna y sus posiciones sean idénticos entre ambos
-   archivos, sin necesitar rundeck_header_list.txt.
-3. Valida que la cantidad de filas de datos del maestro (a partir
-   del header detectado) coincida exactamente con la cantidad de
-   filas de merged_inventory.csv. Si no coincide, aborta: no es
-   seguro asumir correspondencia posicional entre ambos archivos.
-4. Compara celda a celda (con normalización numérica, para no
-   reportar diferencias de formato como "16" vs "16.0" como si
-   fueran cambios reales) y sobrescribe únicamente las celdas cuyo
-   valor cambió.
-5. Informa qué columnas cambiaron y, para cada una, qué celdas
-   específicas fueron modificadas.
+The script:
+1. Creates a physical copy of the master spreadsheet.
+2. Locates, within the master, the row that corresponds to the real
+   header, looking for the first row whose content (in the same
+   order) matches EXACTLY the header of
+   merged_inventory.csv. This simultaneously validates that the
+   column names and their positions are identical between both
+   files, without needing rundeck_header_list.txt.
+3. Validates that the number of data rows of the master (starting
+   from the detected header) matches exactly the number of
+   rows of merged_inventory.csv. If it does not match, it aborts: it
+   is not safe to assume positional correspondence between both files.
+4. Compares cell by cell (with numeric normalization, so that
+   format differences such as "16" vs "16.0" are not reported as if
+   they were real changes) and overwrites only the cells whose
+   value changed.
+5. Reports which columns changed and, for each one, which specific
+   cells were modified.
 
-Mecanismo de edición:
-- .xlsx: se copia el archivo y se edita directamente con openpyxl,
-  preservando el formato original.
-- .ods: dado que editar celdas individuales de un .ods de forma
-  robusta requiere manejar manualmente la compresión de celdas/filas
-  repetidas del formato ODF (atributos number-columns-repeated /
-  number-rows-repeated), y el pipeline ya depende de LibreOffice
-  headless, se usa un round-trip: .ods -> .xlsx (LibreOffice) ->
-  edición con openpyxl -> .xlsx -> .ods (LibreOffice).
+Editing mechanism:
+- .xlsx: the file is copied and edited directly with openpyxl,
+  preserving the original format.
+- .ods: since editing individual cells of an .ods robustly
+  requires manually handling the compression of repeated cells/rows
+  of the ODF format (number-columns-repeated /
+  number-rows-repeated attributes), and the pipeline already depends on
+  headless LibreOffice, a round-trip is used: .ods -> .xlsx (LibreOffice) ->
+  editing with openpyxl -> .xlsx -> .ods (LibreOffice).
 
-El proceso completo es atómico: se trabaja sobre un archivo
-temporal en el mismo directorio de salida, y solo se reemplaza el
-archivo final mediante os.replace() si todo el proceso terminó sin
-errores.
+The whole process is atomic: the work is done on a temporary
+file in the same output directory, and the final file is only
+replaced through os.replace() if the whole process finished without
+errors.
 
-Uso:
+Usage:
     python -m inventory_pipeline.update_master_inventory \
         --merged merged_inventory.csv \
         --master master_inventory.(ods|xlsx) \
         [--output master_inventory_updated.(ods|xlsx)]
 
-Formas cortas: -i (--merged), -m (--master) y -o (--output). Los archivos se
-indican con opciones nombradas (y no por posición) para que un orden accidental
-no escriba el CSV fusionado donde se espera el spreadsheet maestro.
+Short forms: -i (--merged), -m (--master) and -o (--output). The files are
+given with named options (and not by position) so that an accidental order
+does not write the merged CSV where the master spreadsheet is expected.
 """
 
 import argparse
@@ -74,16 +74,16 @@ SUPPORTED_EXTENSIONS = {".ods", ".xlsx"}
 
 
 # ============================================================
-# NORMALIZACIÓN Y CONVERSIÓN DE VALORES
+# VALUE NORMALIZATION AND CONVERSION
 # ============================================================
 
 
 def normalize_value(value) -> str:
     """
-    Normaliza un valor (proveniente de una celda del spreadsheet o
-    de un campo del CSV) a una representación canónica en string,
-    para poder comparar equivalencia sin falsos positivos por
-    diferencias de formato numérico (ej. 16 vs 16.0).
+    Normalizes a value (coming from a spreadsheet cell or
+    from a CSV field) into a canonical string representation,
+    so that equivalence can be compared without false positives due to
+    numeric format differences (e.g. 16 vs 16.0).
     """
     if value is None:
         return ""
@@ -99,10 +99,10 @@ def normalize_value(value) -> str:
 
 def coerce_for_cell(value_str: str) -> int | float | str | None:
     """
-    Convierte un valor string proveniente del CSV al tipo Python
-    más apropiado para escribirlo en una celda, preservando el
-    tipo numérico cuando corresponde (en vez de forzar todo a
-    texto, lo que degradaría el formato de columnas numéricas).
+    Converts a string value coming from the CSV into the most
+    appropriate Python type to write it into a cell, preserving the
+    numeric type when applicable (instead of forcing everything to
+    text, which would degrade the format of numeric columns).
     """
     if value_str == "":
         return None
@@ -119,8 +119,8 @@ def coerce_for_cell(value_str: str) -> int | float | str | None:
 
 def column_letter(index0: int) -> str:
     """
-    Convierte un índice de columna 0-based a notación de letras
-    estilo spreadsheet (0 -> A, 25 -> Z, 26 -> AA, ...).
+    Converts a 0-based column index into spreadsheet-style
+    letter notation (0 -> A, 25 -> Z, 26 -> AA, ...).
     """
     index = index0 + 1
     letters = ""
@@ -131,7 +131,7 @@ def column_letter(index0: int) -> str:
 
 
 # ============================================================
-# LIBREOFFICE: CONVERSIÓN GENÉRICA ENTRE FORMATOS
+# LIBREOFFICE: GENERIC CONVERSION BETWEEN FORMATS
 # ============================================================
 
 
@@ -158,7 +158,7 @@ def convert_with_libreoffice(
     )
     if result.returncode != 0:
         error(
-            f"LibreOffice no pudo convertir el archivo a "
+            f"LibreOffice could not convert the file to "
             f"{target_format}.\n\n"
             f"stdout:\n{result.stdout}\n\n"
             f"stderr:\n{result.stderr}"
@@ -166,23 +166,23 @@ def convert_with_libreoffice(
     converted = out_dir / f"{input_path.stem}.{target_format}"
     if not converted.is_file():
         error(
-            "LibreOffice terminó sin error, pero no se encontró "
-            f"el archivo convertido:\n  {converted}"
+            "LibreOffice finished without error, but the converted "
+            f"file was not found:\n  {converted}"
         )
     return converted
 
 
 # ============================================================
-# LOCALIZAR HEADER Y CONTAR FILAS DE DATOS EN EL MAESTRO
+# LOCATE THE HEADER AND COUNT DATA ROWS IN THE MASTER
 # ============================================================
 
 
 def find_header_row_number(ws: Worksheet, merged_header: list[str]) -> int | None:
     """
-    Busca la primera fila cuyo contenido, en el mismo orden,
-    coincida EXACTAMENTE con merged_header. Esto valida a la vez
-    nombres y posiciones de columna entre el maestro y el
-    inventario fusionado.
+    Finds the first row whose content, in the same order,
+    matches EXACTLY merged_header. This validates at once
+    column names and positions between the master and the
+    merged inventory.
     """
     n_cols = len(merged_header)
     for row_number, row in enumerate(
@@ -202,9 +202,9 @@ def find_header_row_number(ws: Worksheet, merged_header: list[str]) -> int | Non
 
 def count_master_data_rows(ws: Worksheet, header_row_number: int, n_cols: int) -> int:
     """
-    Cuenta filas de datos a partir de header_row_number + 1,
-    considerando como límite la última fila con al menos un valor
-    no vacío dentro de las n_cols columnas relevantes.
+    Counts data rows starting from header_row_number + 1,
+    taking as the limit the last row with at least one non-empty
+    value within the n_cols relevant columns.
     """
     last_row_with_data = header_row_number
     for row_number, row in enumerate(
@@ -222,32 +222,26 @@ def count_master_data_rows(ws: Worksheet, header_row_number: int, n_cols: int) -
 
 
 # ============================================================
-# ACTUALIZAR UN ARCHIVO XLSX (EDICIÓN DIRECTA)
+# UPDATE AN XLSX FILE (DIRECT EDITING)
 # ============================================================
 
 
 def get_active_worksheet(wb: Workbook) -> Worksheet:
-    """Obtiene la hoja de cálculo activa de un libro de trabajo."""
+    """Gets the active worksheet of a workbook."""
     ws = wb.active
 
     if not isinstance(ws, Worksheet):
-        error(
-            "El spreadsheet no contiene una hoja de cálculo activa "
-            "válida para actualizar."
-        )
+        error("The spreadsheet does not contain a valid active worksheet to update.")
 
     return ws
 
 
 def get_cell(ws: Worksheet, row: int, column: int) -> Cell:
-    """Obtiene una celda normal y rechaza celdas combinadas."""
+    """Gets a regular cell and rejects merged cells."""
     cell = ws.cell(row=row, column=column)
 
     if isinstance(cell, MergedCell):
-        error(
-            "No se puede actualizar una celda combinada "
-            f"en {column_letter(column - 1)}{row}."
-        )
+        error(f"A merged cell cannot be updated at {column_letter(column - 1)}{row}.")
 
     return cell
 
@@ -258,10 +252,10 @@ def update_xlsx(
     merged_rows: list[list[str]],
 ) -> dict[str, list[str]]:
     """
-    Abre el .xlsx en `path`, localiza el header, valida
-    correspondencia de filas, sobrescribe únicamente las celdas
-    cuyo valor cambió, guarda el archivo y retorna un mapa
-    {nombre_columna: [direcciones_de_celda_modificadas]}.
+    Opens the .xlsx at `path`, locates the header, validates
+    row correspondence, overwrites only the cells
+    whose value changed, saves the file and returns a map
+    {column_name: [modified_cell_addresses]}.
     """
     wb = openpyxl.load_workbook(path)
     ws = get_active_worksheet(wb)
@@ -270,22 +264,22 @@ def update_xlsx(
     header_row_number = find_header_row_number(ws, merged_header)
     if header_row_number is None:
         error(
-            "No se encontró ninguna fila en el spreadsheet maestro "
-            "que coincida exactamente (mismos nombres y mismas "
-            "posiciones) con el header del inventario fusionado."
+            "No row was found in the master spreadsheet "
+            "that matches exactly (same names and same "
+            "positions) the header of the merged inventory."
         )
 
-    print(f"Fila de header detectada en el maestro : {header_row_number}")
+    print(f"Header row detected in the master       : {header_row_number}")
 
     master_data_rows = count_master_data_rows(ws, header_row_number, n_cols)
 
     if master_data_rows != len(merged_rows):
         error(
-            "La cantidad de filas de datos del spreadsheet maestro "
-            f"({master_data_rows}) no coincide con la cantidad de "
-            f"filas del inventario fusionado ({len(merged_rows)}).\n"
-            "No es seguro asumir correspondencia posicional entre "
-            "ambos archivos."
+            "The number of data rows of the master spreadsheet "
+            f"({master_data_rows}) does not match the number of "
+            f"rows of the merged inventory ({len(merged_rows)}).\n"
+            "It is not safe to assume positional correspondence between "
+            "both files."
         )
 
     changes: dict[str, list[str]] = {}
@@ -300,7 +294,7 @@ def update_xlsx(
             new_norm = normalize_value(new_value_str)
 
             if current_norm == new_norm:
-                continue  # No hay cambio, no sobrescribir.
+                continue  # No change, do not overwrite.
 
             cell.value = coerce_for_cell(new_value_str)
 
@@ -313,7 +307,7 @@ def update_xlsx(
 
 
 # ============================================================
-# REPORTE DE CAMBIOS
+# CHANGE REPORT
 # ============================================================
 
 
@@ -323,17 +317,19 @@ def print_change_report(
 ) -> None:
     print()
     if not changes:
-        print("No se detectaron cambios respecto al spreadsheet maestro previo.")
+        print(
+            "No changes were detected with respect to the previous master spreadsheet."
+        )
         return
 
-    print("Columnas modificadas:")
+    print("Modified columns:")
     print()
     for col_idx, column_name in enumerate(merged_header):
         if column_name not in changes:
             continue
         letter = column_letter(col_idx)
         addresses = changes[column_name]
-        print(f"Columna {letter} ({column_name})")
+        print(f"Column {letter} ({column_name})")
         print(", ".join(addresses))
         print()
 
@@ -344,7 +340,7 @@ def print_change_report(
 
 
 class CliArguments(NamedTuple):
-    """Argumentos de línea de comandos; `output` es None si no se indicó."""
+    """Command-line arguments; `output` is None if it was not given."""
 
     merged: Path
     master: Path
@@ -353,40 +349,40 @@ class CliArguments(NamedTuple):
 
 def parse_cli_arguments(argv: Sequence[str]) -> CliArguments:
     """
-    Interpreta los argumentos de línea de comandos (sin el nombre del programa).
+    Parses the command-line arguments (without the program name).
 
-    Decisiones de diseño:
-    - Los archivos son opciones nombradas: con argumentos posicionales, intercambiar
-      el CSV fusionado y el spreadsheet maestro solo se detectaría más tarde y con
-      mensajes confusos.
-    - La salida es opcional; su valor por defecto depende de la extensión del
-      maestro, por lo que se resuelve en `main`.
+    Design decisions:
+    - The files are named options: with positional arguments, swapping
+      the merged CSV and the master spreadsheet would only be detected later and with
+      confusing messages.
+    - The output is optional; its default value depends on the extension of the
+      master, so it is resolved in `main`.
 
-    argparse termina el proceso con un mensaje de uso si falta una opción obligatoria.
+    argparse ends the process with a usage message if a mandatory option is missing.
     """
     parser = argparse.ArgumentParser(
-        description="Deposita el inventario fusionado sobre una copia del maestro."
+        description="Lays the merged inventory over a copy of the master."
     )
     parser.add_argument(
         "-i",
         "--merged",
         type=Path,
         required=True,
-        help="CSV del inventario fusionado (merged_inventory.csv).",
+        help="CSV of the merged inventory (merged_inventory.csv).",
     )
     parser.add_argument(
         "-m",
         "--master",
         type=Path,
         required=True,
-        help="Spreadsheet maestro original (.ods o .xlsx).",
+        help="Original master spreadsheet (.ods or .xlsx).",
     )
     parser.add_argument(
         "-o",
         "--output",
         type=Path,
         default=None,
-        help="Copia actualizada del maestro (por defecto <maestro>_updated.<ext>).",
+        help="Updated copy of the master (default <master>_updated.<ext>).",
     )
     args = parser.parse_args(argv)
     return CliArguments(merged=args.merged, master=args.master, output=args.output)
@@ -398,17 +394,17 @@ def main() -> None:
     master_path = cli.master
 
     for path, label in (
-        (merged_csv_path, "inventario fusionado"),
-        (master_path, "spreadsheet maestro"),
+        (merged_csv_path, "merged inventory"),
+        (master_path, "master spreadsheet"),
     ):
         if not path.is_file():
-            error(f"No se encontró el {label}:\n  {path}")
+            error(f"The {label} was not found:\n  {path}")
 
     ext = master_path.suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
         error(
-            "El spreadsheet maestro debe ser un archivo ODS "
-            "(.ods) o Excel (.xlsx):\n"
+            "The master spreadsheet must be an ODS (.ods) "
+            "or Excel (.xlsx) file:\n"
             f"  {master_path}"
         )
 
@@ -420,13 +416,13 @@ def main() -> None:
 
     if output_path.suffix.lower() != ext:
         error(
-            "La extensión del archivo de salida debe coincidir "
-            "con la del spreadsheet maestro "
+            "The extension of the output file must match "
+            "that of the master spreadsheet "
             f"({ext}):\n  {output_path}"
         )
 
     # --------------------------------------------------------
-    # Validar colisiones entre archivos de entrada y salida.
+    # Validate collisions between the input and output files.
     # --------------------------------------------------------
     resolved_output = output_path.resolve()
     resolved_merged = merged_csv_path.resolve()
@@ -434,20 +430,20 @@ def main() -> None:
 
     if resolved_output == resolved_merged:
         error(
-            "El archivo de salida no puede ser el mismo archivo "
-            "que el inventario fusionado:\n"
+            "The output file cannot be the same file "
+            "as the merged inventory:\n"
             f"  {output_path}"
         )
     if resolved_output == resolved_master:
         error(
-            "El archivo de salida no puede ser el mismo archivo "
-            "que el spreadsheet maestro (se debe generar una "
-            "copia):\n"
+            "The output file cannot be the same file "
+            "as the master spreadsheet (a copy must be "
+            "generated):\n"
             f"  {output_path}"
         )
 
     # --------------------------------------------------------
-    # Cargar inventario fusionado.
+    # Load the merged inventory.
     # --------------------------------------------------------
     _header_line, header_fields_raw, rows_raw = load_csv_data(merged_csv_path)
     merged_header = [strip_quotes(f) for f in header_fields_raw]
@@ -457,14 +453,14 @@ def main() -> None:
     merged_rows = [[strip_quotes(v) for v in row] for row in rows_raw]
 
     print()
-    print(f"Inventario fusionado                   : {merged_csv_path}")
-    print(f"Spreadsheet maestro                    : {master_path}")
-    print(f"Spreadsheet de salida                  : {output_path}")
-    print(f"Columnas en inventario fusionado       : {n_cols}")
-    print(f"Filas de datos en inventario fusionado : {len(merged_rows)}")
+    print(f"Merged inventory                 : {merged_csv_path}")
+    print(f"Master spreadsheet               : {master_path}")
+    print(f"Output spreadsheet               : {output_path}")
+    print(f"Columns in the merged inventory  : {n_cols}")
+    print(f"Data rows in the merged inventory: {len(merged_rows)}")
 
     # --------------------------------------------------------
-    # Procesar: crear copia + editar + reemplazo atómico.
+    # Process: create copy + edit + atomic replacement.
     # --------------------------------------------------------
     with tempfile.TemporaryDirectory(prefix="update_master_") as tmp_dir_str:
         tmp_dir = Path(tmp_dir_str)
@@ -489,7 +485,7 @@ def main() -> None:
                 libreoffice = find_libreoffice()
 
                 print()
-                print("Convirtiendo copia del maestro a XLSX (edición intermedia)...")
+                print("Converting the master copy to XLSX (intermediate editing)...")
                 xlsx_tmp = convert_with_libreoffice(
                     libreoffice, master_path, "xlsx", tmp_dir
                 )
@@ -500,7 +496,7 @@ def main() -> None:
                     merged_rows,
                 )
 
-                print("Reconvirtiendo copia editada a ODS...")
+                print("Converting the edited copy back to ODS...")
                 ods_tmp = convert_with_libreoffice(
                     libreoffice, xlsx_tmp, "ods", tmp_dir
                 )
@@ -517,18 +513,18 @@ def main() -> None:
                     pass
 
     # --------------------------------------------------------
-    # Reporte de cambios.
+    # Change report.
     # --------------------------------------------------------
     print_change_report(changes, merged_header)
 
     # --------------------------------------------------------
-    # Resultado.
+    # Result.
     # --------------------------------------------------------
     print()
-    print("[OK] Spreadsheet maestro actualizado correctamente.")
-    print(f"Inventario fusionado : {merged_csv_path}")
-    print(f"Maestro original     : {master_path}")
-    print(f"Maestro actualizado  : {output_path}")
+    print("[OK] Master spreadsheet updated successfully.")
+    print(f"Merged inventory : {merged_csv_path}")
+    print(f"Original master  : {master_path}")
+    print(f"Updated master   : {output_path}")
 
 
 if __name__ == "__main__":

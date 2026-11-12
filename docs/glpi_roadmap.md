@@ -35,7 +35,7 @@ GLPI is an ITAM/ITSM tool, not a DCIM/IPAM tool. The NetBox exporter is therefor
 **Decisions agreed with the project owner:**
 
 - Shared utilities are extracted into a new module `export_core.py` (Phase 1, behavior-preserving refactor).
-- The native `ComputerType` is fed from the `Tipo de maquina` column.
+- The native `ComputerType` is fed from the `Machine type` column.
 
 ---
 
@@ -83,14 +83,14 @@ The real choice is "REST CRUD" versus "native inventory submission"; both use JS
 
 ### ADR-03. VMs as `Computer` plus `ItemVirtualMachine` on the host
 
-- Each VM is a `Computer` with `ComputerType = "Máquina virtual"` (Phase 4), so it can hold an OS, network ports, a state and tickets.
+- Each VM is a `Computer` with `ComputerType = "Virtual machine"` (Phase 4), so it can hold an OS, network ports, a state and tickets.
 - Phase 8 adds an `ItemVirtualMachine` on the host Computer with the same UUID, and GLPI links both by UUID. The "guest UUID differs from host-reported UUID" risk disappears because the pipeline writes both sides from the same CSV value.
 
 ### ADR-04. Identity and normalization
 
 - The primary key is the native `Computer.uuid` field (no custom field), stored in lowercase as in NetBox (see [Architecture](architecture.md#uuid-normalization)).
 - Identity resolution reuses the NetBox two-stage rule: a UUID unique in both the CSV and GLPI; otherwise a name unique in both. A name match whose existing UUID is different and non-empty is skipped.
-- Local index keys are normalized to mirror `utf8mb4_unicode_ci`: casefolded, accent-stripped, whitespace-collapsed. Without this, "HP" vs "Hp" or "Producción" vs "Produccion" would create duplicates.
+- Local index keys are normalized to mirror `utf8mb4_unicode_ci`: casefolded, accent-stripped, whitespace-collapsed. Without this, "HP" vs "Hp" or "Café" vs "Cafe" would create duplicates.
 - A matching Computer in the trash (`is_deleted=1`) is skipped with a `WARNING`; it is never restored automatically.
 - Templates (`is_template=1`) are excluded.
 - A Computer with `is_dynamic=1` (agent-managed) is skipped with a `WARNING`, because updating it would create field locks.
@@ -101,7 +101,7 @@ All Computers of the entity and all referenced dropdown tables are downloaded on
 
 ### ADR-06. `glpi_mapping.yaml` is independent from `netbox_mapping.yaml`
 
-Each target owns its contract, and the value maps differ (NetBox status `active` vs a GLPI `State` name such as "Activo"). `netbox_mapping.yaml` is not modified. Shared logic lives in `export_core.py`, not in configuration.
+Each target owns its contract, and the value maps differ (NetBox status `active` vs a GLPI `State` name such as "Active"). `netbox_mapping.yaml` is not modified. Shared logic lives in `export_core.py`, not in configuration.
 
 ### ADR-07. Computers are never deleted
 
@@ -123,25 +123,25 @@ As in the NetBox exporter, only optional network pruning exists (`--prune-networ
 
 | CSV column | GLPI object / field | Phase |
 | ---------- | ------------------- | ----- |
-| `Nombre maquina` | `Computer.name` | 4 |
+| `Machine name` | `Computer.name` | 4 |
 | `UUID` | `Computer.uuid` (lowercase) | 4 |
 | `Serial Number` + `Service Tag` (coalesce) | `Computer.serial` | 4 |
-| `Nro Inventario` | `Computer.otherserial` | 4 |
-| `Descripcion` + `Notas` (concat_dot) | `Computer.comment` | 4 |
-| `Estado` | `State` → `states_id` | 3–4 |
-| `Tipo de maquina` | `ComputerType` → `computertypes_id` | 3–4 |
-| `Marca` | `Manufacturer` → `manufacturers_id` | 3–4 |
-| `Modelo` + `P/N` + `Altura (U)` | `ComputerModel` (`name`, `product_number`, `required_units`) | 3–4 |
-| `GLPI_LOCATION_NAME` (env) + `Fila` | Root `Location` + child `Location` → `locations_id` | 3–4 |
+| `Inventory number` | `Computer.otherserial` | 4 |
+| `Description` + `Notes` (concat_dot) | `Computer.comment` | 4 |
+| `Status` | `State` → `states_id` | 3–4 |
+| `Machine type` | `ComputerType` → `computertypes_id` | 3–4 |
+| `Manufacturer` | `Manufacturer` → `manufacturers_id` | 3–4 |
+| `Model` + `P/N` + `Height (U)` | `ComputerModel` (`name`, `product_number`, `required_units`) | 3–4 |
+| `GLPI_LOCATION_NAME` (env) + `Row` | Root `Location` + child `Location` → `locations_id` | 3–4 |
 | `GLPI_ENTITY_ID` (env) | `entities_id` | 2–4 |
-| `SO Host` + `Version SO Host` + `Kernel` | `Item_OperatingSystem` (`OperatingSystem`, `OperatingSystemVersion`, `OperatingSystemKernelVersion`) | 5 |
-| `Interfaces`, `IP`, `Red IP`, `MAC` | `NetworkPort` (Ethernet) → `NetworkName` → `IPAddress` (+ optional `IPNetwork`) | 6 |
-| `Rack` + `Posicion (U)` | `Rack` + `Item_Rack` | 7 |
-| `Cluster` + `SO Hipervisor` + `Version SO Hipervisor` | `Cluster` (`ClusterType`, `version`) + `Item_Cluster` (hypervisors) | 8 |
-| `Dispositivo Host` + `Threads (por socket)` × `Sockets` + `RAM (GB)` | `ItemVirtualMachine` on the host (`vcpu`, `ram` in MiB, `uuid`) | 8 |
-| `Fecha Inicio` + `Fecha Vencimiento` | `Infocom` (`warranty_date`, `warranty_duration` in months) | 9 |
-| `CPU Modelo`, `Cores (por socket)`, `Threads (por socket)`, `Sockets`, `RAM (GB)`, `Capacidad visible (GB)` | `Item_DeviceProcessor`, `Item_DeviceMemory`, `Item_Disk` | 10 |
-| `Rol`, `Entorno`, `Nodo Rundeck`, `Version BIOS`, `Fecha BIOS`, `RAID`, `Discos`, etc. | Fields plugin container | 11 |
+| `Host OS` + `Host OS version` + `Kernel` | `Item_OperatingSystem` (`OperatingSystem`, `OperatingSystemVersion`, `OperatingSystemKernelVersion`) | 5 |
+| `Interfaces`, `IP`, `IP network`, `MAC` | `NetworkPort` (Ethernet) → `NetworkName` → `IPAddress` (+ optional `IPNetwork`) | 6 |
+| `Rack` + `Position (U)` | `Rack` + `Item_Rack` | 7 |
+| `Cluster` + `Hypervisor OS` + `Hypervisor OS version` | `Cluster` (`ClusterType`, `version`) + `Item_Cluster` (hypervisors) | 8 |
+| `Host device` + `Threads (per socket)` × `Sockets` + `RAM (GB)` | `ItemVirtualMachine` on the host (`vcpu`, `ram` in MiB, `uuid`) | 8 |
+| `Start date` + `Expiration date` | `Infocom` (`warranty_date`, `warranty_duration` in months) | 9 |
+| `CPU model`, `Cores (per socket)`, `Threads (per socket)`, `Sockets`, `RAM (GB)`, `Visible capacity (GB)` | `Item_DeviceProcessor`, `Item_DeviceMemory`, `Item_Disk` | 10 |
+| `Role`, `Environment`, `Rundeck node`, `BIOS version`, `BIOS date`, `RAID`, `Disks`, etc. | Fields plugin container | 11 |
 
 ---
 
@@ -181,7 +181,7 @@ As in the NetBox exporter, only optional network pruning exists (`--prune-networ
 | NFR-04 Code quality | Uniform style | Clean `ruff check` and `ruff format`; `py_compile` passes |
 | NFR-05 Testing | No real network in tests | Per-phase tests in `tests/test_export_to_glpi.py` with `MagicMock`, global imports, full suite green |
 | NFR-06 Security | Least privilege | Credentials only from the environment or `.env`; tokens never logged; SSL verified by default; dedicated GLPI profile and IP-restricted App-Token |
-| NFR-07 Observability | Useful logs | Spanish log messages with proper levels; `--verbose` shows HTTP method, URL and status; the summary reports the request count |
+| NFR-07 Observability | Useful logs | English log messages with proper levels; `--verbose` shows HTTP method, URL and status; the summary reports the request count |
 | NFR-08 Fault tolerance | Isolated failures | A row error never aborts the run; configuration or connection errors abort with exit `1` |
 | NFR-09 HTTP resilience | Transient failures | Connect/read timeouts; backoff retries only for GET on 502/503/504; one session renewal on expired token |
 | NFR-10 Maintainability | Isolated transport | HTTP only inside `GlpiClient`; pure functions that return the state they modify |
@@ -194,7 +194,7 @@ As in the NetBox exporter, only optional network pruning exists (`--prune-networ
 ## Definition of Done (every phase)
 
 1. **Implementation** following `CLAUDE.md` §1–§8 and replicating the patterns of `export_to_netbox.py`: `NamedTuple`/`TypedDict`/Pydantic models, `*_error_wrap` context managers, functions that return caches and counters, early returns, and docstrings explaining the "why".
-2. **Phase tests** in `tests/test_export_to_glpi.py`, under a `# FASE N: ...` section with `TestXxx` classes. They use `MagicMock(spec=GlpiClient)` or the in-memory `FakeGlpiClient`, declare all imports at the top of the file, and make no network calls. The only exception is Phase 1, whose tests live in `tests/test_export_core.py` because they cover the shared module.
+2. **Phase tests** in `tests/test_export_to_glpi.py`, under a `# PHASE N: ...` section with `TestXxx` classes. They use `MagicMock(spec=GlpiClient)` or the in-memory `FakeGlpiClient`, declare all imports at the top of the file, and make no network calls. The only exception is Phase 1, whose tests live in `tests/test_export_core.py` because they cover the shared module.
 3. **Static checks** on every touched file, tests included:
 
    ```bash
@@ -219,7 +219,7 @@ Can run in parallel with Phase 1, ideally on a test instance or a clone of GLPI 
 
 1. **Setup > General > API:** enable the REST API and login with external token.
 2. **Create an API client** restricted to the pipeline host IP and record its `App-Token`.
-3. **Create a service account** (e.g. `svc-inventario`) with a dedicated profile: read, create and update rights on Computer, State, Manufacturer, ComputerModel, ComputerType and Location. Later phases add Rack, network ports, Infocom, Cluster, VM and OS. No purge right. Generate its remote access key (`user_token`) in its preferences.
+3. **Create a service account** (e.g. `svc-inventory`) with a dedicated profile: read, create and update rights on Computer, State, Manufacturer, ComputerModel, ComputerType and Location. Later phases add Rack, network ports, Infocom, Cluster, VM and OS. No purge right. Generate its remote access key (`user_token`) in its preferences.
 4. **Record the target entity ID** and choose the name of the datacenter root Location.
 5. **Review Setup > Fields unicity:** active rules on Computer (e.g. unique serial) will turn violating creations into row-level errors.
 6. **Check whether the servers already exist** as manual records. Same name and no UUID means the pipeline adopts them by name. A different name means a duplicate, so review the first `--dry-run`.
@@ -249,7 +249,7 @@ GLPI_LOCATION_NAME="Datacenter-1"
 
 - Exceptions `RowValidationError`, `ConfigValidationError`, `RowSkipCondition` and `FieldParseError`.
 - Types `SyncStatus`, `NodeType`, `CastType`, `CsvRow`, `FieldValue`, `SyncCounts`, `CsvIdentityCounts`, `ClassifiedRows` and `RACK_POSITION_MIN`.
-- Casts `parse_int`, `_to_float`, `parse_float`, `parse_float_to_int`, `parse_int_gb_to_mb`, `parse_rack_position`, `parse_bool_si_no` and `apply_cast`.
+- Casts `parse_int`, `_to_float`, `parse_float`, `parse_float_to_int`, `parse_int_gb_to_mb`, `parse_rack_position`, `parse_bool_yes_no` and `apply_cast`.
 - Base configuration: `CsvColumnDef`, `FieldMappingConfig` and a new `BaseMappingConfig` holding `csv_columns`, `empty_values`, `is_empty`, `map_value`, `map_value_by_source`, `get_column_def_by_source`, `get_required_columns`, `get_all_expected_columns`, `resolve_node_type`, `is_cluster_host`, `is_virtual_machine` and the `machine_type` map validation. `NetBoxMappingConfig` inherits from it.
 - Extraction: `concat_dot`, `_extract_raw_csv_value`, `extract_csv_value`, `_extract_concat_dot_value`, `_extract_coalesce_value`, `_extract_raw_source_value`, `_resolve_default_or_empty` and `get_node_type_from_row`.
 - Stages 1–3 of `_resolve_field_value` (extraction, empties and map). NetBox keeps `_validate_select_choice` and composes validation and cast on top.
@@ -260,7 +260,7 @@ GLPI_LOCATION_NAME="Datacenter-1"
 
 **Not moved yet:** network parsing (Phase 6) and `precompute_cluster_type_map` (Phase 8). They are extracted when GLPI needs them.
 
-**Tests:** the classes covering moved code move to `tests/test_export_core.py`: `TestParseInt`, `TestParseFloat`, `TestParseFloatToInt`, `TestParseRackPosition`, `TestParseIntGbToMb`, `TestParseBoolSiNo`, `TestApplyCast`, `TestApplyCastEdgeCases`, `TestExtractCsvValue`, `TestConcatDot`, `TestExtractConcatDotValue`, `TestGetNodeTypeFromRow`, `TestCountMachineNames`, `TestCountInventoryUuids`, `TestValidateCsvHeaders`, `TestFieldMappingConfig`, `TestResolveDefaultOrEmpty`, `TestExtractRawSourceValue`, `TestClassifyRows` and the generic part of `TestNetBoxMappingConfig`. New: `TestLoadYamlMapping` (generic model, invalid YAML, environment expansion) and `TestPrintSummaryAndExit` (target label and exit code).
+**Tests:** the classes covering moved code move to `tests/test_export_core.py`: `TestParseInt`, `TestParseFloat`, `TestParseFloatToInt`, `TestParseRackPosition`, `TestParseIntGbToMb`, `TestParseBoolYesNo`, `TestApplyCast`, `TestApplyCastEdgeCases`, `TestExtractCsvValue`, `TestConcatDot`, `TestExtractConcatDotValue`, `TestGetNodeTypeFromRow`, `TestCountMachineNames`, `TestCountInventoryUuids`, `TestValidateCsvHeaders`, `TestFieldMappingConfig`, `TestResolveDefaultOrEmpty`, `TestExtractRawSourceValue`, `TestClassifyRows` and the generic part of `TestNetBoxMappingConfig`. New: `TestLoadYamlMapping` (generic model, invalid YAML, environment expansion) and `TestPrintSummaryAndExit` (target label and exit code).
 
 **Docs:** `docs/components.md` ("Shared export core" section) and `README.md` (project structure).
 
@@ -305,18 +305,18 @@ GLPI_LOCATION_NAME="Datacenter-1"
 
 ```yaml
 csv_columns:            # same aliases as NetBox, GLPI-specific maps
-  machine_name: { source: "Nombre maquina", required: true }
-  machine_type: { source: "Tipo de maquina", required: true,
-                  map: { "dedicada": "dedicated", "hipervisor": "hypervisor", "vm": "vm" } }
-  status: { source: "Estado", map: { "activo": "Activo", "fuera de línea": "Fuera de línea", ... } }
+  machine_name: { source: "Machine name", required: true }
+  machine_type: { source: "Machine type", required: true,
+                  map: { "dedicated": "dedicated", "hypervisor": "hypervisor", "vm": "vm" } }
+  status: { source: "Status", map: { "active": "Active", "offline": "Offline", ... } }
   ...
 entity: { id: "${GLPI_ENTITY_ID}", is_recursive: true }
 location: { root_name: "${GLPI_LOCATION_NAME}" }
-states: ["Activo", "Planificado", "En preparación", "Fallido", "En inventario", "En baja", "Fuera de línea"]
-computer_types: { dedicated: "Servidor dedicado", hypervisor: "Hipervisor", vm: "Máquina virtual" }
+states: ["Active", "Planned", "Staged", "Failed", "Inventory", "Decommissioning", "Offline"]
+computer_types: { dedicated: "Dedicated server", hypervisor: "Hypervisor", vm: "Virtual machine" }
 node_types:
-  device:          { default_state: "En inventario", native_mappings: [...] }
-  virtual_machine: { default_state: "En preparación", native_mappings: [...] }
+  device:          { default_state: "Inventory", native_mappings: [...] }
+  virtual_machine: { default_state: "Staged", native_mappings: [...] }
 empty_values: [...]
 ```
 
@@ -334,12 +334,12 @@ empty_values: [...]
 - `DropdownCache: TypeAlias = dict[str, GlpiRecord]` and `prefetch_dropdown(client, itemtype) -> DropdownCache`. Pre-existing duplicates under the same normalized key resolve deterministically to the lowest id, with a `WARNING`.
 - `ensure_dropdown(client, itemtype, name, extra, cache, dry_run) -> tuple[GlpiRecord, DropdownCache]`: cached get-or-create; returns a mock with id `0` in dry-run. GLPI has no slugs, so NetBox's fallback-slug logic is not ported.
 - `ensure_states(...)` seeds the YAML states with Computer visibility. The exact visibility input (`DropdownVisibility`) is verified on the test instance at the start of the phase.
-- `ensure_location_tree(...)`: the root is looked up by name with `locations_id=0`; the `Fila` is a child keyed by `(parent_id, name)`. Location and State are created in the configured entity with the YAML `is_recursive` flag.
+- `ensure_location_tree(...)`: the root is looked up by name with `locations_id=0`; the `Row` is a child keyed by `(parent_id, name)`. Location and State are created in the configured entity with the YAML `is_recursive` flag.
 - `ensure_computer_model(...)` and `_sync_computer_model_attributes(...)` manage `product_number` and `required_units`. `precompute_model_heights(rows, config)` detects conflicting and zero heights.
 - `ensure_manufacturer` and `ensure_computer_type` reuse `ensure_dropdown`.
 - `TaxonomyStore(BaseModel)` groups the caches, analogous to `CacheStore`.
 
-**Tests:** `TestNormalizeLookupKey`, `TestPrefetchDropdown`, `TestEnsureDropdown` (cache hit without HTTP, miss creates, dry-run without POST, API error), `TestEnsureStates`, `TestEnsureLocationTree` (same `Fila` name under another root), `TestEnsureComputerModel` and `TestPrecomputeModelHeights`.
+**Tests:** `TestNormalizeLookupKey`, `TestPrefetchDropdown`, `TestEnsureDropdown` (cache hit without HTTP, miss creates, dry-run without POST, API error), `TestEnsureStates`, `TestEnsureLocationTree` (same `Row` name under another root), `TestEnsureComputerModel` and `TestPrecomputeModelHeights`.
 
 **Docs:** new `docs/glpi_mapping.md` (`entity`, `location`, `states`, `computer_types` sections).
 
@@ -401,9 +401,9 @@ empty_values: [...]
 ### Phase 8. Virtualization and clusters
 
 - **Extracted to the core:** `precompute_cluster_type_map` and its tests.
-- `ClusterType` from `SO Hipervisor`, and `Cluster` by name with `version` from `Version SO Hipervisor` (only when consistent across rows). `Item_Cluster` for hypervisors only.
+- `ClusterType` from `Hypervisor OS`, and `Cluster` by name with `version` from `Hypervisor OS version` (only when consistent across rows). `Item_Cluster` for hypervisors only.
 - New core cast `int_gib_to_mib` (×1024, see [Verified Assumptions](#verified-assumptions)).
-- `sync_item_virtual_machine(...)`: the host is resolved by name through a host cache, like `host_devices` in NetBox. Fields: `itemtype=Computer`, `items_id=<host>`, `name`, `uuid`, `vcpu ← Threads (por socket) × Sockets` (same derivation as NetBox `vcpus`), `ram ← RAM (GB) × 1024`. Identity is the UUID, or `(host, name)` when the UUID is empty. A VM that moved to another host has its `items_id` updated instead of being duplicated. A missing host produces a `WARNING`.
+- `sync_item_virtual_machine(...)`: the host is resolved by name through a host cache, like `host_devices` in NetBox. Fields: `itemtype=Computer`, `items_id=<host>`, `name`, `uuid`, `vcpu ← Threads (per socket) × Sockets` (same derivation as NetBox `vcpus`), `ram ← RAM (GB) × 1024`. Identity is the UUID, or `(host, name)` when the UUID is empty. A VM that moved to another host has its `items_id` updated instead of being duplicated. A missing host produces a `WARNING`.
 
 **Tests:** `TestPrecomputeClusterTypeMap` (moved), `TestParseIntGibToMib`, `TestEnsureCluster`, `TestSyncItemCluster` and `TestSyncItemVirtualMachine` (create, host change, no host, empty UUID, dry-run).
 
@@ -411,7 +411,7 @@ empty_values: [...]
 
 ### Phase 9. Warranty (Infocom)
 
-- New `glpi_mapping.yaml` columns: `warranty_start` (`Fecha Inicio`) and `warranty_end` (`Fecha Vencimiento`).
+- New `glpi_mapping.yaml` columns: `warranty_start` (`Start date`) and `warranty_end` (`Expiration date`).
 - New cast `date_dmy` (DD-MM-YYYY to ISO) and the pure function `compute_warranty_months(start, end)`.
 - 1:1 `Infocom` upsert with `warranty_date` and `warranty_duration`. When the duration is not a whole number of months, it is rounded and the exact end date is kept in `warranty_info`. An end date before the start date is an error of the warranty sub-step, not of the whole row.
 
@@ -419,8 +419,8 @@ empty_values: [...]
 
 ### Phase 10. Hardware components (optional, `components.enabled` in the YAML)
 
-- `DeviceProcessor` (`designation ← CPU Modelo`) with N `Item_DeviceProcessor` instances according to `Sockets`; each instance takes `Cores (por socket)` and `Threads (por socket)` as-is, since the collector already reports them per socket.
-- A generic `DeviceMemory` with one `RAM (GB) × 1024` instance. An `Item_Disk` named "Capacidad visible" with `totalsize` in MiB.
+- `DeviceProcessor` (`designation ← CPU model`) with N `Item_DeviceProcessor` instances according to `Sockets`; each instance takes `Cores (per socket)` and `Threads (per socket)` as-is, since the collector already reports them per socket.
+- A generic `DeviceMemory` with one `RAM (GB) × 1024` instance. An `Item_Disk` named "Visible capacity" with `totalsize` in MiB.
 - Reconciliation creates missing instances and removes extra ones, only among non-dynamic instances.
 
 **Tests:** `TestBuildProcessorInstances` and `TestReconcileComponents`.

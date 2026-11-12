@@ -1,10 +1,10 @@
 """
 inventory_pipeline
 ==================
-Pipeline ETL que consolida el inventario de servidores físicos y máquinas
-virtuales (salida de Rundeck + inventario maestro) y lo sincroniza con NetBox.
+ETL pipeline that consolidates the inventory of physical servers and virtual
+machines (Rundeck output + master inventory) and synchronizes it with NetBox.
 
-El punto de entrada recomendado es el orquestador `run_pipeline`
-(comando de consola `inventory-pipeline`); cada etapa puede ejecutarse
-también por separado con `python -m inventory_pipeline.<módulo>`.
+The recommended entry point is the `run_pipeline` orchestrator
+(`inventory-pipeline` console command); each stage can also be run
+separately with `python -m inventory_pipeline.<module>`.
 """

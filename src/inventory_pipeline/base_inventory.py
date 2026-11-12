@@ -1,13 +1,13 @@
 """
 base_inventory.py
 ==================
-Módulo de utilidades compartido por los tres scripts de inventario:
+Utility module shared by the three inventory scripts:
 
     prepare_master_inventory.py
     parse_job_output.py
     merge_inventories.py
 
-No se ejecuta directamente.
+It is not executed directly.
 """
 
 import sys
@@ -15,69 +15,69 @@ from pathlib import Path
 from typing import NoReturn
 
 # ============================================================
-# SALIDA DE ERROR FATAL
+# FATAL ERROR OUTPUT
 # ============================================================
 
 
 def error(message: str) -> NoReturn:
-    """Imprime un mensaje de error en stderr y termina con exit 1."""
+    """Prints an error message to stderr and exits with code 1."""
     print(f"[ERROR] {message}", file=sys.stderr)
     sys.exit(1)
 
 
 def usage(message: str) -> NoReturn:
-    """Imprime un mensaje de uso en stderr y termina con exit 1."""
+    """Prints a usage message to stderr and exits with code 1."""
     print(message, file=sys.stderr)
     sys.exit(1)
 
 
 # ============================================================
-# FORMATO rundeck_header_list.txt
+# rundeck_header_list.txt FORMAT
 #
-# Cada línea no vacía y no comentario tiene la forma:
+# Each non-empty, non-comment line has the form:
 #
-#     NOMBRE_COLUMNA|FLAG
+#     COLUMN_NAME|FLAG
 #
-# donde FLAG puede ser:
+# where FLAG can be:
 #
-#     0 -> columna no participa del procesamiento.
-#     1 -> columna participa normalmente.
-#     2 -> columna participa normalmente y corresponde a la
-#          clave utilizada para identificar una fila.
+#     0 -> the column does not take part in the processing.
+#     1 -> the column takes part normally.
+#     2 -> the column takes part normally and is the key
+#          used to identify a row.
 #
-# El orden de las líneas define el orden lógico de las columnas
-# que interesan al pipeline. Las columnas intermedias del
-# inventario maestro que no aparezcan en rundeck_header_list.txt se
-# conservan sin tocar y nunca se fusionan.
+# The order of the lines defines the logical order of the columns
+# the pipeline cares about. Intermediate columns of the master
+# inventory that do not appear in rundeck_header_list.txt are
+# kept untouched and are never merged.
 # ============================================================
 
 
 def load_rundeck_header_list(path: Path) -> list[tuple[str, int]]:
     """
-    Lee rundeck_header_list.txt y devuelve una lista de tuplas:
+    Reads rundeck_header_list.txt and returns a list of tuples:
 
-        [(nombre, flag), ...]
+        [(name, flag), ...]
 
-    Validaciones:
-    - El archivo debe existir y no estar vacío.
-    - Cada línea debe tener exactamente dos campos separados por '|'.
-    - NOMBRE no puede estar vacío.
-    - FLAG debe ser '0', '1' o '2'.
-    - No puede haber nombres duplicados.
-    - Debe existir exactamente una columna con FLAG 2.
+    Validations:
+    - The file must exist and must not be empty.
+    - Each line must have exactly two fields separated by '|'.
+    - NAME cannot be empty.
+    - FLAG must be '0', '1' or '2'.
+    - There cannot be duplicate names.
+    - There must be exactly one column with FLAG 2.
 
-    Parámetros
+    Parameters
     ----------
     path : Path
-        Ruta al archivo rundeck_header_list.txt.
+        Path to the rundeck_header_list.txt file.
 
-    Retorna
+    Returns
     -------
     list[tuple[str, int]]
-        Lista de (nombre_columna, flag).
+        List of (column_name, flag).
     """
     if not path.is_file():
-        error(f"No se encontró el archivo rundeck_header_list:\n  {path}")
+        error(f"rundeck_header_list file not found:\n  {path}")
 
     entries: list[tuple[str, int]] = []
     seen_names: set[str] = set()
@@ -87,7 +87,7 @@ def load_rundeck_header_list(path: Path) -> list[tuple[str, int]]:
             line = raw_line.strip()
 
             # ------------------------------------------------
-            # Ignorar líneas vacías y comentarios.
+            # Skip empty lines and comments.
             # ------------------------------------------------
             if not line or line.startswith("#"):
                 continue
@@ -96,51 +96,50 @@ def load_rundeck_header_list(path: Path) -> list[tuple[str, int]]:
 
             if len(parts) != 2:
                 error(
-                    f"rundeck_header_list línea {line_number}: formato inválido:\n"
+                    f"rundeck_header_list line {line_number}: invalid format:\n"
                     f"  {line}\n"
-                    f"Formato esperado:\n"
-                    f"  NOMBRE_COLUMNA|0\n"
-                    f"  NOMBRE_COLUMNA|1\n"
-                    f"  NOMBRE_COLUMNA|2"
+                    f"Expected format:\n"
+                    f"  COLUMN_NAME|0\n"
+                    f"  COLUMN_NAME|1\n"
+                    f"  COLUMN_NAME|2"
                 )
 
             name, flag_str = parts
 
             if not name:
                 error(
-                    f"rundeck_header_list línea {line_number}: "
-                    f"el nombre de columna está vacío."
+                    f"rundeck_header_list line {line_number}: the column name is empty."
                 )
 
             if flag_str not in ("0", "1", "2"):
                 error(
-                    f"rundeck_header_list línea {line_number}: "
-                    f"el flag debe ser 0, 1 o 2, se encontró '{flag_str}'."
+                    f"rundeck_header_list line {line_number}: "
+                    f"the flag must be 0, 1 or 2, found '{flag_str}'."
                 )
 
             if name in seen_names:
                 error(
-                    f"rundeck_header_list línea {line_number}: "
-                    f"nombre de columna duplicado: '{name}'."
+                    f"rundeck_header_list line {line_number}: "
+                    f"duplicate column name: '{name}'."
                 )
 
             seen_names.add(name)
             entries.append((name, int(flag_str)))
 
     if not entries:
-        error("rundeck_header_list está vacío (sin entradas válidas).")
+        error("rundeck_header_list is empty (no valid entries).")
 
     key_entries = [name for name, flag in entries if flag == 2]
 
     if len(key_entries) != 1:
         error(
-            "rundeck_header_list debe contener exactamente una columna "
-            f"con FLAG 2, pero se encontraron {len(key_entries)}.\n"
+            "rundeck_header_list must contain exactly one column "
+            f"with FLAG 2, but {len(key_entries)} were found.\n"
             + (
-                "Columnas con FLAG 2:\n"
+                "Columns with FLAG 2:\n"
                 + "\n".join(f"  - {name}" for name in key_entries)
                 if key_entries
-                else "No existe ninguna columna con FLAG 2."
+                else "There is no column with FLAG 2."
             )
         )
 
@@ -148,28 +147,28 @@ def load_rundeck_header_list(path: Path) -> list[tuple[str, int]]:
 
 
 # ============================================================
-# PARSEO DE UNA LÍNEA CSV RESPETANDO COMILLAS
+# PARSING A CSV LINE WHILE HONORING QUOTES
 #
-# Devuelve los campos "en crudo" (incluyendo las comillas que
-# los delimitan y las comillas dobles internas sin des-escapar).
-# Solo se usa para ubicar los límites de campo (comas fuera de
-# comillas), no para interpretar el contenido.
+# Returns the "raw" fields (including the quotes that delimit
+# them and the inner double quotes, not unescaped).
+# It is only used to locate field boundaries (commas outside
+# quotes), not to interpret the content.
 #
-# Retorna None si las comillas están desbalanceadas.
+# Returns None if the quotes are unbalanced.
 # ============================================================
 
 
 def split_quoted_csv_line(line: str) -> list[str] | None:
     """
-    Divide una línea CSV respetando campos entrecomillados.
+    Splits a CSV line honoring quoted fields.
 
-    Se elimina defensivamente cualquier terminador de línea
-    residual (CR, LF o CRLF) antes de procesar la línea.
+    Any residual line terminator (CR, LF or CRLF) is defensively
+    stripped before processing the line.
 
-    Cada campo se devuelve tal como aparece en el texto, comillas
-    incluidas. No des-escapa comillas dobles internas.
+    Each field is returned as it appears in the text, quotes
+    included. Inner double quotes are not unescaped.
 
-    Retorna None si las comillas están desbalanceadas.
+    Returns None if the quotes are unbalanced.
     """
     line = line.rstrip("\r\n")
 
@@ -185,7 +184,7 @@ def split_quoted_csv_line(line: str) -> list[str] | None:
         if char == '"':
             field_chars.append(char)
             if in_quotes and i + 1 < length and line[i + 1] == '"':
-                # Comilla doble escapada dentro de un campo.
+                # Escaped double quote inside a field.
                 field_chars.append('"')
                 i += 1
             else:
@@ -207,21 +206,21 @@ def split_quoted_csv_line(line: str) -> list[str] | None:
 
 
 # ============================================================
-# LIMPIEZA DE VALOR CSV
+# CSV VALUE CLEANUP
 # ============================================================
 
 
 def strip_quotes(value: str) -> str:
-    """Elimina las comillas externas de un campo CSV y des-escapa
-    las comillas dobles internas.
+    """Removes the outer quotes of a CSV field and unescapes
+    the inner double quotes.
 
-    Asume que el valor proviene de split_quoted_csv_line() y que
-    las comillas del campo ya fueron validadas allí. Esta función
-    no valida por sí misma si existen comillas desbalanceadas.
+    Assumes the value comes from split_quoted_csv_line() and that
+    the field quotes were already validated there. This function
+    does not check for unbalanced quotes by itself.
 
-    Ejemplos:
+    Examples:
         '"hello"' -> 'hello'
-        campo con comillas duplicadas -> campo con comillas simples
+        field with doubled quotes -> field with single quotes
         'unquoted' -> 'unquoted'
     """
     clean = value
@@ -234,10 +233,10 @@ def strip_quotes(value: str) -> str:
 
 
 def is_empty_or_na(value: str) -> bool:
-    """Retorna True si el valor, con o sin comillas, es vacío,
-    contiene solamente espacios en blanco o es 'N/A'.
+    """Returns True if the value, quoted or not, is empty,
+    contains only whitespace or is 'N/A'.
 
-    Ejemplos:
+    Examples:
         '' -> True
         '   ' -> True
         'N/A' -> True
@@ -250,15 +249,15 @@ def is_empty_or_na(value: str) -> bool:
 
 
 def clean_value(value: str) -> str:
-    """Elimina saltos de línea internos de un valor.
+    """Removes inner line breaks from a value.
 
-    Los saltos de línea se reemplazan por un espacio para evitar
-    concatenar palabras artificialmente.
+    Line breaks are replaced with a space to avoid
+    artificially joining words.
 
-    El orden de los reemplazos es deliberado: CRLF se procesa
-    primero para evitar que '\\r\\n' sea convertido en dos espacios.
+    The order of the replacements is deliberate: CRLF is processed
+    first so that '\\r\\n' is not turned into two spaces.
 
-    Ejemplos:
+    Examples:
         'hello\\nworld' -> 'hello world'
         'hello\\r\\nworld' -> 'hello world'
         'hello world' -> 'hello world'

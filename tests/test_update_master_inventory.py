@@ -25,7 +25,7 @@ from inventory_pipeline.update_master_inventory import (
 
 
 def _argv(merged: Path, master: Path, output: Path | None = None) -> list[str]:
-    """Construye el argv con opciones nombradas para invocar main()."""
+    """Builds the argv with named options to invoke main()."""
     argv = ["script.py", "--merged", str(merged), "--master", str(master)]
     if output is not None:
         argv += ["--output", str(output)]
@@ -33,7 +33,7 @@ def _argv(merged: Path, master: Path, output: Path | None = None) -> list[str]:
 
 
 class TestParseCliArguments:
-    """Valida el parseo de opciones nombradas."""
+    """Validates the parsing of named options."""
 
     def test_long_options_and_default_output(self) -> None:
         cli = parse_cli_arguments(["--merged", "m.csv", "--master", "x.xlsx"])
@@ -63,7 +63,7 @@ class TestParseCliArguments:
 
 
 class TestNormalization:
-    """Valida conversiones de celdas, formato de columnas y coerción numéricas."""
+    """Validates cell conversions, column format and numeric coercion."""
 
     @pytest.mark.parametrize(
         "value, expected",
@@ -112,7 +112,7 @@ class TestNormalization:
 
 
 class TestWorksheetValidation:
-    """Valida la interacción con las estructuras de openpyxl."""
+    """Validates the interaction with the openpyxl structures."""
 
     def test_get_active_worksheet_success(self) -> None:
         wb = Workbook()
@@ -143,7 +143,7 @@ class TestWorksheetValidation:
     def test_find_header_row_number(self) -> None:
         wb = Workbook()
         ws = cast(Worksheet, wb.active)
-        ws.append(["Inventario", "General"])
+        ws.append(["Inventory", "General"])
         ws.append(["UUID", "IP", "MAC"])
         ws.append(["123", "10.0.0.1", "aa:bb"])
 
@@ -153,7 +153,7 @@ class TestWorksheetValidation:
     def test_find_header_row_number_not_found(self) -> None:
         wb = Workbook()
         ws = cast(Worksheet, wb.active)
-        ws.append(["UUID", "MAC"])  # Faltaría IP
+        ws.append(["UUID", "MAC"])  # IP would be missing
 
         merged_header = ["UUID", "IP", "MAC"]
         assert find_header_row_number(ws, merged_header) is None
@@ -172,32 +172,34 @@ class TestWorksheetValidation:
 
 
 class TestUpdateXlsx:
-    """Valida la detección de cambios, mutación y salvaguardas."""
+    """Validates the detection of changes, mutation and safeguards."""
 
     def test_update_xlsx_happy_path(self, tmp_path: Path) -> None:
-        # Preparar archivo
+        # Prepare the file
         wb = Workbook()
         ws = cast(Worksheet, wb.active)
-        ws.append(["Inventario"])  # Fila 1 (basura)
-        ws.append(["UUID", "IP"])  # Fila 2 (header)
-        ws.append(["123", "10.0.0.1"])  # Fila 3 (data a modificar)
-        ws.append(["456", "10.0.0.2"])  # Fila 4 (data intacta)
+        ws.append(["Inventory"])  # Row 1 (garbage)
+        ws.append(["UUID", "IP"])  # Row 2 (header)
+        ws.append(["123", "10.0.0.1"])  # Row 3 (data to modify)
+        ws.append(["456", "10.0.0.2"])  # Row 4 (untouched data)
 
         xlsx_path = tmp_path / "master.xlsx"
         wb.save(xlsx_path)
 
         merged_header = ["UUID", "IP"]
-        # IP cambió a 10.0.0.99
+        # IP changed to 10.0.0.99
         merged_rows = [["123", "10.0.0.99"], ["456", "10.0.0.2"]]
 
         changes = update_xlsx(xlsx_path, merged_header, merged_rows)
 
         assert changes == {"IP": ["B3"]}
 
-        # Validar el archivo editado
+        # Validate the edited file
         edited_wb = openpyxl.load_workbook(xlsx_path)
         edited_ws = cast(Worksheet, edited_wb.active)
-        assert edited_ws["A3"].value == "123"  # No cambió, preserva su valor original
+        assert (
+            edited_ws["A3"].value == "123"
+        )  # Did not change, keeps its original value
         assert edited_ws["B3"].value == "10.0.0.99"
         assert edited_ws["A4"].value == "456"
         assert edited_ws["B4"].value == "10.0.0.2"
@@ -220,7 +222,7 @@ class TestUpdateXlsx:
         xlsx_path = tmp_path / "master.xlsx"
         wb.save(xlsx_path)
 
-        # merged_rows tiene 2 filas de datos, el master tiene 1
+        # merged_rows has 2 data rows, the master has 1
         merged_rows = [["123", "10.0.0.1"], ["456", "10.0.0.2"]]
 
         with pytest.raises(SystemExit):
@@ -228,7 +230,7 @@ class TestUpdateXlsx:
 
 
 class TestMainUpdateMasterInventory:
-    """Valida la integración principal (IO, Extensiones, Cleanups)."""
+    """Validates the main integration (IO, Extensions, Cleanups)."""
 
     @pytest.fixture
     def setup_files(self, tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -290,7 +292,7 @@ class TestMainUpdateMasterInventory:
         self, setup_files: tuple[Path, Path, Path]
     ) -> None:
         merged_csv, master_xlsx, _ = setup_files
-        # Cambiamos extensión a .txt
+        # We change the extension to .txt
         master_txt = master_xlsx.with_suffix(".txt")
         master_txt.touch()
 
@@ -304,7 +306,7 @@ class TestMainUpdateMasterInventory:
         self, setup_files: tuple[Path, Path, Path]
     ) -> None:
         merged_csv, master_xlsx, _ = setup_files
-        # Salida es ods pero master es xlsx
+        # Output is ods but master is xlsx
         output_ods = master_xlsx.parent / "master_updated.ods"
 
         with (
@@ -346,7 +348,7 @@ class TestMainUpdateMasterInventory:
 
         mock_load.return_value = ('"UUID"\n', ['"UUID"'], [['"123"']])
         mock_val.return_value = [['"123"']]
-        # Forzamos fallo (SystemExit simulando un update_xlsx abortando)
+        # We force a failure (SystemExit simulating update_xlsx aborting)
         mock_update.side_effect = SystemExit()
 
         with (
@@ -360,6 +362,6 @@ class TestMainUpdateMasterInventory:
             main()
 
         assert not output_xlsx.exists()
-        # Verificar que no quedan archivos *.tmp
+        # Verify that no *.tmp files remain
         tmp_files = list(output_xlsx.parent.glob(f".{output_xlsx.name}.*.tmp"))
         assert len(tmp_files) == 0

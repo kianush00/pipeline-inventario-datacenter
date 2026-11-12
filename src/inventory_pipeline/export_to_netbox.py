@@ -1,69 +1,69 @@
 """
 export_to_netbox.py
 ===================
-Exporta el inventario fusionado (merged_inventory.csv) a NetBox 4.6+.
+Exports the merged inventory (merged_inventory.csv) to NetBox 4.6+.
 
-Variables de entorno (también se leen desde el archivo .env de la raíz del
-proyecto; las ya definidas en el entorno tienen prioridad):
-    NETBOX_URL        → https://netbox.miempresa.com
-    NETBOX_TOKEN      → token con permisos write sobre
+Environment variables (also read from the .env file at the project
+root; those already defined in the environment take precedence):
+    NETBOX_URL        → https://netbox.mycompany.com
+    NETBOX_TOKEN      → token with write permissions over
                         dcim, virtualization, ipam, extras, core
-    NETBOX_VERIFY_SSL → "true" / "false"  (por defecto: true)
-    NETBOX_SITE_NAME  → nombre del Site único (lo referencia netbox_mapping.yaml)
+    NETBOX_VERIFY_SSL → "true" / "false"  (default: true)
+    NETBOX_SITE_NAME  → name of the single Site (referenced by netbox_mapping.yaml)
 
-Uso:
+Usage:
     python -m inventory_pipeline.export_to_netbox merged_inventory.csv \
-        [netbox_mapping.yaml] [opciones]
+        [netbox_mapping.yaml] [options]
 
-Si no se indica el mapping, se usa config/netbox_mapping.yaml (ver
+If the mapping is not given, config/netbox_mapping.yaml is used (see
 inventory_pipeline.paths).
 
-Opciones:
-    --dry-run               Muestra las operaciones que se ejecutarían sin
-                            modificar NetBox. Útil para validar antes del
-                            primer sync real.
-    --verbose               Activa los logs de nivel DEBUG.
-    --prune-network-orphans Reconcilia la red de cada nodo con el CSV: elimina
-                            las interfaces y MACs que ya no existen en él y
-                            desasigna sus IPs (ver "Red e interfaces").
+Options:
+    --dry-run               Shows the operations that would be executed without
+                            modifying NetBox. Useful to validate before the
+                            first real sync.
+    --verbose               Enables DEBUG level logs.
+    --prune-network-orphans Reconciles the network of each node with the CSV: removes
+                            the interfaces and MACs that no longer exist in it and
+                            unassigns their IPs (see "Network and interfaces").
 
-Identidad e idempotencia (por fila, dentro del Site configurado):
-    1. Por custom field 'inventory_uuid' (coincidencia exacta). Se usa solo si
-       el UUID es único en el CSV y en NetBox; si pertenece a un nodo de otro
-       Site, la fila se omite (SKIP) en lugar de moverlo o duplicarlo.
-    2. Si el UUID no resuelve, por nombre dentro del Site, que debe ser único
-       en el CSV y en NetBox y no pertenecer a un nodo con otro UUID.
-    Así un cambio de nombre en el CSV actualiza el objeto existente en lugar de
-    crear un duplicado, y las filas con identificadores ambiguos nunca se
-    pisan entre sí. Solo se envían los campos que cambiaron.
+Identity and idempotency (per row, within the configured Site):
+    1. By the 'inventory_uuid' custom field (exact match). It is used only if
+       the UUID is unique in the CSV and in NetBox; if it belongs to a node of another
+       Site, the row is skipped (SKIP) instead of moving or duplicating it.
+    2. If the UUID does not resolve, by name within the Site, which must be unique
+       in the CSV and in NetBox and must not belong to a node with another UUID.
+    This way a name change in the CSV updates the existing object instead of
+    creating a duplicate, and rows with ambiguous identifiers never
+    clobber each other. Only the fields that changed are sent.
 
-Formato de entrada del CSV:
-    - Campos simples: se procesan como strings directos (con .strip()).
-    - Valores vacíos: se ignoran aquellos que coincidan exactamente con
-      los valores definidos en `empty_values` del YAML (ej. "N/A", "None").
-    - Registros con menos campos que el encabezado se completan con vacíos
-      (WARNING); con campos de más se descartan (ERROR). Los mensajes indican la
-      línea física del archivo donde empieza cada registro.
-    - Altura (U) y P/N pertenecen al DeviceType, compartido por todos los equipos
-      de un modelo: se consolidan una vez por modelo (primer valor no vacío) y un
-      valor vacío nunca borra el que ya tiene NetBox.
-    - Interfaces de red: Las 5 columnas de red (Interfaces, estado, IP,
-      Red IP, MAC) admiten múltiples valores separados por comas (`,`).
-      Todos deben tener la misma cantidad de elementos por celda para
-      sincronizarse correctamente.
+CSV input format:
+    - Simple fields: processed as plain strings (with .strip()).
+    - Empty values: those that match exactly the values defined in
+      `empty_values` of the YAML (e.g. "N/A", "None") are ignored.
+    - Records with fewer fields than the header are padded with empty values
+      (WARNING); those with extra fields are discarded (ERROR). The messages state the
+      physical line of the file where each record starts.
+    - Height (U) and P/N belong to the DeviceType, shared by all the devices
+      of a model: they are consolidated once per model (first non-empty value) and an
+      empty value never erases the one NetBox already has.
+    - Network interfaces: The 5 network columns (Interfaces, status, IP,
+      IP network, MAC) accept multiple comma-separated values (`,`).
+      All of them must have the same number of elements per cell to
+      be synchronized correctly.
 
-Red e interfaces:
-    - Por interfaz se sincronizan Prefix, IP y MAC. Si una interfaz cambia de
-      nombre conservando su IP o MAC, se renombra la existente (no se crea otra).
-    - Una IP ya asignada a otra interfaz se omite con WARNING: NetBox no admite
-      duplicarla.
-    - Con --prune-network-orphans, las IPs con rol asignado en NetBox (secondary,
-      vip, etc.) nunca se desasignan, y una interfaz huérfana que las aloje se
-      conserva.
+Network and interfaces:
+    - Per interface, Prefix, IP and MAC are synchronized. If an interface changes
+      its name while keeping its IP or MAC, the existing one is renamed (no other is created).
+    - An IP already assigned to another interface is skipped with a WARNING: NetBox does
+      not allow duplicating it.
+    - With --prune-network-orphans, IPs with a role assigned in NetBox (secondary,
+      vip, etc.) are never unassigned, and an orphan interface that hosts them is
+      kept.
 
-Códigos de salida:
-    0 → sin errores
-    1 → al menos un ERROR (fila, interfaz o registro CSV descartado)
+Exit codes:
+    0 → no errors
+    1 → at least one ERROR (row, interface or CSV record discarded)
 """
 
 import argparse
@@ -126,45 +126,45 @@ log = logging.getLogger("export_to_netbox")
 
 
 # ============================================================
-# ERRORES PERSONALIZADOS
+# CUSTOM ERRORS
 # ============================================================
 
 
 class RowValidationError(ValueError):
-    """Excepción lanzada cuando los datos de una fila son explícitamente inválidos."""
+    """Exception raised when the data of a row is explicitly invalid."""
 
 
 class ConfigValidationError(ValueError):
-    """Excepción lanzada cuando hay errores críticos de configuración en el script o YAML."""
+    """Exception raised when there are critical configuration errors in the script or YAML."""
 
 
 class RowSkipCondition(Exception):
-    """Excepción lanzada para abortar tempranamente el procesamiento
-    de una fila de forma silenciosa (SKIP)."""
+    """Exception raised to abort early the processing
+    of a row silently (SKIP)."""
 
 
 class ResourceAssignedElsewhere(Exception):
-    """Excepción lanzada cuando un recurso que debe ser único (ej. una IP) ya está
-    asignado a otra interfaz; `record` es el registro de NetBox que lo ocupa."""
+    """Exception raised when a resource that must be unique (e.g. an IP) is already
+    assigned to another interface; `record` is the NetBox record that holds it."""
 
     def __init__(self, record: "NetBoxObject") -> None:
-        super().__init__("El recurso ya está asignado a otra interfaz.")
+        super().__init__("The resource is already assigned to another interface.")
         self.record = record
 
 
 class NetBoxApiError(Exception):
-    """Excepción lanzada cuando ocurre un error de API persistente
-    al interactuar con Pynetbox (RequestError)."""
+    """Exception raised when a persistent API error occurs
+    while interacting with Pynetbox (RequestError)."""
 
 
 class FieldParseError(ValueError):
-    """Excepción lanzada cuando un campo opcional contiene datos mal formados,
-    permitiendo a la capa superior decidir si ignorarlo o abortar la fila."""
+    """Exception raised when an optional field contains malformed data,
+    allowing the upper layer to decide whether to ignore it or abort the row."""
 
 
 @contextmanager
 def netbox_error_wrap(msg: str) -> Generator[None, None, None]:
-    """Envuelve errores de la API de NetBox en excepciones legibles de nuestro dominio."""
+    """Wraps NetBox API errors into readable exceptions of our domain."""
     try:
         yield
     except RequestError as e:
@@ -172,7 +172,7 @@ def netbox_error_wrap(msg: str) -> Generator[None, None, None]:
 
 
 # ============================================================
-# TYPE ALIASES Y ESTRUCTURAS DE TIPOS
+# TYPE ALIASES AND TYPE STRUCTURES
 # ============================================================
 
 
@@ -195,19 +195,19 @@ class CastType(str, Enum):
     FLOAT_TO_INT = "float_to_int"
     INT_GB_TO_MB = "int_gb_to_mb"
     RACK_POSITION = "rack_position"
-    BOOL_SI_NO = "bool_si_no"
+    BOOL_YES_NO = "bool_yes_no"
     LOWER = "lower"
 
 
-# Posición mínima (U) que NetBox acepta en Device.position (MinValueValidator(1)).
+# Minimum position (U) that NetBox accepts in Device.position (MinValueValidator(1)).
 RACK_POSITION_MIN: Final = 1.0
-# Altura por defecto (U) con la que se crea un DeviceType si el CSV no la informa.
+# Default height (U) with which a DeviceType is created if the CSV does not report it.
 DEFAULT_DEVICE_TYPE_U_HEIGHT: Final = 1.0
-# Longitud máxima de DeviceType.part_number en NetBox (CharField max_length=50).
+# Maximum length of DeviceType.part_number in NetBox (CharField max_length=50).
 PART_NUMBER_MAX_LENGTH: Final = 50
 
-# Los alias `type` (PEP 695) se evalúan de forma diferida: pueden referenciar clases
-# definidas más abajo en el módulo (ej. MockNetBoxRecord) sin comillas.
+# `type` aliases (PEP 695) are evaluated lazily: they can reference classes
+# defined further down in the module (e.g. MockNetBoxRecord) without quotes.
 type NetBoxObject = Record | MockNetBoxRecord
 type CsvRow = dict[str, str]
 type FieldValue = str | int | float | bool | list[str] | None
@@ -218,10 +218,10 @@ type NetBoxPayload = dict[str, Any]
 
 class SiteScopedName(NamedTuple):
     """
-    Clave de objetos cuyo nombre solo es único dentro de un Site (Location, Rack, Device).
+    Key of objects whose name is only unique within a Site (Location, Rack, Device).
 
-    Al ser una tupla con nombre, es compatible con las tuplas `(site_id, nombre)`
-    como clave de diccionario.
+    Being a named tuple, it is compatible with `(site_id, name)` tuples
+    as a dictionary key.
     """
 
     site_id: int
@@ -229,37 +229,37 @@ class SiteScopedName(NamedTuple):
 
 
 class DeviceTypeKey(NamedTuple):
-    """Identidad de un modelo de hardware, con fabricante y modelo tal como vienen del CSV."""
+    """Identity of a hardware model, with manufacturer and model as they come from the CSV."""
 
     manufacturer: str
     model: str
 
     @property
     def label(self) -> str:
-        """Etiqueta legible para logs (ej. 'Dell / R640')."""
+        """Readable label for logs (e.g. 'Dell / R640')."""
         return f"{self.manufacturer} / {self.model}"
 
 
 class NumberedRow(NamedTuple):
-    """Fila del CSV junto con la línea física del archivo donde empieza."""
+    """CSV row along with the physical line of the file where it starts."""
 
     line_number: int
     row: CsvRow
 
 
-# Alias de Tipos para los Cachés de NetBox
+# Type aliases for the NetBox caches
 type NameCache = dict[str, NetBoxObject]
 type SiteNameCache = dict[SiteScopedName, NetBoxObject]
-# Clave (nombre del fabricante *en NetBox*, modelo): puede diferir del texto del CSV
-# cuando se reutiliza un fabricante existente por slug, por eso no es DeviceTypeKey.
+# Key (manufacturer name *in NetBox*, model): it may differ from the CSV text
+# when an existing manufacturer is reused by slug, which is why it is not DeviceTypeKey.
 type ManufModelCache = dict[tuple[str, str], NetBoxObject]
 type HostDeviceCache = dict[SiteScopedName, int | None]
 
 
 class DeviceTypeAttributes(NamedTuple):
     """
-    Atributos de nivel de modelo de un DeviceType informados por el CSV.
-    `None` significa "no informado": nunca se usa para modificar un DeviceType existente.
+    Model-level attributes of a DeviceType reported by the CSV.
+    `None` means "not reported": it is never used to modify an existing DeviceType.
     """
 
     u_height: float | None
@@ -271,10 +271,10 @@ type DeviceTypeAttrsMap = dict[DeviceTypeKey, DeviceTypeAttributes]
 
 class CsvIdentityCounts(NamedTuple):
     """
-    Conteo global de identidades en el CSV, calculado una sola vez por ejecución.
+    Global count of identities in the CSV, computed only once per run.
 
-    Se usa para validar la unicidad (por UUID y por nombre) antes de permitir que
-    una fila actualice un objeto existente en NetBox.
+    It is used to validate uniqueness (by UUID and by name) before allowing
+    a row to update an existing object in NetBox.
     """
 
     names: Counter[str]
@@ -283,9 +283,9 @@ class CsvIdentityCounts(NamedTuple):
 
 class CsvData(NamedTuple):
     """
-    Filas del CSV de entrada junto con la línea física del archivo donde empieza
-    cada una (paralelas: `line_numbers[i]` corresponde a `rows[i]`).
-    `rejected_rows` cuenta los registros descartados por estructura inválida.
+    Rows of the input CSV along with the physical line of the file where each
+    one starts (parallel: `line_numbers[i]` corresponds to `rows[i]`).
+    `rejected_rows` counts the records discarded due to an invalid structure.
     """
 
     rows: list[CsvRow]
@@ -295,8 +295,8 @@ class CsvData(NamedTuple):
 
 class SyncResult(NamedTuple):
     """
-    Resultado de la sincronización de un Device o VM.
-    Contiene: (estado de sincronización, ID del objeto en NetBox, objeto NetBox instanciado o None si hubo error/skip).
+    Result of the synchronization of a Device or VM.
+    Contains: (synchronization status, ID of the object in NetBox, instantiated NetBox object or None if there was an error/skip).
     """
 
     status: SyncStatus
@@ -306,8 +306,8 @@ class SyncResult(NamedTuple):
 
 class ClassifiedRows(NamedTuple):
     """
-    Estructura de datos que almacena las filas del CSV clasificadas
-    por su rol en la jerarquía (físico vs virtual).
+    Data structure that stores the CSV rows classified
+    by their role in the hierarchy (physical vs virtual).
     """
 
     device_rows: list[NumberedRow]
@@ -315,7 +315,7 @@ class ClassifiedRows(NamedTuple):
 
 
 class Ipv4Candidate(NamedTuple):
-    """Tupla que representa un candidato a IPv4 primaria: (ip_id, iface_obj, mac_obj)."""
+    """Tuple that represents a primary IPv4 candidate: (ip_id, iface_obj, mac_obj)."""
 
     ip_id: int
     iface_obj: NetBoxObject
@@ -323,7 +323,7 @@ class Ipv4Candidate(NamedTuple):
 
 
 class PrunedNetworkMetrics(NamedTuple):
-    """Métricas del procesamiento de redes huérfanas."""
+    """Metrics of the processing of orphan networks."""
 
     pruned_interfaces: int
     pruned_ips: int
@@ -333,8 +333,8 @@ class PrunedNetworkMetrics(NamedTuple):
 
 class SingleInterfaceResult(NamedTuple):
     """
-    Resultado de procesar una única interfaz.
-    Contiene: (Interfaz, IP asignada o None, MAC asignada o None, booleano indicando si hubo cambios).
+    Result of processing a single interface.
+    Contains: (Interface, assigned IP or None, assigned MAC or None, boolean indicating whether there were changes).
     """
 
     iface_obj: NetBoxObject
@@ -345,8 +345,8 @@ class SingleInterfaceResult(NamedTuple):
 
 class InterfaceSyncResult(NamedTuple):
     """
-    Resultado global de procesar una lista de interfaces para un nodo.
-    Contiene: (cantidad de errores, lista de candidatos a IP primaria, booleano indicando si hubo cambios).
+    Global result of processing a list of interfaces for a node.
+    Contains: (number of errors, list of primary IP candidates, boolean indicating whether there were changes).
     """
 
     errors: int
@@ -356,8 +356,8 @@ class InterfaceSyncResult(NamedTuple):
 
 class InterfaceFingerprint(NamedTuple):
     """
-    Identidad de red de una interfaz, usada para reconocerla aunque cambie de nombre.
-    `ip_hosts` son direcciones sin máscara (un cambio de máscara no altera la identidad).
+    Network identity of an interface, used to recognize it even if it changes its name.
+    `ip_hosts` are addresses without a mask (a mask change does not alter the identity).
     """
 
     ip_hosts: frozenset[str]
@@ -365,15 +365,15 @@ class InterfaceFingerprint(NamedTuple):
 
 
 class InterfaceRename(NamedTuple):
-    """Renombre detectado de una interfaz existente en NetBox (ej. 'ens18' → 'eth0')."""
+    """Detected rename of an existing interface in NetBox (e.g. 'ens18' → 'eth0')."""
 
     old_name: str
     new_name: str
-    evidence: str  # Señales que respaldan la coincidencia (ej. "IP 10.0.0.5").
+    evidence: str  # Signals that back the match (e.g. "IP 10.0.0.5").
 
 
 class NetworkInterfaceData(TypedDict):
-    """Representa la estructura de datos parseada de una interfaz de red."""
+    """Represents the parsed data structure of a network interface."""
 
     name: str
     enabled: bool
@@ -385,7 +385,7 @@ class NetworkInterfaceData(TypedDict):
 
 
 class BaseNodeData(TypedDict):
-    """Representa la estructura base resuelta de un nodo antes de sincronizar."""
+    """Represents the resolved base structure of a node before synchronizing."""
 
     machine_name: str
     inventory_uuid: str
@@ -394,18 +394,18 @@ class BaseNodeData(TypedDict):
 
 
 # ============================================================
-# ENDPOINTS DE NETBOX
+# NETBOX ENDPOINTS
 # ============================================================
 
 
 class NetBoxEndpoints(BaseModel):
     """
-    Representa los endpoints de NetBox utilizados por el script.
+    Represents the NetBox endpoints used by the script.
 
-    La clase se utiliza para centralizar el acceso a los endpoints
-    de NetBox y asegurar que todos los endpoints requeridos estén
-    disponibles antes de comenzar cualquier operación de
-    sincronización.
+    The class is used to centralize access to the NetBox
+    endpoints and to ensure that all the required endpoints are
+    available before starting any synchronization
+    operation.
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
@@ -432,12 +432,12 @@ class NetBoxEndpoints(BaseModel):
 
 
 # ============================================================
-# MODELOS DE CONFIGURACIÓN YAML
+# YAML CONFIGURATION MODELS
 # ============================================================
 
 
 def _generate_slug_for_model(data: Any) -> Any:
-    """Helper compartido para autogenerar 'slug' a partir de 'name'."""
+    """Shared helper to auto-generate 'slug' from 'name'."""
     if isinstance(data, dict):
         raw_slug = data.get("slug") or data.get("name")
         if raw_slug:
@@ -446,7 +446,7 @@ def _generate_slug_for_model(data: Any) -> Any:
 
 
 class SiteConfig(BaseModel):
-    """Configuración del Site en NetBox."""
+    """Configuration of the Site in NetBox."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -457,8 +457,8 @@ class SiteConfig(BaseModel):
     @classmethod
     def generate_slug_if_missing(cls, data: Any) -> Any:
         """
-        Genera un slug automáticamente a partir del nombre si el valor está vacío.
-        Retorna el slug generado o el valor original.
+        Automatically generates a slug from the name if the value is empty.
+        Returns the generated slug or the original value.
         """
         return _generate_slug_for_model(data)
 
@@ -466,12 +466,12 @@ class SiteConfig(BaseModel):
     @classmethod
     def validate_no_unresolved_vars(cls, v: str | None) -> str | None:
         """
-        Valida que el string no contenga variables sin resolver (marcadas con @@).
-        Retorna el valor original si es válido.
+        Validates that the string does not contain unresolved variables (marked with @@).
+        Returns the original value if it is valid.
         """
         if v is not None and "$" in v and re.search(r"\$\{?\w+\}?", v):
             raise ValueError(
-                f"El valor contiene variables de entorno no resueltas: '{v}'"
+                f"The value contains unresolved environment variables: '{v}'"
             )
         return v
 
@@ -485,14 +485,14 @@ class ClusterTypeDefaultConfig(BaseModel):
     @classmethod
     def generate_slug_if_missing(cls, data: Any) -> Any:
         """
-        Genera un slug automáticamente a partir del nombre si el valor está vacío.
-        Retorna el slug generado o el valor original.
+        Automatically generates a slug from the name if the value is empty.
+        Returns the generated slug or the original value.
         """
         return _generate_slug_for_model(data)
 
 
 class ClusterTypeConfig(BaseModel):
-    """Configuración del ClusterType en NetBox."""
+    """Configuration of the ClusterType in NetBox."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -500,7 +500,7 @@ class ClusterTypeConfig(BaseModel):
 
 
 class DeviceRoleConfig(BaseModel):
-    """Configuración de un DeviceRole."""
+    """Configuration of a DeviceRole."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -513,14 +513,14 @@ class DeviceRoleConfig(BaseModel):
     @classmethod
     def generate_slug_if_missing(cls, data: Any) -> Any:
         """
-        Genera un slug automáticamente a partir del nombre si el valor está vacío.
-        Retorna el slug generado o el valor original.
+        Automatically generates a slug from the name if the value is empty.
+        Returns the generated slug or the original value.
         """
         return _generate_slug_for_model(data)
 
 
 class ChoiceItemConfig(BaseModel):
-    """Elemento individual de un Choice Set."""
+    """Individual element of a Choice Set."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -529,7 +529,7 @@ class ChoiceItemConfig(BaseModel):
 
 
 class ChoiceSetConfig(BaseModel):
-    """Definición de un Choice Set para Custom Fields de tipo 'select'."""
+    """Definition of a Choice Set for Custom Fields of type 'select'."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -541,7 +541,7 @@ OBJECT_TYPE_PATTERN = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 
 
 class CustomFieldConfig(BaseModel):
-    """Definición unificada de Custom Field para campos personalizados."""
+    """Unified Custom Field definition for custom fields."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -572,32 +572,32 @@ class CustomFieldConfig(BaseModel):
     @classmethod
     def validate_object_types(cls, v: list[str]) -> list[str]:
         """
-        Valida que los tipos de objeto estén en la lista permitida.
-        Retorna la lista de object_types si es válida.
+        Validates that the object types are in the allowed list.
+        Returns the list of object_types if it is valid.
         """
         for ot in v:
             if not OBJECT_TYPE_PATTERN.match(ot):
                 raise ValueError(
-                    f"Formato de Object Type inválido: '{ot}'. "
-                    "Se esperaba 'app_label.model' (ej. 'dcim.device')."
+                    f"Invalid Object Type format: '{ot}'. "
+                    "Expected 'app_label.model' (e.g. 'dcim.device')."
                 )
         return v
 
     @model_validator(mode="after")
     def validate_choice_set_if_select(self) -> "CustomFieldConfig":
         """
-        Valida que un campo de tipo select tenga definido un choice_set.
-        Retorna la configuración actual si es válida.
+        Validates that a field of type select has a choice_set defined.
+        Returns the current configuration if it is valid.
         """
         if self.type in ("select", "multiselect") and not self.choice_set:
             raise ValueError(
-                "Los campos de tipo 'select' o 'multiselect' deben definir un 'choice_set'."
+                "Fields of type 'select' or 'multiselect' must define a 'choice_set'."
             )
         return self
 
 
 class FieldMappingConfig(BaseModel):
-    """Definición de mapeo entre columnas CSV y atributo NetBox."""
+    """Mapping definition between CSV columns and a NetBox attribute."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -611,47 +611,47 @@ class FieldMappingConfig(BaseModel):
     @model_validator(mode="after")
     def validate_transform_and_source(self) -> "FieldMappingConfig":
         """
-        Valida las configuraciones de transformación y columna de origen.
-        Retorna la configuración actual si es válida.
+        Validates the transformation and source column configurations.
+        Returns the current configuration if it is valid.
         """
         source_list = self.source if isinstance(self.source, list) else [self.source]
 
         if not source_list:
             raise ValueError(
-                f"El campo 'source' para target '{self.target}' no puede estar vacío."
+                f"The 'source' field for target '{self.target}' cannot be empty."
             )
 
         if any(not s.strip() for s in source_list):
             raise ValueError(
-                f"En 'source' (target '{self.target}'), ningún elemento puede estar vacío."
+                f"In 'source' (target '{self.target}'), no element can be empty."
             )
 
-        # Transform combina varias columnas, por lo que exige una lista
+        # Transform combines several columns, so it requires a list
         if self.transform and not isinstance(self.source, list):
             raise ValueError(
-                f"El transform '{self.transform}' para target '{self.target}' "
-                "requiere que 'source' sea explícitamente una lista."
+                f"The transform '{self.transform}' for target '{self.target}' "
+                "requires 'source' to be explicitly a list."
             )
 
         if isinstance(self.source, list) and not self.transform:
             raise ValueError(
-                f"Si 'source' es una lista (target '{self.target}'), "
-                "debes definir explícitamente un 'transform' "
-                "(ej. concat_dot, coalesce, product)."
+                f"If 'source' is a list (target '{self.target}'), "
+                "you must explicitly define a 'transform' "
+                "(e.g. concat_dot, coalesce, product)."
             )
 
         return self
 
 
 class StatusDefaultConfig(BaseModel):
-    """Configuración de estado por defecto."""
+    """Default status configuration."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     default: str = Field(min_length=1)
 
 
 class NodeMappingConfig(BaseModel):
-    """Configuración de mapeo y fallback para un tipo de nodo específico."""
+    """Mapping and fallback configuration for a specific node type."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -661,7 +661,7 @@ class NodeMappingConfig(BaseModel):
 
 
 class NodeTypesConfig(BaseModel):
-    """Configuración agrupada por tipo de nodo (device vs virtual_machine)."""
+    """Configuration grouped by node type (device vs virtual_machine)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -669,14 +669,14 @@ class NodeTypesConfig(BaseModel):
     virtual_machine: NodeMappingConfig
 
     def get_config(self, node_type: NodeType) -> NodeMappingConfig:
-        """Retorna la configuración de mapeo fuertemente tipada según el tipo de nodo."""
+        """Returns the strongly typed mapping configuration according to the node type."""
         if node_type == NodeType.DEVICE:
             return self.device
         return self.virtual_machine
 
 
 class CsvColumnDef(BaseModel):
-    """Definición de columna CSV de origen."""
+    """Definition of a source CSV column."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     source: str = Field(min_length=1)
@@ -686,13 +686,13 @@ class CsvColumnDef(BaseModel):
 
 class NetBoxMappingConfig(BaseModel):
     """
-    Contrato completo de configuración y mapeo cargado desde netbox_mapping.yaml.
-    Valida tipos, restricciones de valor y consistencia referencial.
-    Centraliza el acceso a columnas y métodos utilitarios de ejecución como is_empty().
+    Complete configuration and mapping contract loaded from netbox_mapping.yaml.
+    Validates types, value constraints and referential consistency.
+    Centralizes access to columns and runtime utility methods such as is_empty().
 
-    Las listas y diccionarios de este modelo (ej. custom_field_definitions) son
-    poblados automáticamente por Pydantic en la función load_config() al deserializar el
-    archivo YAML.
+    The lists and dictionaries of this model (e.g. custom_field_definitions) are
+    populated automatically by Pydantic in the load_config() function when deserializing the
+    YAML file.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -714,7 +714,7 @@ class NetBoxMappingConfig(BaseModel):
 
     def model_post_init(self, __context: Any, /) -> None:
         """
-        Inicializa los valores vacíos y el mapa indexado de Custom Fields O(1).
+        Initializes the empty values and the O(1) indexed map of Custom Fields.
         """
         empty_vals_lower = {v.lower() for v in self.empty_values}
         object.__setattr__(
@@ -731,25 +731,25 @@ class NetBoxMappingConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config_cross_references(self) -> "NetBoxMappingConfig":
         """
-        Valida que las referencias cruzadas dentro de la configuración sean correctas.
-        Retorna la configuración completa si es válida.
+        Validates that the cross references within the configuration are correct.
+        Returns the complete configuration if it is valid.
         """
-        # 1. Validar que exista el rol "Others" (insensible a mayúsculas) para fallback
+        # 1. Validate that the "Others" role exists (case-insensitive) for fallback
         role_names_lower = {r.name.strip().lower() for r in self.device_roles}
         if "others" not in role_names_lower:
             raise ValueError(
-                "La lista 'device_roles' debe incluir un rol 'Others' "
-                "para fallback de roles no reconocidos."
+                "The 'device_roles' list must include an 'Others' role "
+                "as a fallback for unrecognized roles."
             )
 
         cf_names = {cf.name for cf in self.custom_field_definitions}
         col_def = self.csv_columns.get("machine_type")
         if not col_def or not col_def.map:
             raise ValueError(
-                "La columna 'machine_type' debe tener un 'map' configurado en csv_columns."
+                "The 'machine_type' column must have a 'map' configured in csv_columns."
             )
 
-        # 3. Validar custom_mappings vs custom_field_definitions
+        # 3. Validate custom_mappings vs custom_field_definitions
         for node_type, node_config in [
             (NodeType.DEVICE, self.node_types.device),
             (NodeType.VIRTUAL_MACHINE, self.node_types.virtual_machine),
@@ -757,32 +757,32 @@ class NetBoxMappingConfig(BaseModel):
             for cmap in node_config.custom_mappings:
                 if cmap.target not in cf_names:
                     raise ValueError(
-                        f"El custom_mapping target '{cmap.target}' en '{node_type}' "
-                        "no está definido en custom_field_definitions."
+                        f"The custom_mapping target '{cmap.target}' in '{node_type}' "
+                        "is not defined in custom_field_definitions."
                     )
 
         return self
 
     def get_required_columns(self) -> set[str]:
         """
-        Retorna el conjunto de columnas obligatorias configuradas en el YAML.
-        Esta lista define las columnas que deben estar *presentes en los encabezados*
-        del CSV (fila 1). No implica que cada fila deba tener obligatoriamente un
-        *valor no vacío* en dicha columna.
+        Returns the set of mandatory columns configured in the YAML.
+        This list defines the columns that must be *present in the headers*
+        of the CSV (row 1). It does not imply that every row must necessarily have a
+        *non-empty value* in that column.
         """
         return {v.source for v in self.csv_columns.values() if v.required}
 
     def get_all_expected_columns(self) -> set[str]:
         """
-        Retorna el catálogo completo de nombres de columnas esperadas
-        en el CSV.
+        Returns the complete catalog of column names expected
+        in the CSV.
         """
         return {v.source for v in self.csv_columns.values()}
 
     def get_column_def_by_source(self, source_name: str) -> CsvColumnDef | None:
         """
-        Busca la definición de la columna a partir de su nombre exacto (source) en el CSV.
-        Retorna la definición de la columna si existe, None en caso contrario.
+        Looks up the column definition from its exact name (source) in the CSV.
+        Returns the column definition if it exists, None otherwise.
         """
         for col_def in self.csv_columns.values():
             if col_def.source == source_name:
@@ -793,8 +793,8 @@ class NetBoxMappingConfig(BaseModel):
         self, col_def: CsvColumnDef | None, value: str, identifier: str, strict: bool
     ) -> Any:
         """
-        Aplica un diccionario de mapeo a un valor dado.
-        Retorna el valor mapeado, o lanza una excepción si strict=True y no hay coincidencia.
+        Applies a mapping dictionary to a given value.
+        Returns the mapped value, or raises an exception if strict=True and there is no match.
         """
         if not col_def or not col_def.map:
             return value
@@ -804,7 +804,7 @@ class NetBoxMappingConfig(BaseModel):
         if mapped is not None:
             return mapped
 
-        # Si el valor ya es un valor de destino válido (fall-through)
+        # If the value is already a valid target value (fall-through)
         if norm_val in col_def.map.values():
             return norm_val
 
@@ -812,58 +812,58 @@ class NetBoxMappingConfig(BaseModel):
             return None
 
         raise RowValidationError(
-            f"El valor '{value}' de la {identifier} no está definido en el mapa configurado."
+            f"The value '{value}' of the {identifier} is not defined in the configured map."
         )
 
     def map_value(self, alias: str, value: str, strict: bool = True) -> Any:
         """
-        Aplica el mapa de transformación de la columna identificada por su alias.
-        Retorna el valor transformado.
+        Applies the transformation map of the column identified by its alias.
+        Returns the transformed value.
         """
         col_def = self.csv_columns.get(alias)
-        return self._apply_map(col_def, value, f"columna '{alias}'", strict)
+        return self._apply_map(col_def, value, f"column '{alias}'", strict)
 
     def map_value_by_source(self, source: str, value: str, strict: bool = True) -> Any:
         """
-        Igual que map_value, pero busca la columna por su nombre exacto (source) en el CSV.
-        Retorna el valor transformado.
+        Same as map_value, but looks up the column by its exact name (source) in the CSV.
+        Returns the transformed value.
         """
         col_def = self.get_column_def_by_source(source)
-        return self._apply_map(col_def, value, f"columna de origen '{source}'", strict)
+        return self._apply_map(col_def, value, f"source column '{source}'", strict)
 
     def get_custom_field_def(self, target: str) -> CustomFieldConfig | None:
-        """Retorna la definición de un Custom Field en O(1) por nombre de target."""
+        """Returns the definition of a Custom Field in O(1) by target name."""
         return self._custom_field_defs_map.get(target)
 
     def get_all_custom_field_defs(self) -> list[CustomFieldConfig]:
-        """Retorna la lista completa de definiciones de Custom Field."""
+        """Returns the complete list of Custom Field definitions."""
         return list(self._custom_field_defs_map.values())
 
     def is_empty(self, value: Any) -> bool:
         """
-        Determina si un valor es considerado vacío según empty_values.
-        Retorna True si el valor se considera vacío, False de lo contrario.
+        Determines whether a value is considered empty according to empty_values.
+        Returns True if the value is considered empty, False otherwise.
         """
         if value is None:
             return True
         return str(value).strip().lower() in self._empty_values_set
 
     def is_cluster_host(self, machine_type: str) -> bool:
-        """Determina si un machine_type (ya mapeado) es un host de clúster (hipervisor)."""
+        """Determines whether a machine_type (already mapped) is a cluster host (hypervisor)."""
         return machine_type == "hypervisor"
 
     def is_virtual_machine(self, machine_type: str) -> bool:
-        """Determina si un machine_type (ya mapeado) corresponde a una máquina virtual."""
+        """Determines whether a machine_type (already mapped) corresponds to a virtual machine."""
         return machine_type == "vm"
 
     def resolve_node_type(self, machine_type: str) -> NodeType:
         """
-        Resuelve el NodeType basándose en las listas semánticas.
-        Lanza RowValidationError si el campo está vacío.
-        Retorna el NodeType correspondiente.
+        Resolves the NodeType based on the semantic lists.
+        Raises RowValidationError if the field is empty.
+        Returns the corresponding NodeType.
         """
         if not machine_type:
-            raise RowValidationError("El campo 'machine_type' está vacío.")
+            raise RowValidationError("The 'machine_type' field is empty.")
 
         mapped_type = self.map_value("machine_type", machine_type, strict=True)
 
@@ -873,12 +873,12 @@ class NetBoxMappingConfig(BaseModel):
 
 
 # ===========================================================
-# CACHE DE DATOS
+# DATA CACHE
 # ===========================================================
 
 
 class MockNetBoxRecord(BaseModel):
-    """Representa un objeto simulado de NetBox para ejecuciones en modo dry-run."""
+    """Represents a simulated NetBox object for runs in dry-run mode."""
 
     model_config = ConfigDict(frozen=True, extra="allow")
 
@@ -890,7 +890,7 @@ class MockNetBoxRecord(BaseModel):
     vm_role: bool = False
     custom_fields: dict[str, Any] = Field(default_factory=dict)
 
-    # Red y asignaciones (para simulaciones de IP/MAC)
+    # Network and assignments (for IP/MAC simulations)
     address: str | None = None
     prefix: str | None = None
     mac_address: str | None = None
@@ -900,16 +900,16 @@ class MockNetBoxRecord(BaseModel):
 
 class CacheStore(BaseModel):
     """
-    Representa el cache de objetos de NetBox que se mantiene
-    durante toda la ejecución del script.
+    Represents the cache of NetBox objects that is kept
+    during the whole execution of the script.
 
-    Incluye:
-        manufacturers: mapea nombre → Manufacturer
-        device_types: mapea (fabricante_id, modelo) → DeviceType
-        platforms: mapea nombre → Platform
-        racks: mapea "site_name/rack_name" → Rack
-        clusters: mapea nombre → Cluster
-        device_roles: mapea nombre_lower → DeviceRole
+    It includes:
+        manufacturers: maps name → Manufacturer
+        device_types: maps (manufacturer_id, model) → DeviceType
+        platforms: maps name → Platform
+        racks: maps "site_name/rack_name" → Rack
+        clusters: maps name → Cluster
+        device_roles: maps name_lower → DeviceRole
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -926,30 +926,30 @@ class CacheStore(BaseModel):
 
 
 # ============================================================
-# UTILIDADES
+# UTILITIES
 # ============================================================
 
 
 def slugify(name: str) -> str:
-    """Genera un slug válido e idéntico al estándar de NetBox (Django slugify)."""
-    # 1. Descomponer diacríticos y eliminar no ascii
+    """Generates a valid slug identical to the NetBox standard (Django slugify)."""
+    # 1. Decompose diacritics and remove non-ascii
     slug = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
-    # 2. Convertir a minúsculas, eliminar caracteres no alfanuméricos, espacios o guiones
+    # 2. Convert to lowercase, remove characters that are not alphanumeric, spaces or hyphens
     slug = re.sub(r"[^\w\s-]", "", slug.lower())
-    # 3. Reemplazar espacios y bloques de guiones por un único guion, y limpiar bordes
+    # 3. Replace spaces and runs of hyphens with a single hyphen, and clean the edges
     slug = re.sub(r"[-\s]+", "-", slug).strip("-_")
-    # 4. NetBox limita los slugs a 100 caracteres.
+    # 4. NetBox limits slugs to 100 characters.
     return slug[:100]
 
 
 def generate_fallback_slug(base_slug: str, original_name: str) -> str:
-    """Genera un slug de respaldo determinista usando un hash md5 corto."""
+    """Generates a deterministic fallback slug using a short md5 hash."""
     hash_suffix = hashlib.md5(original_name.encode("utf-8")).hexdigest()[:4]
     return f"{base_slug}-{hash_suffix}"
 
 
 def _is_custom_field_changed(curr_val: Any, new_val: Any) -> bool:
-    """Determina si un payload de custom_fields presenta cambios reales."""
+    """Determines whether a custom_fields payload has real changes."""
     if not isinstance(new_val, dict):
         return curr_val != new_val
     if not isinstance(curr_val, dict):
@@ -959,8 +959,8 @@ def _is_custom_field_changed(curr_val: Any, new_val: Any) -> bool:
 
 def _is_relation_changed(curr_val: Any, new_val: Any) -> bool | None:
     """
-    Evalúa cambios en objetos anidados de pynetbox (FKs o Choices).
-    Retorna None si el valor no califica como una relación manejable.
+    Evaluates changes in nested pynetbox objects (FKs or Choices).
+    Returns None if the value does not qualify as a manageable relation.
     """
     if curr_val is None:
         return new_val is not None
@@ -983,7 +983,7 @@ def _is_relation_changed(curr_val: Any, new_val: Any) -> bool | None:
 
 
 def _is_field_changed(key: str, curr_val: Any, new_val: Any) -> bool:
-    """Evalúa si un campo específico difiere de su valor actual."""
+    """Evaluates whether a specific field differs from its current value."""
     if key == "custom_fields":
         return _is_custom_field_changed(curr_val, new_val)
 
@@ -999,8 +999,8 @@ def check_record_changes(
     payload: NetBoxPayload,
 ) -> NetBoxPayload:
     """
-    Determina qué campos cambiarían en el Record al aplicar el payload.
-    Retorna un diccionario con las modificaciones detectadas.
+    Determines which fields would change in the Record when applying the payload.
+    Returns a dictionary with the detected modifications.
     """
     updates: NetBoxPayload = {}
 
@@ -1012,16 +1012,16 @@ def check_record_changes(
 
     if updates:
         obj_name = getattr(record, "name", str(record))
-        log.debug("Cambios detectados en %s: %s", obj_name, updates)
+        log.debug("Changes detected in %s: %s", obj_name, updates)
 
     return updates
 
 
 def format_diff_keys(existing_obj: NetBoxObject, diff: dict[str, Any]) -> list[str]:
     """
-    Genera una lista plana de llaves modificadas a partir de un diccionario de diferencias.
-    Si una llave es un diccionario (ej. 'custom_fields'), evalúa contra el objeto
-    existente para extraer únicamente las subllaves específicas que cambiaron.
+    Generates a flat list of modified keys from a dictionary of differences.
+    If a key is a dictionary (e.g. 'custom_fields'), it evaluates against the existing
+    object to extract only the specific subkeys that changed.
     """
     keys: list[str] = []
     for key, new_val in diff.items():
@@ -1034,7 +1034,7 @@ def format_diff_keys(existing_obj: NetBoxObject, diff: dict[str, Any]) -> list[s
             keys.append(key)
             continue
 
-        # Extraemos las subllaves que realmente cambiaron
+        # We extract the subkeys that actually changed
         keys.extend(
             f"{key}.{sub_k}"
             for sub_k, sub_v in new_val.items()
@@ -1045,104 +1045,106 @@ def format_diff_keys(existing_obj: NetBoxObject, diff: dict[str, Any]) -> list[s
 
 
 def parse_int(value: Any) -> int:
-    """Convierte un valor a int, o lanza ValueError si no es convertible."""
+    """Converts a value to int, or raises ValueError if it is not convertible."""
     try:
         return int(str(value).strip())
     except (ValueError, TypeError) as e:
-        raise ValueError("No es un número entero válido.") from e
+        raise ValueError("Not a valid integer.") from e
 
 
 def _to_float(value: Any) -> float:
-    """Intenta parsear un valor a float, normalizando comas a puntos."""
+    """Tries to parse a value to float, normalizing commas to dots."""
     return float(str(value).strip().replace(",", "."))
 
 
 def parse_float(value: Any) -> float:
-    """Convierte un valor a float, o lanza ValueError si no es convertible."""
+    """Converts a value to float, or raises ValueError if it is not convertible."""
     try:
         return _to_float(value)
     except (ValueError, TypeError) as e:
-        raise ValueError("No es un número decimal válido.") from e
+        raise ValueError("Not a valid decimal number.") from e
 
 
 def parse_float_to_int(value: Any) -> int:
-    """Convierte un número (potencialmente float) a su entero más cercano."""
+    """Converts a number (potentially float) to its nearest integer."""
     try:
         val_float = _to_float(value)
         return round(val_float)
     except (ValueError, TypeError) as e:
-        raise ValueError("No es un valor numérico válido.") from e
+        raise ValueError("Not a valid numeric value.") from e
 
 
 def parse_int_gb_to_mb(value: Any) -> int:
-    """Convierte GB (string/float) a MB (entero) usando multiplicador 1000.
-    NetBox espera MB para memory/disk."""
+    """Converts GB (string/float) to MB (integer) using a 1000 multiplier.
+    NetBox expects MB for memory/disk."""
     try:
         gb = _to_float(value)
         return round(gb * 1000)
     except (ValueError, TypeError) as e:
-        raise ValueError("No es un valor numérico válido.") from e
+        raise ValueError("Not a valid numeric value.") from e
 
 
 def parse_rack_position(value: Any) -> float:
     """
-    Convierte una posición de rack (U) a float válido para `Device.position`.
+    Converts a rack position (U) into a float valid for `Device.position`.
 
-    Decisiones de diseño:
-    - NetBox almacena `position` como Decimal (1 decimal) y su `clean()` exige
-      un mínimo de 1 e incrementos de 0.5. Se valida aquí para reportar un error
-      claro por fila en lugar de un HTTP 400 de la API.
-    - `value * 2` se compara contra un entero: los múltiplos de 0.5 son exactos
-      en coma flotante, por lo que no hay falsos negativos por redondeo.
+    Design decisions:
+    - NetBox stores `position` as a Decimal (1 decimal) and its `clean()` requires
+      a minimum of 1 and increments of 0.5. It is validated here to report a clear
+      error per row instead of an HTTP 400 from the API.
+    - `value * 2` is compared against an integer: multiples of 0.5 are exact
+      in floating point, so there are no false negatives due to rounding.
     """
     try:
         position = _to_float(value)
     except (ValueError, TypeError) as e:
-        raise ValueError("No es una posición de rack numérica válida.") from e
+        raise ValueError("Not a valid numeric rack position.") from e
 
     if position < RACK_POSITION_MIN:
-        raise ValueError(f"La posición debe ser mayor o igual a {RACK_POSITION_MIN}.")
+        raise ValueError(
+            f"The position must be greater than or equal to {RACK_POSITION_MIN}."
+        )
     if not (position * 2).is_integer():
-        raise ValueError("La posición debe ser múltiplo de 0.5 unidades de rack.")
+        raise ValueError("The position must be a multiple of 0.5 rack units.")
     return position
 
 
 def parse_u_height(value: Any) -> float:
     """
-    Convierte la altura (U) de un DeviceType a float válido para NetBox.
+    Converts the height (U) of a DeviceType into a float valid for NetBox.
 
-    Decisiones de diseño:
-    - NetBox almacena `u_height` como Decimal (1 decimal) y su `clean()` exige
-      incrementos de 0.5. El 0 es válido (dispositivos 0U, ej. blades hijos de un chasis).
-    - Se valida aquí para reportar un error claro por fila en lugar de un HTTP 400.
+    Design decisions:
+    - NetBox stores `u_height` as a Decimal (1 decimal) and its `clean()` requires
+      increments of 0.5. 0 is valid (0U devices, e.g. child blades of a chassis).
+    - It is validated here to report a clear error per row instead of an HTTP 400.
     """
     try:
         u_height = _to_float(value)
     except (ValueError, TypeError) as e:
-        raise ValueError("No es una altura (U) numérica válida.") from e
+        raise ValueError("Not a valid numeric height (U).") from e
 
     if u_height < 0:
-        raise ValueError("La altura (U) no puede ser negativa.")
+        raise ValueError("The height (U) cannot be negative.")
     if not (u_height * 2).is_integer():
-        raise ValueError("La altura (U) debe ser múltiplo de 0.5 unidades de rack.")
+        raise ValueError("The height (U) must be a multiple of 0.5 rack units.")
     return u_height
 
 
-def parse_bool_si_no(value: Any) -> bool:
+def parse_bool_yes_no(value: Any) -> bool:
     """
-    Convierte un valor a booleano según reglas específicas de 'si/no'.
-    Lanza ValueError si no coincide.
+    Converts a value to boolean according to specific 'yes/no' rules.
+    Raises ValueError if it does not match.
     """
     v = str(value).strip().lower()
-    if v in ("si", "sí", "yes", "true", "1"):
+    if v in ("yes", "true", "1"):
         return True
     if v in ("no", "false", "0"):
         return False
-    raise ValueError("No es 'si' ni 'no'.")
+    raise ValueError("Not 'yes' or 'no'.")
 
 
 def apply_cast(value: Any, cast_type: CastType, target: str) -> FieldValue:
-    """Aplica un cast específico a un valor según la definición del campo."""
+    """Applies a specific cast to a value according to the field definition."""
     try:
         match cast_type:
             case CastType.INT:
@@ -1155,20 +1157,20 @@ def apply_cast(value: Any, cast_type: CastType, target: str) -> FieldValue:
                 return parse_int_gb_to_mb(value)
             case CastType.RACK_POSITION:
                 return parse_rack_position(value)
-            case CastType.BOOL_SI_NO:
-                return parse_bool_si_no(value)
+            case CastType.BOOL_YES_NO:
+                return parse_bool_yes_no(value)
             case CastType.LOWER:
                 return str(value).lower() if value is not None else value
             case _ as unreachable:
                 assert_never(unreachable)
     except ValueError as e:
         raise RowValidationError(
-            f"Valor inválido '{value}' para el campo '{target}'. {e}"
+            f"Invalid value '{value}' for the field '{target}'. {e}"
         ) from e
 
 
 def concat_dot(parts: list[str], config: NetBoxMappingConfig) -> str:
-    """Concatena partes no vacías con '. ' como separador."""
+    """Concatenates non-empty parts with '. ' as the separator."""
     clean = [p.strip() for p in parts if not config.is_empty(p)]
     return ". ".join(clean)
 
@@ -1180,23 +1182,23 @@ def _extract_raw_csv_value(
     strict: bool = False,
 ) -> str:
     """
-    Extrae y sanitiza un valor del CSV usando su alias definido en el YAML.
-    Si la celda está vacía (según config.is_empty) o la columna no existe o está
-    mapeada a None, retorna un string vacío (""). Si 'strict' es True y el
-    valor resultante está vacío, levanta RowValidationError.
-    Si el alias ni siquiera existe en la configuración, levanta ConfigValidationError.
+    Extracts and sanitizes a value of the CSV using its alias defined in the YAML.
+    If the cell is empty (according to config.is_empty) or the column does not exist or is
+    mapped to None, it returns an empty string (""). If 'strict' is True and the
+    resulting value is empty, it raises RowValidationError.
+    If the alias does not even exist in the configuration, it raises ConfigValidationError.
     """
     if col_alias not in config.csv_columns:
         raise ConfigValidationError(
-            f"Error crítico de configuración: El alias '{col_alias}' solicitado "
-            "por el script no existe en `csv_columns` del archivo YAML."
+            f"Critical configuration error: The alias '{col_alias}' requested "
+            "by the script does not exist in `csv_columns` of the YAML file."
         )
 
     col_name = config.csv_columns[col_alias].source
     if not col_name:
         if strict:
             raise RowValidationError(
-                f"El campo obligatorio '{col_alias}' no está mapeado en la configuración."
+                f"The mandatory field '{col_alias}' is not mapped in the configuration."
             )
         return ""
 
@@ -1205,7 +1207,7 @@ def _extract_raw_csv_value(
 
     if strict and not val:
         raise RowValidationError(
-            f"El campo obligatorio '{col_alias}' está vacío en el CSV."
+            f"The mandatory field '{col_alias}' is empty in the CSV."
         )
 
     return val
@@ -1220,8 +1222,8 @@ def extract_csv_value(
     fallback: Any = None,
 ) -> Any:
     """
-    Extrae el valor del CSV y aplica la función de mapeo (map_value)
-    si existe en la configuración.
+    Extracts the value of the CSV and applies the mapping function (map_value)
+    if it exists in the configuration.
     """
 
     def _fallback_value(raw_val: str = "") -> Any:
@@ -1243,7 +1245,7 @@ def extract_csv_value(
 
 
 def get_netbox_object_id(obj: NetBoxObject) -> int:
-    """Retorna el ID de un objeto NetBox. Si el objeto es None, retorna 0."""
+    """Returns the ID of a NetBox object. If the object is None, it returns 0."""
     obj_id = getattr(obj, "id", None)
     if obj_id is None:
         return 0
@@ -1252,17 +1254,17 @@ def get_netbox_object_id(obj: NetBoxObject) -> int:
 
 def get_node_type_from_object(obj: Endpoint | NetBoxObject) -> NodeType:
     """
-    Retorna el tipo de nodo (virtual_machine o device) a partir de
-    un Endpoint o NetBoxObject.
+    Returns the node type (virtual_machine or device) from
+    an Endpoint or NetBoxObject.
     """
     url = getattr(obj, "url", "")
     name = getattr(obj, "name", "")
 
-    # Útil para Endpoints de pynetbox
+    # Useful for pynetbox Endpoints
     if "virtualization" in url or name == "virtual-machines":
         return NodeType.VIRTUAL_MACHINE
 
-    # Si es un NetBoxObject tendrá el atributo del padre
+    # If it is a NetBoxObject it will have the attribute of the parent
     if hasattr(obj, "virtual_machine"):
         return NodeType.VIRTUAL_MACHINE
 
@@ -1270,13 +1272,13 @@ def get_node_type_from_object(obj: Endpoint | NetBoxObject) -> NodeType:
 
 
 def get_node_type_from_row(row: CsvRow, config: NetBoxMappingConfig) -> NodeType:
-    """Extrae el tipo de máquina y lo mapea al tipo de nodo NetBox."""
+    """Extracts the machine type and maps it to the NetBox node type."""
     machine_type_val = extract_csv_value(row, "machine_type", config)
     return config.resolve_node_type(machine_type_val)
 
 
 def resolve_mapping_path(args_mapping: str | None) -> Path:
-    """Resuelve la ruta del archivo de configuración YAML."""
+    """Resolves the path of the YAML configuration file."""
     if args_mapping:
         return Path(args_mapping)
     return DEFAULT_MAPPING_PATH
@@ -1285,7 +1287,7 @@ def resolve_mapping_path(args_mapping: str | None) -> Path:
 def count_machine_names(
     rows: list[CsvRow], config: NetBoxMappingConfig
 ) -> Counter[str]:
-    """Genera un conteo de las ocurrencias de nombres de máquinas en el CSV (ignorando vacíos)."""
+    """Generates a count of the occurrences of machine names in the CSV (ignoring empty ones)."""
     counts = Counter[str]()
     for row in rows:
         val = extract_csv_value(row, "machine_name", config)
@@ -1299,8 +1301,8 @@ def count_machine_names(
 def count_inventory_uuids(
     rows: list[CsvRow], config: NetBoxMappingConfig
 ) -> Counter[str]:
-    """Genera un conteo de las ocurrencias de UUIDs en el CSV, normalizados a
-    minúsculas (ignorando vacíos)."""
+    """Generates a count of the occurrences of UUIDs in the CSV, normalized to
+    lowercase (ignoring empty ones)."""
     counts = Counter[str]()
     for row in rows:
         uuid = extract_csv_value(row, "inventory_uuid", config).lower()
@@ -1310,38 +1312,36 @@ def count_inventory_uuids(
 
 
 # ============================================================
-# CARGA DE CONFIGURACIÓN
+# CONFIGURATION LOADING
 # ============================================================
 
 
 def load_config(mapping_path: Path) -> NetBoxMappingConfig:
     """
-    Carga y valida el archivo de mapping YAML utilizando Pydantic.
-    Si hay errores de validación de sintaxis o de esquema, los reporta
-    con detalle y termina la ejecución de manera controlada.
+    Loads and validates the YAML mapping file using Pydantic.
+    If there are syntax or schema validation errors, it reports them
+    in detail and ends the execution in a controlled way.
     """
-    log.debug("Cargando configuración desde: %s", mapping_path)
+    log.debug("Loading configuration from: %s", mapping_path)
     if not mapping_path.is_file():
-        raise ConfigValidationError(
-            f"No se encontró el archivo de mapping: {mapping_path}"
-        )
+        raise ConfigValidationError(f"Mapping file not found: {mapping_path}")
 
-    # Cargar el YAML
+    # Load the YAML
     try:
         with mapping_path.open("r", encoding="utf-8") as f:
             raw_yaml = f.read()
-        # Expande sintaxis $VAR o ${VAR} usando variables de entorno
+        # Expands $VAR or ${VAR} syntax using environment variables
         expanded_yaml = os.path.expandvars(raw_yaml)
         raw = yaml.safe_load(expanded_yaml)
     except yaml.YAMLError:
-        raise ConfigValidationError(f"Error sintáctico de YAML al leer {mapping_path}")
+        raise ConfigValidationError(f"YAML syntax error while reading {mapping_path}")
 
     if not isinstance(raw, dict):
         raise ConfigValidationError(
-            f"El archivo de mapping {mapping_path} no contiene un diccionario YAML válido.",
+            f"The mapping file {mapping_path} does not contain a valid YAML dictionary.",
         )
 
-    # Validar el esquema Pydantic para el archivo de mapping
+    # Validate the Pydantic schema for the mapping file
     try:
         return NetBoxMappingConfig.model_validate(raw)
     except ValidationError as exc:
@@ -1350,18 +1350,18 @@ def load_config(mapping_path: Path) -> NetBoxMappingConfig:
             loc = " -> ".join(str(p) for p in err.get("loc", []))
             msg = err.get("msg", "")
             inp = err.get("input")
-            error_msgs.append(f"[{loc}]: {msg} (valor recibido: {inp!r})")
+            error_msgs.append(f"[{loc}]: {msg} (received value: {inp!r})")
 
         full_error = "\n".join(error_msgs)
         raise ConfigValidationError(
-            f"Error de validación en el archivo de mapping YAML ({mapping_path}):\n{full_error}"
+            f"Validation error in the YAML mapping file ({mapping_path}):\n{full_error}"
         )
 
 
 def load_dotenv(env_path: Path | None = None) -> None:
     """
-    Carga variables de entorno desde un archivo .env si existe.
-    No sobrescribe variables que ya estén definidas en el entorno.
+    Loads environment variables from a .env file if it exists.
+    It does not overwrite variables that are already defined in the environment.
     """
     if env_path is None:
         env_path = DOTENV_PATH
@@ -1384,13 +1384,13 @@ def load_dotenv(env_path: Path | None = None) -> None:
 
 def load_env() -> tuple[str, str, bool]:
     """
-    Carga las variables de entorno requeridas para la conexión con NetBox.
+    Loads the environment variables required for the connection with NetBox.
 
-    - NETBOX_URL: URL de la API de NetBox (ej. http://netbox.empresa.com).
-    - NETBOX_TOKEN: Token de autenticación con permisos write sobre dcim,
+    - NETBOX_URL: URL of the NetBox API (e.g. http://netbox.company.com).
+    - NETBOX_TOKEN: Authentication token with write permissions over dcim,
       virtualization, ipam, extras, core.
-    - NETBOX_VERIFY_SSL: 'true' si se debe verificar el certificado SSL
-      (por defecto), 'false' para saltar la verificación.
+    - NETBOX_VERIFY_SSL: 'true' if the SSL certificate must be verified
+      (default), 'false' to skip the verification.
     """
     url = os.environ.get("NETBOX_URL", "").rstrip("/")
     token = os.environ.get("NETBOX_TOKEN", "")
@@ -1405,21 +1405,21 @@ def load_env() -> tuple[str, str, bool]:
     if missing:
         missing_str = ", ".join(missing)
         raise ConfigValidationError(
-            f"Variables de entorno requeridas no definidas: {missing_str}"
+            f"Required environment variables not defined: {missing_str}"
         )
 
     return url, token, verify_ssl
 
 
 # ============================================================
-# CLIENTE PYNETBOX
+# PYNETBOX CLIENT
 # ============================================================
 
 
 def _log_netbox_response(
     response: requests.Response, *args: Any, **kwargs: Any
 ) -> None:
-    """Hook para interceptar y registrar respuestas del API de NetBox."""
+    """Hook to intercept and log responses of the NetBox API."""
     log.debug(
         "[API %s] %s - Status: %s",
         response.request.method,
@@ -1434,11 +1434,11 @@ def _log_netbox_response(
 
 def build_nb_client(url: str, token: str, verify_ssl: bool) -> Api:
     """
-    Construye y retorna un cliente API de NetBox completamente configurado.
+    Builds and returns a fully configured NetBox API client.
 
-    La inicialización incluye: configuración de sesión HTTP (incluyendo
-    deshabilitar SSL si se especifica), autenticación con el token, y una
-    verificación inicial de conectividad contra el endpoint de sites.
+    The initialization includes: HTTP session configuration (including
+    disabling SSL if specified), authentication with the token, and an
+    initial connectivity check against the sites endpoint.
     """
     if not verify_ssl:
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -1450,26 +1450,26 @@ def build_nb_client(url: str, token: str, verify_ssl: bool) -> Api:
     nb = Api(url, token=token)
     nb.http_session = session
 
-    # Verificar conectividad con una llamada liviana.
+    # Verify connectivity with a lightweight call.
     try:
         nb.dcim.sites.filter(limit=1)
     except Exception as e:
-        raise NetBoxApiError(f"No se pudo conectar con NetBox ({url})") from e
+        raise NetBoxApiError(f"Could not connect to NetBox ({url})") from e
 
-    log.info("Conectado a NetBox %s", url)
+    log.info("Connected to NetBox %s", url)
     return nb
 
 
 def build_netbox_endpoints(nb: Api) -> NetBoxEndpoints:
     """
-    Instancia y empaqueta de forma centralizada las referencias a los
-    endpoints de pynetbox requeridos por el script en un contenedor
-    inmutable (NetBoxEndpoints).
+    Instantiates and packs in a centralized way the references to the
+    pynetbox endpoints required by the script into an immutable
+    container (NetBoxEndpoints).
 
-    La resolución de endpoints en pynetbox opera en memoria del lado
-    del cliente (lazy). Falla con AttributeError si la versión de la
-    librería pynetbox no expone alguna de las aplicaciones cliente
-    principales (por ejemplo, 'core' en NetBox 4.x).
+    Endpoint resolution in pynetbox operates in client-side
+    memory (lazy). It fails with AttributeError if the version of the
+    pynetbox library does not expose any of the main client
+    applications (for example, 'core' in NetBox 4.x).
     """
     try:
         return NetBoxEndpoints(
@@ -1495,24 +1495,24 @@ def build_netbox_endpoints(nb: Api) -> NetBoxEndpoints:
         )
     except AttributeError as e:
         raise NetBoxApiError(
-            "La instancia de pynetbox no expone uno de los endpoints "
-            "requeridos por el script"
+            "The pynetbox instance does not expose one of the endpoints "
+            "required by the script"
         ) from e
 
 
 # ============================================================
-# LEER Y VALIDAR CSV
+# READ AND VALIDATE CSV
 # ============================================================
 
 
 def _record_start_line(reader_line_num: int, row: dict[str | None, Any]) -> int:
     """
-    Calcula la línea física donde empieza un registro CSV.
+    Computes the physical line where a CSV record starts.
 
-    `csv.reader.line_num` indica la línea donde *termina* el registro; los saltos de
-    línea embebidos en celdas entre comillas hacen que un registro ocupe varias líneas,
-    por lo que se restan para obtener la primera. Los campos sobrantes (que DictReader
-    agrupa en una lista bajo la clave `None`) también se consideran.
+    `csv.reader.line_num` gives the line where the record *ends*; line breaks
+    embedded in quoted cells make a record span several lines,
+    so they are subtracted to get the first one. Extra fields (which DictReader
+    groups in a list under the `None` key) are also considered.
     """
     embedded_newlines = 0
     for value in row.values():
@@ -1527,23 +1527,23 @@ def _normalize_csv_record(
     row: dict[str | None, Any], line_number: int, expected_columns: int
 ) -> CsvRow | None:
     """
-    Valida la estructura de un registro leído por DictReader y lo normaliza a `CsvRow`.
+    Validates the structure of a record read by DictReader and normalizes it to `CsvRow`.
 
-    Decisiones de diseño:
-    - Registro corto (faltan celdas finales): DictReader rellena con `None`, que rompe
-      las utilidades de strings aguas abajo. Se completa con "" (equivale a vacío) y
-      se advierte, igual que con las columnas ausentes del encabezado.
-    - Registro largo (campos sobrantes): suele indicar una coma sin comillas que
-      desplaza las columnas, por lo que los valores podrían terminar en el campo
-      equivocado (ej. un UUID en otra columna). Se descarta en lugar de adivinar.
+    Design decisions:
+    - Short record (trailing cells missing): DictReader pads with `None`, which breaks
+      the string utilities downstream. It is completed with "" (equivalent to empty) and
+      a warning is issued, just like with the columns missing from the header.
+    - Long record (extra fields): it usually indicates an unquoted comma that
+      shifts the columns, so the values could end up in the wrong
+      field (e.g. a UUID in another column). It is discarded instead of guessing.
 
-    Retorna el registro normalizado, o None si debe descartarse.
+    Returns the normalized record, or None if it must be discarded.
     """
     extra_fields = row.pop(None, None)
     if extra_fields:
         log.error(
-            "ERROR línea %d: tiene %d campos pero el encabezado define %d "
-            "(posible coma sin comillas). Se descarta el registro.",
+            "ERROR line %d: it has %d fields but the header defines %d "
+            "(possible unquoted comma). The record is discarded.",
             line_number,
             expected_columns + len(extra_fields),
             expected_columns,
@@ -1553,7 +1553,7 @@ def _normalize_csv_record(
     missing_columns = [name for name, value in row.items() if value is None]
     if missing_columns:
         log.warning(
-            "Línea %d: faltan %d campo(s) finales (%s). Se tratarán como vacíos.",
+            "Line %d: %d trailing field(s) are missing (%s). They will be treated as empty.",
             line_number,
             len(missing_columns),
             ", ".join(repr(c) for c in missing_columns),
@@ -1566,14 +1566,14 @@ def _normalize_csv_record(
 
 def _read_csv(path: Path) -> tuple[list[str], CsvData]:
     """
-    Lee merged_inventory.csv.
-    Retorna una tupla: (cabeceras, CsvData), donde cada fila es un diccionario
-    {cabecera: valor} y `line_numbers` indica su línea real en el archivo (útil para
-    reportar errores aunque haya celdas multilínea o líneas en blanco).
-    Los registros con estructura inválida se descartan y se cuentan en `rejected_rows`.
+    Reads merged_inventory.csv.
+    Returns a tuple: (headers, CsvData), where each row is a dictionary
+    {header: value} and `line_numbers` gives its real line in the file (useful to
+    report errors even if there are multiline cells or blank lines).
+    Records with an invalid structure are discarded and counted in `rejected_rows`.
     """
     if not path.is_file():
-        raise ConfigValidationError(f"No se encontró el CSV de entrada: {path}")
+        raise ConfigValidationError(f"Input CSV not found: {path}")
 
     rows: list[CsvRow] = []
     line_numbers: list[int] = []
@@ -1590,7 +1590,7 @@ def _read_csv(path: Path) -> tuple[list[str], CsvData]:
             rows.append(record)
             line_numbers.append(line_number)
 
-    log.info("CSV leído: %d filas, %d columnas", len(rows), len(headers))
+    log.info("CSV read: %d rows, %d columns", len(rows), len(headers))
     return list(headers), CsvData(rows, line_numbers, rejected_rows)
 
 
@@ -1599,26 +1599,26 @@ def _validate_csv_headers(
     config: NetBoxMappingConfig,
 ) -> list[str]:
     """
-    Valida que los encabezados del CSV incluyan todas las columnas obligatorias
-    configuradas en 'csv_columns' con el flag 'required: true' dentro de netbox_mapping.yaml.
-    Valida la *existencia de la columna en la cabecera*, no que cada fila
-    deba tener un valor no vacío.
-    Levanta ConfigValidationError si faltan columnas obligatorias.
-    Retorna la lista de cabeceras intacta si la validación es exitosa.
+    Validates that the CSV headers include all the mandatory columns
+    configured in 'csv_columns' with the 'required: true' flag within netbox_mapping.yaml.
+    It validates the *existence of the column in the header*, not that every row
+    must have a non-empty value.
+    Raises ConfigValidationError if mandatory columns are missing.
+    Returns the list of headers untouched if the validation is successful.
     """
     header_set = set(headers)
 
-    # 1. Validación de columnas críticas (ERROR bloqueante)
+    # 1. Validation of critical columns (blocking ERROR)
     missing_required = [
         col for col in sorted(config.get_required_columns()) if col not in header_set
     ]
     if missing_required:
         cols_str = ", ".join(repr(c) for c in missing_required)
         raise ConfigValidationError(
-            f"El CSV no contiene las siguientes columnas obligatorias: {cols_str}"
+            f"The CSV does not contain the following mandatory columns: {cols_str}"
         )
 
-    # 2. Chequeo informativo de columnas esperadas (WARNING informativo)
+    # 2. Informational check of expected columns (informational WARNING)
     all_expected = config.get_all_expected_columns()
     missing_optional = [
         col
@@ -1627,7 +1627,7 @@ def _validate_csv_headers(
     ]
     if missing_optional:
         log.warning(
-            "Columnas del mapping no encontradas en el CSV (se tratarán como vacías): %s",
+            "Mapping columns not found in the CSV (they will be treated as empty): %s",
             ", ".join(repr(c) for c in missing_optional),
         )
 
@@ -1639,8 +1639,8 @@ def read_and_validate_csv(
     config: NetBoxMappingConfig,
 ) -> CsvData:
     """
-    Orquesta la lectura del archivo CSV y la validación de sus cabeceras.
-    Retorna las filas parseadas (diccionarios) y su línea de origen, listas para ser procesadas.
+    Orchestrates the reading of the CSV file and the validation of its headers.
+    Returns the parsed rows (dictionaries) and their source line, ready to be processed.
     """
     headers, data = _read_csv(csv_path)
     _validate_csv_headers(headers, config)
@@ -1648,12 +1648,12 @@ def read_and_validate_csv(
 
 
 # ============================================================
-# PATRÓN GET OR CREATE (CACHE)
+# GET OR CREATE PATTERN (CACHE)
 # ============================================================
 
 
 def _is_collision_error(e: RequestError, fields: tuple[str, ...]) -> bool:
-    """Detecta si un RequestError (HTTP 400) se debe a colisión en campos específicos."""
+    """Detects whether a RequestError (HTTP 400) is due to a collision on specific fields."""
     if e.req.status_code != 400:
         return False
 
@@ -1682,12 +1682,12 @@ def _is_collision_error(e: RequestError, fields: tuple[str, ...]) -> bool:
 
 
 def _is_slug_collision(e: RequestError) -> bool:
-    """Verifica si el RequestError es causado específicamente por un slug duplicado."""
+    """Checks whether the RequestError is caused specifically by a duplicate slug."""
     return _is_collision_error(e, ("slug",))
 
 
 def _is_name_collision(e: RequestError) -> bool:
-    """Verifica si el RequestError es causado específicamente por un nombre duplicado."""
+    """Checks whether the RequestError is caused specifically by a duplicate name."""
     return _is_collision_error(e, ("name", "non_field_errors"))
 
 
@@ -1698,7 +1698,7 @@ def _search_in_netbox(
     name: str,
     preventive_slug_search: bool,
 ) -> Record | None:
-    """Busca un objeto en NetBox, aplicando búsqueda preventiva por slug si es requerida."""
+    """Looks up an object in NetBox, applying a preventive search by slug if required."""
     results: list[Record] = list(endpoint.filter(**filter_kwargs))
     if results:
         return results[0]
@@ -1708,8 +1708,8 @@ def _search_in_netbox(
         slug_results: list[Record] = list(endpoint.filter(slug=slug_val))
         if slug_results:
             log.warning(
-                "Objeto '%s' no existe por sus campos de filtro, pero su slug '%s' "
-                "coincide con un objeto existente en '%s' ('%s'). Se reutiliza.",
+                "Object '%s' does not exist by its filter fields, but its slug '%s' "
+                "matches an existing object in '%s' ('%s'). It is reused.",
                 name,
                 slug_val,
                 endpoint.name,
@@ -1723,8 +1723,8 @@ def _search_in_netbox(
 def _create_dry_run_mock(
     endpoint: Endpoint, name: str, create_kwargs: dict[str, Any]
 ) -> NetBoxObject:
-    """Genera un mock del objeto para el modo Dry-Run."""
-    log.info("[DRY-RUN] WOULD CREATE objeto en '%s': %s", endpoint.name, name)
+    """Generates a mock of the object for Dry-Run mode."""
+    log.info("[DRY-RUN] WOULD CREATE object in '%s': %s", endpoint.name, name)
     mock_kwargs = create_kwargs.copy()
     return MockNetBoxRecord(id=0, **mock_kwargs)
 
@@ -1735,9 +1735,9 @@ def _create_with_fallback_slug(
     **kwargs: Any,
 ) -> Record:
     """
-    Intenta crear un objeto en NetBox. Si ocurre colisión de slug (RequestError),
-    genera un slug determinista de respaldo y reintenta la creación.
-    Retorna el objeto creado.
+    Tries to create an object in NetBox. If a slug collision occurs (RequestError),
+    it generates a deterministic fallback slug and retries the creation.
+    Returns the created object.
     """
     slug: str = kwargs.get("slug", "")
     try:
@@ -1748,7 +1748,7 @@ def _create_with_fallback_slug(
 
         slug_fallback = generate_fallback_slug(slug, original_name)
         log.warning(
-            "Slug '%s' colisionó al crear objeto en '%s' con nombre '%s'; reintentando con '%s'.",
+            "Slug '%s' collided when creating an object in '%s' with name '%s'; retrying with '%s'.",
             slug,
             endpoint.name,
             original_name,
@@ -1756,8 +1756,8 @@ def _create_with_fallback_slug(
         )
         kwargs["slug"] = slug_fallback
         with netbox_error_wrap(
-            f"Imposible crear objeto en '{endpoint.name}' con nombre '{original_name}' "
-            "debido a colisión persistente de slug o rechazo de NetBox"
+            f"Unable to create object in '{endpoint.name}' with name '{original_name}' "
+            "due to a persistent slug collision or a NetBox rejection"
         ):
             return cast(Record, endpoint.create(**kwargs))
 
@@ -1768,7 +1768,7 @@ def _execute_creation(
     name: str,
     use_fallback_slug: bool,
 ) -> Record:
-    """Ejecuta la creación del objeto en NetBox, manejando fallbacks de slug."""
+    """Executes the creation of the object in NetBox, handling slug fallbacks."""
     if use_fallback_slug:
         obj = _create_with_fallback_slug(
             endpoint,
@@ -1777,7 +1777,7 @@ def _execute_creation(
         )
     else:
         obj = cast(Record, endpoint.create(**create_kwargs))
-    log.info("CREATED Objeto en '%s': %s", endpoint.name, name)
+    log.info("CREATED Object in '%s': %s", endpoint.name, name)
     return obj
 
 
@@ -1788,16 +1788,16 @@ def _create_record(
     dry_run: bool,
 ) -> NetBoxObject:
     """
-    Crea un objeto en NetBox (o su mock en dry-run) sin búsqueda previa.
+    Creates an object in NetBox (or its mock in dry-run) without a prior lookup.
 
-    Decisiones de diseño:
-    - Primitiva de escritura compartida por los `ensure_*` / `upsert_*` que ya
-      resolvieron por su cuenta la existencia del objeto y solo necesitan crearlo.
+    Design decisions:
+    - Write primitive shared by the `ensure_*` / `upsert_*` functions that already
+      resolved the existence of the object on their own and only need to create it.
     """
     if dry_run:
         return _create_dry_run_mock(endpoint, name, create_kwargs)
 
-    with netbox_error_wrap(f"Error creando objeto en '{endpoint.name}': {name}"):
+    with netbox_error_wrap(f"Error creating object in '{endpoint.name}': {name}"):
         return _execute_creation(endpoint, create_kwargs, name, use_fallback_slug=False)
 
 
@@ -1808,31 +1808,33 @@ def apply_update(
     dry_run: bool,
 ) -> bool:
     """
-    Aplica en NetBox un diff ya calculado sobre un objeto existente.
+    Applies in NetBox an already computed diff over an existing object.
 
-    Decisiones de diseño:
-    - Primitiva de escritura para quienes calculan su propio diff (normalización
-      específica del dominio); quienes no, usan `update_if_changed`.
-    - El retorno de `Record.update` se propaga: pynetbox retorna False cuando no
-      envió nada a la API, y eso debe reportarse como "sin cambios".
+    Design decisions:
+    - Write primitive for those who compute their own diff (domain-specific
+      normalization); those who do not, use `update_if_changed`.
+    - The return value of `Record.update` is propagated: pynetbox returns False when it
+      sent nothing to the API, and that must be reported as "no changes".
 
-    Retorna:
-        bool: True si el objeto fue (o habría sido) actualizado.
+    Returns:
+        bool: True if the object was (or would have been) updated.
     """
     diff_keys = format_diff_keys(existing_obj, diff)
 
     if dry_run:
-        log.info("[DRY-RUN] WOULD UPDATE %s - Cambios: %s", label, diff_keys)
+        log.info("[DRY-RUN] WOULD UPDATE %s - Changes: %s", label, diff_keys)
         return True
 
-    with netbox_error_wrap(f"Error actualizando {label}"):
+    with netbox_error_wrap(f"Error updating {label}"):
         updated = cast(Record, existing_obj).update(diff)
 
     if not updated:
-        log.debug("NetBox no aplicó cambios en %s pese al diff: %s", label, diff_keys)
+        log.debug(
+            "NetBox applied no changes to %s despite the diff: %s", label, diff_keys
+        )
         return False
 
-    log.info("UPDATED %s - Cambios: %s", label, diff_keys)
+    log.info("UPDATED %s - Changes: %s", label, diff_keys)
     return True
 
 
@@ -1843,14 +1845,14 @@ def update_if_changed(
     dry_run: bool,
 ) -> tuple[NetBoxObject, bool]:
     """
-    Actualiza en NetBox únicamente los campos del payload que difieren del objeto.
+    Updates in NetBox only the payload fields that differ from the object.
 
-    Decisiones de diseño:
-    - Envía solo el diff (no el payload completo) para minimizar el tráfico y
-      mantener la idempotencia: sin diferencias no se realiza ninguna petición.
+    Design decisions:
+    - It sends only the diff (not the full payload) to minimize traffic and
+      keep idempotency: without differences no request is made.
 
-    Retorna:
-        tuple[NetBoxObject, bool]: El objeto y un booleano indicando si hubo cambios.
+    Returns:
+        tuple[NetBoxObject, bool]: The object and a boolean indicating whether there were changes.
     """
     diff = check_record_changes(existing_obj, payload)
     if not diff:
@@ -1862,11 +1864,11 @@ def update_if_changed(
 def _handle_concurrency_backoff(
     name: str, endpoint_name: str, attempt: int, max_retries: int
 ) -> None:
-    """Aplica backoff exponencial tras una colisión concurrente."""
+    """Applies exponential backoff after a concurrent collision."""
     sleep_time = 0.5 * (2**attempt) + random.uniform(0, 0.5)
     log.warning(
-        "Colisión de concurrencia al crear '%s' en '%s'. "
-        "Reintentando en %.2fs (intento %d/%d)...",
+        "Concurrency collision when creating '%s' in '%s'. "
+        "Retrying in %.2fs (attempt %d/%d)...",
         name,
         endpoint_name,
         sleep_time,
@@ -1889,8 +1891,8 @@ def _attempt_get_or_create(
     max_retries: int,
 ) -> NetBoxObject | None:
     """
-    Ejecuta un único intento de búsqueda o creación.
-    Retorna el objeto si tiene éxito, o None si hubo colisión concurrente y debe reintentarse.
+    Executes a single lookup-or-create attempt.
+    Returns the object if it succeeds, or None if there was a concurrent collision and it must be retried.
     """
     if not skip_filter or attempt > 0:
         existing_obj = _search_in_netbox(
@@ -1908,7 +1910,7 @@ def _attempt_get_or_create(
     except RequestError as e:
         if not _is_name_collision(e) or attempt >= max_retries - 1:
             with netbox_error_wrap(
-                f"No se pudo crear el objeto en '{endpoint.name}' con nombre '{name}'"
+                f"Could not create the object in '{endpoint.name}' with name '{name}'"
             ):
                 raise
 
@@ -1929,27 +1931,27 @@ def get_or_create_cached(
     preventive_slug_search: bool = False,
 ) -> tuple[NetBoxObject, dict[Any, NetBoxObject]]:
     """
-    Motor centralizado de Identity Map (Caché) para el patrón Get-or-Create.
+    Centralized Identity Map (Cache) engine for the Get-or-Create pattern.
 
-    Decisiones de diseño:
-    - Eficiencia O(1) de Red: Evita avalanchas de peticiones HTTP (N+1 queries) contra
-      NetBox manteniendo un registro en memoria de las entidades ya creadas o consultadas.
-    - Prevención de Colisiones (preventive_slug_search): En NetBox, los slugs deben ser
-      estrictamente únicos. Si buscamos un objeto por nombre y no lo encontramos, NetBox
-      rechazará la creación si el slug generado colisiona con otro objeto (HTTP 400).
-      La búsqueda preventiva por slug evita el crash permitiendo reutilizar objetos similares.
-    - Flujo de Estado Explícito: Aunque el caché se muta in-place por máximo rendimiento
-      (evitando copias masivas de memoria), se retorna explícitamente para mantener
-      trazabilidad arquitectónica e indicarle al desarrollador que el estado fue alterado.
+    Design decisions:
+    - O(1) network efficiency: It avoids avalanches of HTTP requests (N+1 queries) against
+      NetBox by keeping an in-memory record of the entities already created or queried.
+    - Collision prevention (preventive_slug_search): In NetBox, slugs must be
+      strictly unique. If we look up an object by name and do not find it, NetBox
+      will reject the creation if the generated slug collides with another object (HTTP 400).
+      The preventive search by slug avoids the crash by allowing similar objects to be reused.
+    - Explicit state flow: Although the cache is mutated in-place for maximum performance
+      (avoiding massive memory copies), it is returned explicitly to keep
+      architectural traceability and tell the developer that the state was altered.
 
-    Retorna:
-        tuple[NetBoxObject, dict[Any, NetBoxObject]]: El objeto final y la caché propagada.
+    Returns:
+        tuple[NetBoxObject, dict[Any, NetBoxObject]]: The final object and the propagated cache.
     """
     if cache_key in cache:
-        log.debug("[Cache HIT] Objeto '%s' encontrado en memoria", name)
+        log.debug("[Cache HIT] Object '%s' found in memory", name)
         return cache[cache_key], cache
 
-    log.debug("[Cache MISS] Buscando '%s' en API...", name)
+    log.debug("[Cache MISS] Looking up '%s' in the API...", name)
 
     MAX_RETRIES = 3
     for attempt in range(MAX_RETRIES):
@@ -1969,9 +1971,7 @@ def get_or_create_cached(
             cache[cache_key] = obj
             return obj, cache
 
-    raise NetBoxApiError(
-        f"No se pudo resolver '{name}' después de {MAX_RETRIES} intentos."
-    )
+    raise NetBoxApiError(f"Could not resolve '{name}' after {MAX_RETRIES} attempts.")
 
 
 # ============================================================
@@ -1980,7 +1980,7 @@ def get_or_create_cached(
 
 
 def _normalize_choices(extra_choices: Any) -> list[list[str]]:
-    """Convierte las opciones de un choice set a una lista de listas de strings."""
+    """Converts the options of a choice set into a list of lists of strings."""
     if not isinstance(extra_choices, (list, tuple)):
         return []
 
@@ -1997,13 +1997,13 @@ def _sync_choice_set_choices(
     choices: list[list[str]],
     dry_run: bool,
 ) -> int:
-    """Sincroniza las opciones (choices) de un choice set.
-    Retorna el ID del choice set."""
+    """Synchronizes the options (choices) of a choice set.
+    Returns the ID of the choice set."""
 
     def _get_choice_set_id(ch_set: Record) -> int:
         """
-        Busca un Choice Set por su nombre.
-        Retorna el ID del Choice Set encontrado, o lanza una excepción si no existe.
+        Looks up a Choice Set by its name.
+        Returns the ID of the Choice Set found, or raises an exception if it does not exist.
         """
         return cast(int, getattr(ch_set, "id", 0))
 
@@ -2017,7 +2017,7 @@ def _sync_choice_set_choices(
         log.info("[DRY-RUN] WOULD UPDATE Choice Set: %s", choice_set_name)
         return _get_choice_set_id(choice_set)
 
-    with netbox_error_wrap(f"Error al actualizar Choice Set '{choice_set_name}'"):
+    with netbox_error_wrap(f"Error updating Choice Set '{choice_set_name}'"):
         choice_set.update(
             {
                 "extra_choices": choices,
@@ -2035,14 +2035,14 @@ def _ensure_choice_set(
     choice_set_cfg: ChoiceSetConfig,
     dry_run: bool,
 ) -> tuple[int, NameCache]:
-    """Crea un choice set si no existe en NetBox.
-    Retorna el ID del choice set y la caché actualizada.
+    """Creates a choice set if it does not exist in NetBox.
+    Returns the ID of the choice set and the updated cache.
     """
 
     def _get_choice_set_choices(choices: list[ChoiceItemConfig]) -> list[list[str]]:
         """
-        Busca un Choice Set por su nombre y obtiene sus opciones (choices).
-        Retorna una lista de listas con los valores y etiquetas de cada opción.
+        Looks up a Choice Set by its name and gets its options (choices).
+        Returns a list of lists with the values and labels of each option.
         """
         return [[choice.value, choice.label] for choice in choices]
 
@@ -2065,7 +2065,7 @@ def _ensure_choice_set(
         )
     except NetBoxApiError as e:
         raise ConfigValidationError(
-            f"Error al crear Choice Set '{choice_set_name}': {e}"
+            f"Error creating Choice Set '{choice_set_name}': {e}"
         ) from e
 
     if getattr(choice_set, "id", 0) != 0:
@@ -2086,8 +2086,8 @@ def _ensure_custom_field(
     dry_run: bool,
 ) -> tuple[NetBoxObject, NameCache]:
     """
-    Crea un custom field si no existe en NetBox.
-    Retorna el objeto Custom Field y el caché actualizado.
+    Creates a custom field if it does not exist in NetBox.
+    Returns the Custom Field object and the updated cache.
     """
     name: str = cf_def.name
 
@@ -2106,8 +2106,8 @@ def _ensure_custom_field(
     if default_value is not None:
         create_kwargs["default"] = default_value
 
-    # NetBox filtra por defecto de forma parcial (loose); los campos usados como
-    # identificadores (ej. inventory_uuid) requieren coincidencia exacta.
+    # NetBox filters partially (loose) by default; the fields used as
+    # identifiers (e.g. inventory_uuid) require an exact match.
     if cf_def.filter_logic is not None:
         create_kwargs["filter_logic"] = cf_def.filter_logic
 
@@ -2122,7 +2122,7 @@ def _ensure_custom_field(
             dry_run=dry_run,
         )
     except NetBoxApiError as e:
-        raise ConfigValidationError(f"Error al crear custom field '{name}': {e}") from e
+        raise ConfigValidationError(f"Error creating custom field '{name}': {e}") from e
 
 
 def ensure_custom_fields(
@@ -2131,33 +2131,33 @@ def ensure_custom_fields(
     dry_run: bool,
 ) -> NameCache:
     """
-    Garantiza que todos los custom fields definidos en el YAML
-    existan en NetBox.
+    Ensures that all the custom fields defined in the YAML
+    exist in NetBox.
 
-    Además de los custom fields definidos en 'custom_fields',
-    procesa las definiciones especiales:
+    Besides the custom fields defined in 'custom_fields',
+    it processes the special definitions:
         - machine_type
         - environment
 
-    Para los custom fields de tipo 'select', garantiza también
-    la existencia del Choice Set asociado.
+    For custom fields of type 'select', it also ensures
+    the existence of the associated Choice Set.
 
     NetBox 4.5+:
-    - Los Object Types se consultan mediante /api/core/object-types/.
-    - El endpoint /api/extras/object-types/ fue eliminado en NetBox 4.5.
-    - Los Choice Sets se gestionan mediante
+    - Object Types are queried through /api/core/object-types/.
+    - The /api/extras/object-types/ endpoint was removed in NetBox 4.5.
+    - Choice Sets are managed through
     /api/extras/custom-field-choice-sets/.
 
-    Retorna un diccionario mapeando el nombre del Custom Field a su objeto en NetBox.
+    Returns a dictionary mapping the name of the Custom Field to its object in NetBox.
     """
-    # Obtener Custom Fields y Choice Sets existentes.
+    # Get the existing Custom Fields and Choice Sets.
     custom_fields = cast(list[Record], endpoints.custom_fields.all())
     choice_sets = cast(list[Record], endpoints.choice_sets.all())
 
     cfs_cache: NameCache = {str(cf.name): cf for cf in custom_fields}
     choice_sets_cache: NameCache = {str(ch_set.name): ch_set for ch_set in choice_sets}
 
-    # Obtener lista unificada de definiciones de Custom Field O(1).
+    # Get the unified O(1) list of Custom Field definitions.
     cf_definitions: list[CustomFieldConfig] = cfg.get_all_custom_field_defs()
 
     ensured_cfs: NameCache = {}
@@ -2174,7 +2174,7 @@ def ensure_custom_fields(
                 dry_run,
             )
 
-        # Crear el Custom Field si no existe.
+        # Create the Custom Field if it does not exist.
         cf_obj, cfs_cache = _ensure_custom_field(
             endpoints.custom_fields,
             cfs_cache,
@@ -2189,7 +2189,7 @@ def ensure_custom_fields(
 
 
 # ============================================================
-# TAXONOMÍA: ensure_* (GET o CREATE)
+# TAXONOMY: ensure_* (GET or CREATE)
 # ============================================================
 
 
@@ -2198,13 +2198,13 @@ def ensure_site(
     site_cfg: SiteConfig,
     dry_run: bool,
 ) -> NetBoxObject:
-    """Garantiza que el Site definido en el YAML exista en NetBox.
-    Retorna el objeto Site creado."""
+    """Ensures that the Site defined in the YAML exists in NetBox.
+    Returns the created Site object."""
     name = site_cfg.name
     slug = cast(str, site_cfg.slug)
 
-    # Utilizamos un caché efímero solo para reutilizar la lógica de get_or_create_cached,
-    # aunque realmente site se evalúa una sola vez por ejecución en _execute_pipeline.
+    # We use an ephemeral cache only to reuse the get_or_create_cached logic,
+    # although site is really evaluated only once per run in _execute_pipeline.
     obj, _ = get_or_create_cached(
         endpoint=sites_endpoint,
         cache={},
@@ -2222,21 +2222,21 @@ def precompute_cluster_type_map(
     config: NetBoxMappingConfig,
 ) -> dict[str, str]:
     """
-    Pre-escaneo del CSV: asocia cada cluster_name con la tecnología
-    del hipervisor (hypervisor_os) para determinar qué ClusterTypes
-    crear dinámicamente.
+    CSV pre-scan: associates each cluster_name with the technology
+    of the hypervisor (hypervisor_os) to determine which ClusterTypes
+    to create dynamically.
 
-    Solo procesa filas de tipo "Hipervisor". Si dos hipervisores del
-    mismo clúster reportan distintos valores de SO, lanza un error
-    explícito para forzar la corrección del maestro.
+    It only processes rows of type "Hypervisor". If two hypervisors of the
+    same cluster report different OS values, it raises an explicit
+    error to force the correction of the master.
 
-    Decisiones de diseño:
-    - El mapeo de 'machine_type' es no estricto: un tipo desconocido no es
-      un hipervisor y se ignora aquí. Reportarlo como ERROR por fila es
-      responsabilidad de `_classify_rows`; lanzar desde este pre-escaneo global
-      abortaría todo el pipeline por una sola celda inválida.
+    Design decisions:
+    - The 'machine_type' mapping is non-strict: an unknown type is not
+      a hypervisor and is ignored here. Reporting it as an ERROR per row is
+      the responsibility of `_classify_rows`; raising from this global pre-scan
+      would abort the whole pipeline because of a single invalid cell.
 
-    Retorna un diccionario {cluster_name: hypervisor_os}.
+    Returns a dictionary {cluster_name: hypervisor_os}.
     """
     cluster_type_map: dict[str, str] = {}
 
@@ -2251,20 +2251,20 @@ def precompute_cluster_type_map(
         if not cluster_name or not hypervisor_os:
             continue
 
-        # Comprobar si existe un conflicto de SO en el clúster.
+        # Check whether there is an OS conflict in the cluster.
         existing_os = cluster_type_map.get(cluster_name)
         if existing_os is not None and existing_os != hypervisor_os:
             raise ConfigValidationError(
-                f"Conflicto de SO en el clúster '{cluster_name}': "
-                f"un hipervisor reporta '{existing_os}' y otro '{hypervisor_os}'. "
-                "Corrija el inventario maestro."
+                f"OS conflict in the cluster '{cluster_name}': "
+                f"one hypervisor reports '{existing_os}' and another '{hypervisor_os}'. "
+                "Fix the master inventory."
             )
 
         cluster_type_map[cluster_name] = hypervisor_os
 
     if cluster_type_map:
         log.info(
-            "Pre-escaneo: %d clúster(es) asociados a ClusterType dinámico.",
+            "Pre-scan: %d cluster(s) associated with a dynamic ClusterType.",
             len(cluster_type_map),
         )
 
@@ -2275,10 +2275,10 @@ def parse_device_type_attributes(
     row: CsvRow, config: NetBoxMappingConfig
 ) -> DeviceTypeAttributes:
     """
-    Extrae y valida los atributos de DeviceType ('height_u', 'part_number') de una fila.
+    Extracts and validates the DeviceType attributes ('height_u', 'part_number') of a row.
 
-    Un valor vacío se representa como `None` ("no informado"); un 0 explícito es un
-    valor real. Lanza RowValidationError si algún valor informado es inválido.
+    An empty value is represented as `None` ("not reported"); an explicit 0 is a
+    real value. Raises RowValidationError if any reported value is invalid.
     """
     raw_u_height = extract_csv_value(row, "height_u", config)
     u_height: float | None = None
@@ -2287,21 +2287,21 @@ def parse_device_type_attributes(
             u_height = parse_u_height(raw_u_height)
         except ValueError as e:
             raise RowValidationError(
-                f"Valor inválido '{raw_u_height}' para 'height_u'. {e}"
+                f"Invalid value '{raw_u_height}' for 'height_u'. {e}"
             ) from e
 
     part_number: str | None = extract_csv_value(row, "part_number", config) or None
     if part_number is not None and len(part_number) > PART_NUMBER_MAX_LENGTH:
         raise RowValidationError(
-            f"El P/N '{part_number}' supera los {PART_NUMBER_MAX_LENGTH} caracteres "
-            "que admite NetBox."
+            f"The P/N '{part_number}' exceeds the {PART_NUMBER_MAX_LENGTH} characters "
+            "that NetBox allows."
         )
 
     return DeviceTypeAttributes(u_height, part_number)
 
 
 class SourcedValue[T](NamedTuple):
-    """Valor consolidado de un atributo junto con la línea del CSV de la que proviene."""
+    """Consolidated value of an attribute along with the CSV line it comes from."""
 
     value: T
     source_line: int
@@ -2315,11 +2315,11 @@ def _consolidate_attribute[T](
     candidate_line: int,
 ) -> SourcedValue[T] | None:
     """
-    Aplica la regla "primer valor no vacío" a un atributo de un modelo.
+    Applies the "first non-empty value" rule to an attribute of a model.
 
-    `current` es el valor ya elegido, o None si aún no hay valor.
-    Advierte cuando una fila posterior contradice el valor elegido.
-    Retorna el valor vigente tras considerar el candidato.
+    `current` is the value already chosen, or None if there is no value yet.
+    It warns when a later row contradicts the chosen value.
+    Returns the value in force after considering the candidate.
     """
     if candidate is None:
         return current
@@ -2328,8 +2328,8 @@ def _consolidate_attribute[T](
 
     if candidate != current.value:
         log.warning(
-            "Conflicto en DeviceType '%s': '%s' = %r (línea %d) vs %r (línea %d). "
-            "Se usa %r; corrija el inventario maestro.",
+            "Conflict in DeviceType '%s': '%s' = %r (line %d) vs %r (line %d). "
+            "%r is used; fix the master inventory.",
             model.label,
             attribute_label,
             current.value,
@@ -2346,19 +2346,19 @@ def precompute_device_type_attributes(
     config: NetBoxMappingConfig,
 ) -> DeviceTypeAttrsMap:
     """
-    Pre-escaneo del CSV: consolida un único valor de altura y P/N por modelo.
+    CSV pre-scan: consolidates a single height and P/N value per model.
 
-    Decisiones de diseño:
-    - Altura y P/N son atributos del DeviceType, que comparten todos los equipos de
-      un mismo modelo. Si cada fila los escribiera, ganaría la última y el tipo
-      oscilaría en cada ejecución. Se elige un valor por modelo antes de sincronizar.
-    - Regla determinista: el primer valor no vacío según el orden del CSV, evaluada
-      por atributo. Los conflictos se advierten con sus líneas de origen.
-    - Las filas sin fabricante/modelo o con valores inválidos se ignoran aquí: se
-      reportan como SKIP/ERROR al sincronizarse. Lanzar desde este pre-escaneo global
-      abortaría todo el pipeline por una sola celda.
+    Design decisions:
+    - Height and P/N are attributes of the DeviceType, shared by all the devices of
+      the same model. If every row wrote them, the last one would win and the type
+      would oscillate on every run. One value per model is chosen before synchronizing.
+    - Deterministic rule: the first non-empty value according to the CSV order, evaluated
+      per attribute. Conflicts are warned about with their source lines.
+    - Rows without manufacturer/model or with invalid values are ignored here: they
+      are reported as SKIP/ERROR when synchronized. Raising from this global pre-scan
+      would abort the whole pipeline because of a single cell.
 
-    Retorna un diccionario {DeviceTypeKey: DeviceTypeAttributes}.
+    Returns a dictionary {DeviceTypeKey: DeviceTypeAttributes}.
     """
     heights: dict[DeviceTypeKey, SourcedValue[float] | None] = {}
     part_numbers: dict[DeviceTypeKey, SourcedValue[str] | None] = {}
@@ -2373,10 +2373,10 @@ def precompute_device_type_attributes(
         try:
             attributes = parse_device_type_attributes(row, config)
         except RowValidationError as e:
-            # La fila fallará con ERROR al sincronizarse; aquí solo se deja la traza
-            # (visible con --verbose) para no duplicar el mensaje.
+            # The row will fail with ERROR when synchronized; here only the trace is left
+            # (visible with --verbose) so the message is not duplicated.
             log.debug(
-                "Línea %d ignorada en la consolidación del DeviceType '%s': %s",
+                "Line %d ignored in the consolidation of the DeviceType '%s': %s",
                 line_number,
                 key.label,
                 e,
@@ -2384,7 +2384,7 @@ def precompute_device_type_attributes(
             continue
 
         heights[key] = _consolidate_attribute(
-            key, "Altura (U)", heights.get(key), attributes.u_height, line_number
+            key, "Height (U)", heights.get(key), attributes.u_height, line_number
         )
         part_numbers[key] = _consolidate_attribute(
             key, "P/N", part_numbers.get(key), attributes.part_number, line_number
@@ -2408,8 +2408,8 @@ def _ensure_cluster_type(
     cache: dict[Any, NetBoxObject],
     dry_run: bool,
 ) -> tuple[NetBoxObject, dict[Any, NetBoxObject]]:
-    """Garantiza que el ClusterType exista en NetBox.
-    Retorna la tupla (ClusterType, caché actualizada)"""
+    """Ensures that the ClusterType exists in NetBox.
+    Returns the tuple (ClusterType, updated cache)"""
     return get_or_create_cached(
         endpoint=cluster_type_endpoint,
         cache=cache,
@@ -2429,23 +2429,23 @@ def ensure_dynamic_cluster_types(
     dry_run: bool,
 ) -> tuple[NetBoxObject, NameCache]:
     """
-    Crea los ClusterTypes dinámicos en NetBox a partir de los valores
-    únicos de hypervisor_os y los almacena en el caché.
+    Creates the dynamic ClusterTypes in NetBox from the unique
+    values of hypervisor_os and stores them in the cache.
 
-    Siempre garantiza el fallback estático del YAML como respaldo
-    para clústeres sin información de SO.
+    It always ensures the static fallback of the YAML as a backup
+    for clusters without OS information.
 
-    Retorna una tupla (ClusterType fallback, cache actualizado).
+    Returns a tuple (fallback ClusterType, updated cache).
     """
-    # Garantizar el fallback estático del YAML.
+    # Ensure the static fallback of the YAML.
     fallback_name = fallback_cfg.default.name
     fallback_slug = cast(str, fallback_cfg.default.slug)
     fallback, cache = _ensure_cluster_type(
         endpoints.cluster_types, fallback_name, fallback_slug, cache, dry_run
     )
 
-    # Crear ClusterTypes dinámicos (uno por cada SO único).
-    # La caché en get_or_create_cached evita N+1 requests
+    # Create dynamic ClusterTypes (one per unique OS).
+    # The cache in get_or_create_cached avoids N+1 requests
     unique_os_names: set[str] = set(cluster_type_map.values())
     for os_name in sorted(unique_os_names):
         os_slug = slugify(os_name)
@@ -2463,8 +2463,8 @@ def _sync_single_device_role(
     dry_run: bool,
 ) -> tuple[NetBoxObject, NameCache]:
     """
-    Sincroniza un único DeviceRole y asegura que permita VMs.
-    Retorna una tupla (DeviceRole, caché actualizado).
+    Synchronizes a single DeviceRole and makes sure it allows VMs.
+    Returns a tuple (DeviceRole, updated cache).
     """
     name = role_def.name
     key = name.lower()
@@ -2486,7 +2486,7 @@ def _sync_single_device_role(
             dry_run=dry_run,
         )
     except NetBoxApiError as e:
-        raise ConfigValidationError(f"Error procesando DeviceRole '{name}': {e}") from e
+        raise ConfigValidationError(f"Error processing DeviceRole '{name}': {e}") from e
 
     if getattr(obj, "id", 0) != 0:
         current_vm_role = getattr(obj, "vm_role", False)
@@ -2499,7 +2499,7 @@ def _sync_single_device_role(
                     name,
                 )
             else:
-                with netbox_error_wrap(f"Error actualizando DeviceRole '{name}'"):
+                with netbox_error_wrap(f"Error updating DeviceRole '{name}'"):
                     cast(Record, obj).update({"vm_role": role_def.vm_role})
                     log.info(
                         "UPDATED DeviceRole, vm_role %s -> %s: %s",
@@ -2518,10 +2518,10 @@ def ensure_all_device_roles(
     dry_run: bool,
 ) -> tuple[NameCache, NameCache]:
     """
-    Garantiza que todos los device roles definidos en el YAML
-    existen en NetBox (/api/dcim/device-roles/).
-    Todos los roles se habilitan para su uso en Virtual Machines.
-    Retorna una tupla (Roles asegurados, caché actualizado).
+    Ensures that all the device roles defined in the YAML
+    exist in NetBox (/api/dcim/device-roles/).
+    All the roles are enabled for use in Virtual Machines.
+    Returns a tuple (ensured roles, updated cache).
     """
     ensured_roles: NameCache = {}
     for role_def in device_roles:
@@ -2539,8 +2539,8 @@ def ensure_platform(
     cache: NameCache,
     dry_run: bool,
 ) -> tuple[NetBoxObject, NameCache]:
-    """Garantiza que el Platform exista en NetBox.
-    Retorna el objeto Platform creado y la caché actualizada."""
+    """Ensures that the Platform exists in NetBox.
+    Returns the created Platform object and the updated cache."""
     slug = slugify(name)
     return get_or_create_cached(
         endpoint=platforms_endpoint,
@@ -2562,8 +2562,8 @@ def ensure_cluster(
     cache: NameCache,
     dry_run: bool,
 ) -> tuple[NetBoxObject, NameCache]:
-    """Garantiza que el Cluster exista en NetBox.
-    Retorna el objeto Cluster creado y la caché actualizada."""
+    """Ensures that the Cluster exists in NetBox.
+    Returns the created Cluster object and the updated cache."""
     cache_key = name
     cluster_type_id = get_netbox_object_id(cluster_type)
 
@@ -2584,8 +2584,8 @@ def ensure_manufacturer(
     cache: NameCache,
     dry_run: bool,
 ) -> tuple[NetBoxObject, NameCache]:
-    """Garantiza que el Manufacturer exista en NetBox.
-    Retorna el objeto Manufacturer creado y la caché actualizada."""
+    """Ensures that the Manufacturer exists in NetBox.
+    Returns the created Manufacturer object and the updated cache."""
     slug = slugify(name)
     return get_or_create_cached(
         endpoint=manufacturers_endpoint,
@@ -2607,12 +2607,12 @@ def _sync_device_type_attributes(
     dry_run: bool,
 ) -> bool:
     """
-    Sincroniza los atributos del DeviceType (u_height y part_number).
+    Synchronizes the attributes of the DeviceType (u_height and part_number).
 
-    Solo se actualizan los atributos informados (`not None`): un valor vacío en el
-    CSV nunca borra ni degrada lo que ya tiene NetBox (ej. un P/N cargado a mano o
-    la altura 0U de un tipo hijo).
-    Retorna True si el objeto fue (o habría sido) actualizado, False en caso contrario.
+    Only the reported attributes (`not None`) are updated: an empty value in the
+    CSV never erases or degrades what NetBox already has (e.g. a P/N loaded by hand or
+    the 0U height of a child type).
+    Returns True if the object was (or would have been) updated, False otherwise.
     """
     current_raw_h = getattr(existing_dt, "u_height", None)
     current_height = float(current_raw_h) if current_raw_h is not None else None
@@ -2639,29 +2639,29 @@ def ensure_device_type(
     dry_run: bool,
 ) -> tuple[NetBoxObject, ManufModelCache]:
     """
-    Garantiza que el DeviceType exista en NetBox con los atributos consolidados del modelo.
+    Ensures that the DeviceType exists in NetBox with the consolidated attributes of the model.
 
-    Decisiones de diseño:
-    - Los atributos se sincronizan una sola vez por modelo y ejecución (al resolverse
-      por primera vez); los aciertos de caché no vuelven a escribir el tipo.
-    - Al crear, un valor no informado usa el default (altura 1.0U, P/N vacío).
-    - Si NetBox rechaza la actualización (ej. pasar a 0U con equipos montados en racks,
-      o ampliar la altura sin espacio), se advierte y se conserva el tipo actual: el
-      DeviceType existe y es válido, por lo que no debe bloquear la sincronización del nodo.
+    Design decisions:
+    - The attributes are synchronized only once per model and run (when resolved
+      for the first time); cache hits do not write the type again.
+    - On creation, a non-reported value uses the default (height 1.0U, empty P/N).
+    - If NetBox rejects the update (e.g. going to 0U with devices mounted in racks,
+      or extending the height without space), a warning is issued and the current type is kept:
+      the DeviceType exists and is valid, so it must not block the synchronization of the node.
 
-    Retorna el objeto DeviceType y la caché actualizada.
+    Returns the DeviceType object and the updated cache.
     """
     manufacturer_id = get_netbox_object_id(manufacturer)
 
-    # El ID numérico se retiene solo como fallback.
+    # The numeric ID is kept only as a fallback.
     manufacturer_name = str(getattr(manufacturer, "name", manufacturer_id))
     key = (manufacturer_name, model)
     already_resolved = key in cache
 
     if attributes.u_height is None and not already_resolved:
         log.warning(
-            "Altura (U) vacía para el modelo '%s / %s': si el DeviceType no existe se "
-            "creará con %.1fU por defecto; si ya existe, se conserva su altura actual.",
+            "Empty height (U) for the model '%s / %s': if the DeviceType does not exist it "
+            "will be created with %.1fU by default; if it already exists, its current height is kept.",
             manufacturer_name,
             model,
             DEFAULT_DEVICE_TYPE_U_HEIGHT,
@@ -2700,8 +2700,8 @@ def ensure_device_type(
         _sync_device_type_attributes(cast(Record, obj), model, attributes, dry_run)
     except NetBoxApiError as e:
         log.warning(
-            "NetBox rechazó actualizar el DeviceType '%s / %s'; se conserva el tipo "
-            "actual: %s",
+            "NetBox refused to update the DeviceType '%s / %s'; the current type is "
+            "kept: %s",
             manufacturer_name,
             model,
             e,
@@ -2716,8 +2716,8 @@ def ensure_location(
     cache: SiteNameCache,
     dry_run: bool,
 ) -> tuple[NetBoxObject, SiteNameCache]:
-    """Garantiza que el Location (Fila) exista en NetBox.
-    Retorna el objeto Location creado y la caché actualizada."""
+    """Ensures that the Location (Row) exists in NetBox.
+    Returns the created Location object and the updated cache."""
     site_id = get_netbox_object_id(site)
     cache_key = SiteScopedName(site_id, name)
 
@@ -2740,11 +2740,11 @@ def _sync_rack_location(
     dry_run: bool,
 ) -> bool:
     """
-    Sincroniza la location (fila) del rack.
-    Actualiza el objeto in-place si es necesario.
-    Retorna True si el objeto fue (o habría sido) actualizado, False en caso contrario.
+    Synchronizes the location (row) of the rack.
+    Updates the object in-place if necessary.
+    Returns True if the object was (or would have been) updated, False otherwise.
     """
-    # check_record_changes resuelve la referencia relacional (Record o id) de 'location'
+    # check_record_changes resolves the relational reference (Record or id) of 'location'
     _, changed = update_if_changed(
         existing_rack,
         {"location": target_location_id},
@@ -2762,8 +2762,8 @@ def ensure_rack(
     dry_run: bool,
     location_id: int | None = None,
 ) -> tuple[NetBoxObject, SiteNameCache]:
-    """Garantiza que el Rack exista en NetBox y esté asociado a la Location indicada.
-    Retorna el objeto Rack creado/actualizado y la caché actualizada."""
+    """Ensures that the Rack exists in NetBox and is associated with the given Location.
+    Returns the created/updated Rack object and the updated cache."""
     site_id = get_netbox_object_id(site)
     cache_key = SiteScopedName(site_id, name)
 
@@ -2782,7 +2782,7 @@ def ensure_rack(
         skip_filter=(site_id == 0),
     )
 
-    # Si ya existía, garantizamos que tenga la location correcta (Idempotencia)
+    # If it already existed, we make sure it has the right location (Idempotency)
     if getattr(obj, "id", 0) != 0 and location_id is not None:
         _sync_rack_location(cast(Record, obj), name, location_id, dry_run)
 
@@ -2795,22 +2795,22 @@ def ensure_prefix(
     dry_run: bool,
 ) -> tuple[NetBoxObject, bool]:
     """
-    Garantiza que el Prefix (red) exista en NetBox.
+    Ensures that the Prefix (network) exists in NetBox.
 
-    Decisiones de diseño:
-    - NetBox no asigna una IP a un Prefix de forma explícita: la pertenencia es por
-      contención de dirección. Basta con que el Prefix exista para que la IP quede
-      dentro de él (la validación de contención se hace al parsear el CSV).
-    - Idempotente: si el Prefix ya existe, no se modifica.
-    - No usa `get_or_create_cached` a propósito: esa función no informa si el objeto
-      fue creado o ya existía, y aquí ese booleano alimenta el estado de sincronización
-      de la interfaz (`any_changes`). Derivarlo del retorno exigiría cambiar el contrato
-      de `get_or_create_cached` y de todos sus consumidores. Además, sus mecanismos
-      basados en slug (búsqueda preventiva, slug de respaldo) no aplican: el Prefix
-      no tiene slug. En su lugar reutiliza la primitiva `_create_record`.
+    Design decisions:
+    - NetBox does not assign an IP to a Prefix explicitly: membership is by
+      address containment. It is enough for the Prefix to exist for the IP to fall
+      within it (the containment validation is done when parsing the CSV).
+    - Idempotent: if the Prefix already exists, it is not modified.
+    - It does not use `get_or_create_cached` on purpose: that function does not tell whether the
+      object was created or already existed, and here that boolean feeds the synchronization
+      status of the interface (`any_changes`). Deriving it from the return value would require
+      changing the contract of `get_or_create_cached` and of all its consumers. Besides, its
+      slug-based mechanisms (preventive search, fallback slug) do not apply: the Prefix
+      has no slug. Instead it reuses the `_create_record` primitive.
 
-    Retorna:
-        tuple[NetBoxObject, bool]: El Prefix y un booleano indicando si hubo cambios.
+    Returns:
+        tuple[NetBoxObject, bool]: The Prefix and a boolean indicating whether there were changes.
     """
     existing: list[Record] = list(prefixes_endpoint.filter(prefix=network))
     if existing:
@@ -2826,7 +2826,7 @@ def ensure_prefix(
 
 
 # ============================================================
-# CONSTRUCCIÓN DE PAYLOAD
+# PAYLOAD CONSTRUCTION
 # ============================================================
 
 
@@ -2835,12 +2835,12 @@ def _resolve_default_or_empty(
     is_optional: bool,
     target: str,
 ) -> FieldValue:
-    """Centraliza la política de fallback (default > None > error)."""
+    """Centralizes the fallback policy (default > None > error)."""
     if default is not None:
         return default
     if is_optional:
         return None
-    raise RowValidationError(f"El campo obligatorio '{target}' está vacío en el CSV.")
+    raise RowValidationError(f"The mandatory field '{target}' is empty in the CSV.")
 
 
 def _extract_concat_dot_value(
@@ -2848,10 +2848,10 @@ def _extract_concat_dot_value(
     source: list[str],
     config: NetBoxMappingConfig,
 ) -> str:
-    """Resuelve un campo multi-columna vía concatenación con punto.
+    """Resolves a multi-column field via dot concatenation.
 
-    Retorna la concatenación de los valores de las columnas source.
-    Si todas las columnas source están vacías, retorna un string vacío.
+    Returns the concatenation of the values of the source columns.
+    If all the source columns are empty, it returns an empty string.
     """
     parts = [row.get(s, "") for s in source]
     return concat_dot(parts, config)
@@ -2863,9 +2863,9 @@ def _extract_coalesce_value(
     config: NetBoxMappingConfig,
 ) -> str:
     """
-    Resuelve un campo multi-columna mediante coalesce.
-    Falla rápidamente si más de un campo contiene un valor.
-    Retorna el primer valor encontrado, o un string vacío si ninguno tiene valor.
+    Resolves a multi-column field through coalesce.
+    It fails fast if more than one field contains a value.
+    Returns the first value found, or an empty string if none has a value.
     """
     values = []
     for s in source:
@@ -2873,13 +2873,13 @@ def _extract_coalesce_value(
         if not config.is_empty(val):
             values.append(val)
 
-    # Eliminar duplicados para evitar falso conflicto si ambas columnas tienen el mismo valor exacto
+    # Remove duplicates to avoid a false conflict if both columns have the exact same value
     unique_values = list(dict.fromkeys(values))
 
     if len(unique_values) > 1:
         raise RowValidationError(
-            f"Conflicto: Múltiples valores distintos no nulos {unique_values} "
-            f"para un campo coalesce provenientes de las columnas {source}."
+            f"Conflict: Multiple distinct non-null values {unique_values} "
+            f"for a coalesce field coming from the columns {source}."
         )
 
     return unique_values[0] if unique_values else ""
@@ -2891,14 +2891,14 @@ def _extract_product_value(
     config: NetBoxMappingConfig,
 ) -> str:
     """
-    Resuelve un campo multi-columna como el producto numérico de sus fuentes.
+    Resolves a multi-column field as the numeric product of its sources.
 
-    Permite derivar totales a partir de columnas "por socket" sin duplicar el
-    dato en el inventario (ej. vcpus = Threads (por socket) x Sockets).
-    Si alguna fuente está vacía no se emite un producto parcial, porque sería
-    un total incorrecto: retorna un string vacío para delegar en la política
-    de defaults/opcionales. Lanza RowValidationError si alguna fuente no es
-    numérica.
+    It allows deriving totals from "per socket" columns without duplicating the
+    data in the inventory (e.g. vcpus = Threads (per socket) x Sockets).
+    If any source is empty no partial product is emitted, because it would be
+    an incorrect total: it returns an empty string to delegate to the
+    defaults/optionals policy. Raises RowValidationError if any source is not
+    numeric.
     """
     values = [row.get(s, "").strip() for s in source]
     empty_sources = [
@@ -2910,7 +2910,7 @@ def _extract_product_value(
 
     if empty_sources:
         log.warning(
-            "Producto incompleto: columnas vacías %s de %s. El campo se omite.",
+            "Incomplete product: empty columns %s of %s. The field is skipped.",
             empty_sources,
             source,
         )
@@ -2920,19 +2920,19 @@ def _extract_product_value(
         product = math.prod(parse_float(val) for val in values)
     except ValueError as e:
         raise RowValidationError(
-            f"Valores inválidos {values} para un campo product "
-            f"provenientes de las columnas {source}. {e}"
+            f"Invalid values {values} for a product field "
+            f"coming from the columns {source}. {e}"
         ) from e
 
     return str(int(product)) if product.is_integer() else str(product)
 
 
 def _extract_raw_source_value(row: CsvRow, source: str | list[str]) -> str:
-    """Extrae el valor crudo de la(s) columna(s) origen, sin transformar."""
+    """Extracts the raw value of the source column(s), untransformed."""
     if isinstance(source, list):
         raise TypeError(
-            "No se puede extraer un valor crudo a partir de una lista de fuentes "
-            "sin usar una función de transformación explícita."
+            "A raw value cannot be extracted from a list of sources "
+            "without using an explicit transformation function."
         )
     return row.get(source, "")
 
@@ -2944,9 +2944,9 @@ def _validate_select_choice(
     is_optional: bool,
 ) -> FieldValue:
     """
-    Valida value contra choice_set cuando el Custom Field es de tipo
-    'select' o 'multiselect'. No-op para cualquier otro tipo de campo.
-    Retorna el valor transformado o lanza RowValidationError si falla.
+    Validates value against choice_set when the Custom Field is of type
+    'select' or 'multiselect'. No-op for any other field type.
+    Returns the transformed value or raises RowValidationError if it fails.
     """
     if not (
         custom_field_def
@@ -2969,16 +2969,16 @@ def _validate_select_choice(
             return value
         invalid_val = value
 
-    # Manejo unificado de fallbacks y errores
+    # Unified handling of fallbacks and errors
     msg_val = (
-        f"Valores {invalid_val} no son válidos"
+        f"Values {invalid_val} are not valid"
         if is_multi
-        else f"Valor '{invalid_val}' no es válido"
+        else f"Value '{invalid_val}' is not valid"
     )
-    msg_type = " multiselect" if is_multi else ""
+    msg_type = " (multiselect)" if is_multi else ""
 
     log.warning(
-        "%s para el Custom Field%s '%s'. Opciones válidas: %s.",
+        "%s for the Custom Field%s '%s'. Valid options: %s.",
         msg_val,
         msg_type,
         target,
@@ -2988,9 +2988,9 @@ def _validate_select_choice(
     if is_optional:
         return None
 
-    err_prefix = "Valores inválidos" if is_multi else "Valor inválido"
+    err_prefix = "Invalid values" if is_multi else "Invalid value"
     raise RowValidationError(
-        f"{err_prefix} '{invalid_val}' para el campo requerido '{target}'."
+        f"{err_prefix} '{invalid_val}' for the required field '{target}'."
     )
 
 
@@ -3003,16 +3003,16 @@ def _resolve_field_value(
     custom_field_def: CustomFieldConfig | None = None,
 ) -> FieldValue:
     """
-    Interpreta un `FieldMappingConfig` sobre una fila del CSV para devolver el valor final.
-    Maneja concatenaciones y campos simples. Aplica el patrón "Pipe and Filter",
-    delegando cada una a una función de responsabilidad única; corta
-    temprano (fail-fast) en cuanto una etapa determina el valor final.
-    Retorna el valor transformado o lanza RowValidationError si falla.
+    Interprets a `FieldMappingConfig` over a CSV row to return the final value.
+    It handles concatenations and simple fields. It applies the "Pipe and Filter" pattern,
+    delegating each one to a single-responsibility function; it cuts
+    early (fail-fast) as soon as a stage determines the final value.
+    Returns the transformed value or raises RowValidationError if it fails.
     """
     source = field_def.source
     target = field_def.target
 
-    # 1. Extracción Cruda o Transformación
+    # 1. Raw Extraction or Transformation
     if isinstance(source, list) and field_def.transform == "concat_dot":
         raw_value = _extract_concat_dot_value(row, source, config)
     elif isinstance(source, list) and field_def.transform == "coalesce":
@@ -3022,22 +3022,22 @@ def _resolve_field_value(
     else:
         raw_value = _extract_raw_source_value(row, source)
 
-    # 2. Resolución de Vacíos y Defaults (Centralizado)
+    # 2. Resolution of Empties and Defaults (Centralized)
     if config.is_empty(raw_value):
         return _resolve_default_or_empty(default, is_optional, target)
 
-    # 3. Procesamiento de campos simples (los transformados saltan el mapeo por diccionario)
+    # 3. Processing of simple fields (transformed ones skip the dictionary mapping)
     value: FieldValue = raw_value
     if isinstance(source, str):
         value = config.map_value_by_source(source, raw_value, strict=True)
 
-    # 4. Validaciones y Casts (se aplican siempre al final del pipeline)
+    # 4. Validations and Casts (always applied at the end of the pipeline)
     value = _validate_select_choice(value, custom_field_def, target, is_optional)
     if field_def.cast:
         value = apply_cast(value, field_def.cast, target)
 
     if value != raw_value:
-        log.debug("Mapeo %s: '%s' casteado a -> '%s'", target, raw_value, value)
+        log.debug("Mapping %s: '%s' cast to -> '%s'", target, raw_value, value)
 
     return value
 
@@ -3045,8 +3045,8 @@ def _resolve_field_value(
 def _assign_if_valid(
     target_payload: dict[str, Any], fd: FieldMappingConfig, val: FieldValue
 ) -> dict[str, Any]:
-    """Sanitiza y asigna el valor al payload solo si es válido.
-    Retorna el payload actualizado."""
+    """Sanitizes and assigns the value to the payload only if it is valid.
+    Returns the updated payload."""
     if fd.is_unique and val == "":
         val = None
 
@@ -3063,8 +3063,8 @@ def _process_maps(
     target_payload: dict[str, Any],
     is_custom: bool,
 ) -> dict[str, Any]:
-    """Procesa una lista de mapeos y puebla el payload destino.
-    Retorna el payload actualizado."""
+    """Processes a list of mappings and populates the target payload.
+    Returns the updated payload."""
     for fd in maps:
         cf_def = None
         default = None
@@ -3074,8 +3074,8 @@ def _process_maps(
             cf_def = config.get_custom_field_def(fd.target)
             if cf_def is None:
                 raise ConfigValidationError(
-                    f"Error crítico de configuración: El custom_mapping target "
-                    f"'{fd.target}' no está definido en custom_field_definitions."
+                    f"Critical configuration error: The custom_mapping target "
+                    f"'{fd.target}' is not defined in custom_field_definitions."
                 )
             default = cf_def.default
             is_optional = not cf_def.required
@@ -3100,20 +3100,20 @@ def build_payload(
     config: NetBoxMappingConfig,
 ) -> NetBoxPayload:
     """
-    Construye de forma dinámica el payload para enviar a la API de NetBox,
-    basándose estrictamente en las reglas de mapeo (DML) definidas en el archivo YAML.
+    Dynamically builds the payload to send to the NetBox API,
+    based strictly on the mapping rules (DML) defined in the YAML file.
 
-    Esta función es el núcleo del dinamismo del script, ya que abstrae la lógica de
-    extracción, mapeo de valores, casteos y validaciones, aislando el código Python
-    de las reglas de negocio específicas del CSV.
+    This function is the core of the script's dynamism, since it abstracts the logic of
+    extraction, value mapping, casts and validations, isolating the Python code
+    from the business rules specific to the CSV.
 
-    - Los `native_maps` se inyectan en el primer nivel (raíz) del diccionario payload.
-    - Los `custom_maps` se agrupan y empaquetan dentro de la clave "custom_fields".
-    - Los campos resultantes con valor `None` (ej. celdas vacías donde `is_optional=True`)
-      se excluyen proactivamente del payload para evitar borrar datos preexistentes
-      o violar constraints en NetBox.
+    - The `native_maps` are injected at the first level (root) of the payload dictionary.
+    - The `custom_maps` are grouped and packed within the "custom_fields" key.
+    - The resulting fields with a `None` value (e.g. empty cells where `is_optional=True`)
+      are proactively excluded from the payload to avoid erasing pre-existing data
+      or violating constraints in NetBox.
 
-    Retorna el payload transformado.
+    Returns the transformed payload.
     """
     payload: NetBoxPayload = {}
     cf_payload: CustomFieldsPayload = {}
@@ -3124,12 +3124,12 @@ def build_payload(
     if cf_payload:
         payload["custom_fields"] = cf_payload
 
-    log.debug("Payload construido: %s", payload)
+    log.debug("Payload built: %s", payload)
     return payload
 
 
 # ============================================================
-# RESOLVERS GENERALES (PARA SINCRONIZACIÓN DE OBJETOS)
+# GENERAL RESOLVERS (FOR OBJECT SYNCHRONIZATION)
 # ============================================================
 
 
@@ -3140,8 +3140,8 @@ def _resolve_platform(
     dry_run: bool,
     config: NetBoxMappingConfig,
 ) -> tuple[int | None, NameCache]:
-    """Resuelve el Platform desde la columna OS.
-    Retorna una tupla con el ID del Platform y el Platform cache actualizado."""
+    """Resolves the Platform from the OS column.
+    Returns a tuple with the ID of the Platform and the updated Platform cache."""
     plt_name = extract_csv_value(row, "os", config)
     if not plt_name:
         return None, plt_cache
@@ -3161,9 +3161,9 @@ def _resolve_device_role(
     config: NetBoxMappingConfig,
 ) -> int:
     """
-    Busca un DeviceRole por nombre (insensible a mayúsculas) y retorna su ID.
-    Si el nombre está vacío o no existe, utiliza "Others" como fallback.
-    Lanza RowValidationError si el fallback "Others" tampoco existe.
+    Looks up a DeviceRole by name (case-insensitive) and returns its ID.
+    If the name is empty or does not exist, it uses "Others" as a fallback.
+    Raises RowValidationError if the "Others" fallback does not exist either.
     """
     role_csv = extract_csv_value(row, "role", config)
     role_obj = None
@@ -3177,8 +3177,8 @@ def _resolve_device_role(
     if not role_obj:
         machine_name = extract_csv_value(row, "machine_name", config) or "?"
         raise RowValidationError(
-            f"No existe el DeviceRole 'Others' en NetBox para asignar como "
-            f"fallback a la máquina '{machine_name}'."
+            f"The DeviceRole 'Others' does not exist in NetBox to assign as a "
+            f"fallback to the machine '{machine_name}'."
         )
 
     return get_netbox_object_id(role_obj)
@@ -3188,12 +3188,12 @@ def _resolve_netbox_status(
     row: CsvRow, config: NetBoxMappingConfig, node_type: NodeType
 ) -> str:
     """
-    Resuelve el status NetBox a partir de la columna 'Estado'.
+    Resolves the NetBox status from the 'Status' column.
 
-    Si el valor no existe en status_map, se aplica el fallback
-    correspondiente al tipo de nodo.
+    If the value does not exist in status_map, the fallback
+    corresponding to the node type is applied.
 
-    Retorna el status NetBox.
+    Returns the NetBox status.
     """
     node_cfg = config.node_types.get_config(node_type)
     return extract_csv_value(row, "status", config, fallback=node_cfg.status.default)
@@ -3210,19 +3210,19 @@ def _resolve_cluster(
     config: NetBoxMappingConfig,
 ) -> tuple[int | None, NameCache]:
     """
-    Resuelve el Cluster desde la columna correspondiente.
+    Resolves the Cluster from the corresponding column.
 
-    Determina el ClusterType correcto usando el mapa pre-computado
-    (cluster_name → hypervisor_os → ClusterType). Si el clúster no
-    tiene una tecnología asociada, usa el fallback genérico del YAML.
+    It determines the right ClusterType using the precomputed map
+    (cluster_name → hypervisor_os → ClusterType). If the cluster does not
+    have an associated technology, it uses the generic fallback of the YAML.
 
-    Retorna una tupla con el ID del Cluster y el Cluster cache actualizado.
+    Returns a tuple with the ID of the Cluster and the updated Cluster cache.
     """
     cluster_name = extract_csv_value(row, "cluster_name", config)
     if not cluster_name:
         return None, cluster_cache
 
-    # Resolver el ClusterType correcto para este clúster.
+    # Resolve the right ClusterType for this cluster.
     os_name = cluster_type_map.get(cluster_name)
     cluster_type = cluster_type_cache[os_name] if os_name else fallback_cluster_type
 
@@ -3243,12 +3243,12 @@ def select_device_type_attributes(
     config: NetBoxMappingConfig,
 ) -> DeviceTypeAttributes:
     """
-    Valida los atributos de DeviceType de la fila y elige los que se sincronizarán.
+    Validates the DeviceType attributes of the row and picks the ones to be synchronized.
 
-    Los atributos de la fila se validan siempre (un valor inválido es error de la
-    fila), pero se usan los consolidados del modelo (`device_type_attrs`), para que
-    todas las filas de un mismo modelo coincidan.
-    Lanza RowValidationError si algún valor de la fila es inválido.
+    The attributes of the row are always validated (an invalid value is an error of
+    the row), but the consolidated ones of the model (`device_type_attrs`) are used, so
+    that all the rows of the same model match.
+    Raises RowValidationError if any value of the row is invalid.
     """
     row_attributes = parse_device_type_attributes(row, config)
     return device_type_attrs.get(key, row_attributes)
@@ -3262,8 +3262,8 @@ def _resolve_device_type(
     dry_run: bool,
 ) -> tuple[int, CacheStore]:
     """
-    Garantiza el Manufacturer y el DeviceType del modelo, con atributos ya validados.
-    Retorna una tupla con el ID del DeviceType y la caché (CacheStore) actualizada.
+    Ensures the Manufacturer and the DeviceType of the model, with already validated attributes.
+    Returns a tuple with the ID of the DeviceType and the updated cache (CacheStore).
     """
     manufacturer_obj, caches.manufacturers = ensure_manufacturer(
         endpoints.manufacturers,
@@ -3292,9 +3292,9 @@ def _resolve_host_device(
     config: NetBoxMappingConfig,
 ) -> tuple[int | None, HostDeviceCache]:
     """
-    Resuelve y cachea el ID del Device correspondiente al hipervisor host,
-    acotado estrictamente al site configurado.
-    Retorna una tupla con el ID del host (o None) y la caché actualizada.
+    Resolves and caches the ID of the Device corresponding to the host hypervisor,
+    strictly scoped to the configured site.
+    Returns a tuple with the ID of the host (or None) and the updated cache.
     """
     host_name_csv = extract_csv_value(row, "host_device", config)
     if not host_name_csv:
@@ -3303,7 +3303,7 @@ def _resolve_host_device(
     site_id = get_netbox_object_id(site)
     cache_key = SiteScopedName(site_id, host_name_csv)
 
-    # Solo buscar si no existe en caché.
+    # Only look it up if it does not exist in the cache.
     if cache_key not in cache:
         try:
             host_devices: list[Record] = []
@@ -3318,16 +3318,16 @@ def _resolve_host_device(
             cache[cache_key] = device_id
         except Exception as e:
             raise NetBoxApiError(
-                f"ERROR ({machine_name}): falló la consulta del host_device '{host_name_csv}' "
-                f"en Site (ID: {site_id}): {e}"
+                f"ERROR ({machine_name}): the lookup of the host_device '{host_name_csv}' "
+                f"in Site (ID: {site_id}) failed: {e}"
             ) from e
 
     dev_id = cache[cache_key]
 
     if dev_id is None:
         log.warning(
-            "El dispositivo host '%s' de la VM '%s' no se encontró en el site: "
-            "la VM se creará sin asignación de host.",
+            "The host device '%s' of the VM '%s' was not found in the site: "
+            "the VM will be created without a host assignment.",
             host_name_csv,
             machine_name,
         )
@@ -3336,7 +3336,7 @@ def _resolve_host_device(
 
 
 # ============================================================
-# SINCRONIZACIÓN DE OBJETOS (DEVICES y VMS)
+# OBJECT SYNCHRONIZATION (DEVICES and VMS)
 # ============================================================
 
 
@@ -3350,11 +3350,11 @@ def _prepare_base_node(
     custom_maps: list[FieldMappingConfig],
 ) -> BaseNodeData:
     """
-    Valida la fila y prepara los campos comunes entre device y virtual_machine.
+    Validates the row and prepares the fields common to device and virtual_machine.
 
-    No escribe en NetBox: solo extrae, mapea y valida (casts, mapas, choices, rol y
-    estado). Así un dato inválido aborta la fila antes de crear dependencias.
-    Lanza RowValidationError si algún valor es inválido.
+    It does not write to NetBox: it only extracts, maps and validates (casts, maps, choices,
+    role and status). This way invalid data aborts the row before creating dependencies.
+    Raises RowValidationError if any value is invalid.
     """
     machine_name = extract_csv_value(row, "machine_name", config, strict_extract=True)
     uuid = extract_csv_value(row, "inventory_uuid", config).lower()
@@ -3382,8 +3382,8 @@ def _resolve_common_dependencies(
     dry_run: bool,
 ) -> tuple[NetBoxPayload, CacheStore]:
     """
-    Garantiza las dependencias comunes a Devices y VMs (Platform) y las incorpora
-    al payload. Retorna una copia del payload y la caché actualizada.
+    Ensures the dependencies common to Devices and VMs (Platform) and adds them
+    to the payload. Returns a copy of the payload and the updated cache.
     """
     platform_id, caches.platforms = _resolve_platform(
         endpoints.platforms, row, caches.platforms, dry_run, config
@@ -3394,18 +3394,18 @@ def _resolve_common_dependencies(
 
 
 def _extract_object_uuid(obj: NetBoxObject) -> str:
-    """Obtiene el `inventory_uuid` normalizado de un objeto NetBox ("" si no tiene)."""
+    """Gets the normalized `inventory_uuid` of a NetBox object ("" if it has none)."""
     custom_fields: dict[str, Any] = getattr(obj, "custom_fields", {}) or {}
     return str(custom_fields.get("inventory_uuid") or "").strip().lower()
 
 
 def _find_by_uuid(endpoint: Endpoint, uuid: str) -> list[Record]:
     """
-    Busca objetos por `inventory_uuid` con coincidencia exacta.
+    Looks up objects by `inventory_uuid` with an exact match.
 
-    El filtro de Custom Fields de NetBox es parcial (`loose`) por defecto, por lo que
-    el resultado se vuelve a filtrar localmente para descartar UUIDs que solo
-    contienen el valor buscado.
+    The NetBox Custom Fields filter is partial (`loose`) by default, so
+    the result is filtered again locally to discard UUIDs that only
+    contain the searched value.
     """
     candidates: list[Record] = list(endpoint.filter(cf_inventory_uuid=uuid))
     return [obj for obj in candidates if _extract_object_uuid(obj) == uuid]
@@ -3421,18 +3421,18 @@ def _is_identifier_unique(
     consequence: str,
 ) -> bool:
     """
-    Regla común de unicidad de un identificador (UUID o nombre) de nodo: debe
-    aparecer exactamente una vez en NetBox y una vez en el CSV.
+    Common uniqueness rule for a node identifier (UUID or name): it must
+    appear exactly once in NetBox and once in the CSV.
 
-    `warn_when_absent` distingue si la ausencia en NetBox es esperable (UUID de un
-    nodo nuevo: no se advierte) o ya constituye un fallo (coincidencia por nombre).
-    `consequence` describe qué ocurrirá con la fila al no ser único.
+    `warn_when_absent` tells whether the absence in NetBox is expected (UUID of a
+    new node: no warning) or already constitutes a failure (match by name).
+    `consequence` describes what will happen to the row when it is not unique.
     """
     if nb_count == 1 and csv_count == 1:
         return True
     if warn_when_absent or nb_count > 1 or csv_count > 1:
         log.warning(
-            "%s '%s' de %s no es único (NetBox=%d, CSV=%d). %s",
+            "%s '%s' of %s is not unique (NetBox=%d, CSV=%d). %s",
             identifier_label,
             identifier,
             node_type,
@@ -3450,11 +3450,11 @@ def _is_uuid_safely_unique(
     csv_uuid_counts: Counter[str],
 ) -> bool:
     """
-    Valida que un UUID identifique exactamente un nodo tanto en NetBox como en el CSV,
-    condición necesaria para actualizar por UUID sin pisar a otro nodo.
+    Validates that a UUID identifies exactly one node both in NetBox and in the CSV,
+    a necessary condition to update by UUID without clobbering another node.
 
-    Retorna True si el UUID aparece una sola vez en ambos sistemas. Solo advierte si
-    hay ambigüedad real (no cuando el nodo simplemente aún no existe en NetBox).
+    Returns True if the UUID appears only once in both systems. It only warns if
+    there is real ambiguity (not when the node simply does not exist in NetBox yet).
     """
     return _is_identifier_unique(
         "UUID",
@@ -3463,7 +3463,7 @@ def _is_uuid_safely_unique(
         len(existing),
         csv_uuid_counts.get(uuid, 0),
         warn_when_absent=False,
-        consequence="Se intentará resolver por nombre.",
+        consequence="Resolution by name will be attempted.",
     )
 
 
@@ -3474,25 +3474,25 @@ def _is_name_safely_unique(
     csv_name_counts: Counter[str],
 ) -> bool:
     """
-    Valida que un nombre de máquina sea único tanto en NetBox
-    como en el CSV, condición necesaria para permitir una
-    actualización segura cuando la coincidencia es solo por nombre.
+    Validates that a machine name is unique both in NetBox
+    and in the CSV, a necessary condition to allow a
+    safe update when the match is only by name.
 
-    Retorna True si el nombre es único en ambos sistemas.
+    Returns True if the name is unique in both systems.
     """
     return _is_identifier_unique(
-        "Nombre",
+        "Name",
         machine_name,
         get_node_type_from_object(endpoint),
         len(existing),
         csv_name_counts.get(machine_name, 0),
         warn_when_absent=True,
-        consequence="SKIP: se requiere UUID único para sincronizar.",
+        consequence="SKIP: a unique UUID is required to synchronize.",
     )
 
 
 def _get_object_site_id(obj: NetBoxObject) -> int | None:
-    """Obtiene el ID del Site de un objeto NetBox (None si no tiene Site asignado)."""
+    """Gets the ID of the Site of a NetBox object (None if it has no Site assigned)."""
     site = getattr(obj, "site", None)
     site_id = getattr(site, "id", None)
     return int(site_id) if site_id is not None else None
@@ -3506,17 +3506,17 @@ def _resolve_by_uuid(
     site_id: int,
 ) -> list[Record]:
     """
-    Etapa 1 de la resolución de identidad: búsqueda por UUID con validación de unicidad.
+    Stage 1 of the identity resolution: lookup by UUID with uniqueness validation.
 
-    Decisiones de diseño:
-    - El UUID es una identidad global, por lo que se busca en todos los Sites. Si el
-      nodo existe pero pertenece a otro Site, actualizarlo lo movería (y pisaría
-      datos fuera del alcance del pipeline) y crearlo duplicaría su UUID: se omite
-      la fila para revisión humana.
+    Design decisions:
+    - The UUID is a global identity, so it is searched across all Sites. If the
+      node exists but belongs to another Site, updating it would move it (and clobber
+      data outside the scope of the pipeline) and creating it would duplicate its UUID: the
+      row is skipped for human review.
 
-    Retorna el objeto (en lista de un elemento) si el UUID es único en NetBox y en el
-    CSV; lista vacía si no se pudo resolver por esta vía.
-    Lanza RowSkipCondition si el nodo pertenece a otro Site.
+    Returns the object (in a single-element list) if the UUID is unique in NetBox and in the
+    CSV; an empty list if it could not be resolved this way.
+    Raises RowSkipCondition if the node belongs to another Site.
     """
     if config.is_empty(uuid):
         return []
@@ -3528,13 +3528,13 @@ def _resolve_by_uuid(
     object_site_id = _get_object_site_id(existing[0])
     if object_site_id is not None and object_site_id != site_id:
         log.warning(
-            "SKIP: el UUID '%s' ya existe en un nodo del Site ID=%d, distinto del "
-            "Site configurado (ID=%d). No se modifica ni se duplica.",
+            "SKIP: the UUID '%s' already exists in a node of Site ID=%d, different from the "
+            "configured Site (ID=%d). It is neither modified nor duplicated.",
             uuid,
             object_site_id,
             site_id,
         )
-        raise RowSkipCondition("El UUID pertenece a un nodo de otro Site.")
+        raise RowSkipCondition("The UUID belongs to a node of another Site.")
     return existing
 
 
@@ -3547,20 +3547,20 @@ def _resolve_by_name(
     site_id: int,
 ) -> list[Record]:
     """
-    Etapa 2 de la resolución de identidad: búsqueda por nombre con validación de unicidad.
+    Stage 2 of the identity resolution: lookup by name with uniqueness validation.
 
-    Decisiones de diseño:
-    - La búsqueda se acota al Site configurado: los nombres solo son únicos dentro de
-      un Site en NetBox, por lo que un homónimo de otro Site no es el mismo nodo y
-      jamás debe actualizarse. Un Site aún inexistente (ID 0, dry-run) no tiene nodos.
-    - Un objeto hallado por nombre cuyo UUID coincide (sin distinguir mayúsculas) se
-      acepta: cubre UUIDs almacenados con otra capitalización y UUIDs duplicados cuyas
-      filas ya se separaron por nombre en una ejecución previa.
-    - Un objeto con un UUID distinto y no vacío no se actualiza: sobrescribirlo
-      suplantaría la identidad de otro nodo y exige revisión humana.
+    Design decisions:
+    - The search is scoped to the configured Site: names are only unique within
+      a Site in NetBox, so a namesake from another Site is not the same node and
+      must never be updated. A Site that does not exist yet (ID 0, dry-run) has no nodes.
+    - An object found by name whose UUID matches (case-insensitively) is
+      accepted: it covers UUIDs stored with another capitalization and duplicate UUIDs whose
+      rows were already separated by name in a previous run.
+    - An object with a different, non-empty UUID is not updated: overwriting it
+      would impersonate the identity of another node and requires human review.
 
-    Retorna lista vacía si no existe (se debe crear) o el objeto a actualizar.
-    Lanza RowSkipCondition si no se puede garantizar una coincidencia segura.
+    Returns an empty list if it does not exist (it must be created) or the object to update.
+    Raises RowSkipCondition if a safe match cannot be guaranteed.
     """
     if site_id == 0:
         return []
@@ -3576,17 +3576,17 @@ def _resolve_by_name(
             return uuid_matches
 
     if not _is_name_safely_unique(endpoint, existing, machine_name, csv_name_counts):
-        raise RowSkipCondition("No se puede asegurar unicidad por nombre.")
+        raise RowSkipCondition("Uniqueness by name cannot be guaranteed.")
 
     existing_uuid = _extract_object_uuid(existing[0])
     if has_uuid and existing_uuid and existing_uuid != uuid:
         log.warning(
-            "SKIP '%s': existe por nombre pero con otro UUID (NetBox=%s, CSV=%s).",
+            "SKIP '%s': it exists by name but with another UUID (NetBox=%s, CSV=%s).",
             machine_name,
             existing_uuid,
             uuid,
         )
-        raise RowSkipCondition("El nombre pertenece a un nodo con distinto UUID.")
+        raise RowSkipCondition("The name belongs to a node with a different UUID.")
 
     return existing
 
@@ -3600,17 +3600,17 @@ def _resolve_existing_object(
     site_id: int,
 ) -> list[Record]:
     """
-    Resuelve el objeto existente en NetBox en dos etapas: UUID único y, si no se
-    resuelve, nombre único dentro del Site configurado.
+    Resolves the existing object in NetBox in two stages: unique UUID and, if it is
+    not resolved, unique name within the configured Site.
 
-    Decisiones de diseño:
-    - Actualizar a ciegas ante un identificador ambiguo provocaría corrupción de datos
-      cruzada entre nodos; el pipeline nunca modifica nodos de otro Site.
-    - Solo lee NetBox: se ejecuta antes de crear dependencias, para que una fila que
-      termina en SKIP no deje escrituras.
+    Design decisions:
+    - Blindly updating on an ambiguous identifier would cause cross data corruption
+      between nodes; the pipeline never modifies nodes of another Site.
+    - It only reads NetBox: it runs before creating dependencies, so that a row that
+      ends in SKIP leaves no writes.
 
-    Retorna lista vacía si el nodo debe crearse, o el objeto a actualizar.
-    Lanza RowSkipCondition si ninguna etapa puede garantizar una coincidencia segura.
+    Returns an empty list if the node must be created, or the object to update.
+    Raises RowSkipCondition if no stage can guarantee a safe match.
     """
     by_uuid = _resolve_by_uuid(endpoint, uuid, csv_counts.uuids, config, site_id)
     if by_uuid:
@@ -3630,19 +3630,19 @@ def _execute_sync(
     dry_run: bool,
 ) -> SyncResult:
     """
-    Ejecuta la operación final de sincronización (CREATE, UPDATE, UNCHANGED) contra NetBox.
+    Executes the final synchronization operation (CREATE, UPDATE, UNCHANGED) against NetBox.
 
-    Decisiones de diseño:
-    - Confianza delegada: Si una fila llega a esta función con la lista `existing` poblada,
-      asumimos que ya superó la validación estricta de unicidad previa.
-    - Idempotencia y Optimización: Antes de emitir un UPDATE a la API, evaluamos
-      las diferencias (diff) localmente. Si no hay cambios reales, se clasifica
-      como UNCHANGED para ahorrar ancho de banda y tiempo de procesamiento.
+    Design decisions:
+    - Delegated trust: If a row reaches this function with the `existing` list populated,
+      we assume it already passed the strict prior uniqueness validation.
+    - Idempotency and Optimization: Before issuing an UPDATE to the API, we evaluate
+      the differences (diff) locally. If there are no real changes, it is classified
+      as UNCHANGED to save bandwidth and processing time.
 
-    Retorna:
-        SyncResult: Resultado estructurado con el estado (CREATED/UPDATED/UNCHANGED),
-        el ID del objeto final en NetBox, y la instancia del objeto (mock en caso
-        de creaciones bajo dry-run).
+    Returns:
+        SyncResult: Structured result with the status (CREATED/UPDATED/UNCHANGED),
+        the ID of the final object in NetBox, and the instance of the object (mock in the
+        case of creations under dry-run).
     """
     uuid = raw_uuid or "N/A"
     node_type = get_node_type_from_object(endpoint)
@@ -3657,7 +3657,7 @@ def _execute_sync(
             )
             return SyncResult(SyncStatus.CREATED, 0, None)
 
-        with netbox_error_wrap(f"Error al crear {node_type} '{machine_name}'"):
+        with netbox_error_wrap(f"Error creating {node_type} '{machine_name}'"):
             obj = cast(Record, endpoint.create(**payload))
         obj_id = get_netbox_object_id(obj)
         log.info("CREATED %s: %s (ID=%d)", node_type, machine_name, obj_id)
@@ -3666,7 +3666,7 @@ def _execute_sync(
     existing_obj = existing[0]
     existing_id = get_netbox_object_id(existing_obj)
 
-    # Evaluación de diferencias para optimizar red
+    # Evaluation of differences to optimize network usage
     _, changed = update_if_changed(
         existing_obj,
         payload,
@@ -3700,27 +3700,29 @@ def sync_device(
     dry_run: bool,
 ) -> tuple[SyncResult, CacheStore]:
     """
-    Orquesta la sincronización completa de una fila clasificada como Device o Hipervisor.
+    Orchestrates the full synchronization of a row classified as Device or Hypervisor.
 
-    Decisiones de diseño:
-    - Tres fases: (1) validar la fila sin escribir, (2) resolver su identidad (solo
-      lectura) y (3) escribir dependencias y nodo. Así una fila que termina en SKIP o
-      en ERROR de datos no deja Platform, Location, Rack ni DeviceType escritos.
-    - Requisitos estrictos (Fail-Fast): 'manufacturer' y 'model' son campos mandatorios
-      en la jerarquía de NetBox; se aborta de inmediato si faltan.
-    - Constraints de API: NetBox exige que si un dispositivo tiene 'position' (U-Location),
-      también debe tener obligatoriamente un 'face' (front/rear). Se inyecta preventivamente.
-    - Hipervisores: Los dispositivos físicos que actúan como hipervisores deben asignarse
-      a un Cluster explícito para poder albergar Virtual Machines posteriormente.
+    Design decisions:
+    - Three phases: (1) validate the row without writing, (2) resolve its identity (read
+      only) and (3) write dependencies and node. This way a row that ends in SKIP or
+      in a data ERROR leaves no Platform, Location, Rack or DeviceType written.
+    - Strict requirements (Fail-Fast): 'manufacturer' and 'model' are mandatory fields
+      in the NetBox hierarchy; it aborts immediately if they are missing.
+    - API constraints: NetBox requires that if a device has a 'position' (U-Location),
+      it must also have a 'face' (front/rear). It is injected preventively.
+    - Hypervisors: The physical devices that act as hypervisors must be assigned
+      to an explicit Cluster in order to host Virtual Machines later.
 
-    Retorna:
-        tuple[SyncResult, CacheStore]: El resultado final y el estado de la caché puramente inyectado.
+    Returns:
+        tuple[SyncResult, CacheStore]: The final result and the purely injected cache state.
     """
-    # ── FASE 1: VALIDACIÓN (sin escrituras) ──────────────────
+    # ── PHASE 1: VALIDATION (no writes) ──────────────────────
     manufacturer = extract_csv_value(row, "manufacturer", config)
     model = extract_csv_value(row, "model", config)
     if not manufacturer or not model:
-        raise RowSkipCondition("Falta 'manufacturer' o 'model'. Requerido para Device.")
+        raise RowSkipCondition(
+            "Missing 'manufacturer' or 'model'. Required for Device."
+        )
 
     node_cfg = config.node_types.get_config(NodeType.DEVICE)
     base = _prepare_base_node(
@@ -3737,7 +3739,7 @@ def sync_device(
     machine_type = base["machine_type"]
     payload = base["payload"]
 
-    # Compensación de API NetBox: 'face' es obligatorio si 'position' existe.
+    # NetBox API compensation: 'face' is mandatory if 'position' exists.
     if payload.get("position") is not None and "face" not in payload:
         payload["face"] = "front"
 
@@ -3746,7 +3748,7 @@ def sync_device(
         row, device_type_key, device_type_attrs, config
     )
 
-    # ── FASE 2: IDENTIDAD (solo lectura) ─────────────────────
+    # ── PHASE 2: IDENTITY (read only) ────────────────────────
     existing = _resolve_existing_object(
         endpoints.devices,
         machine_name,
@@ -3756,12 +3758,12 @@ def sync_device(
         get_netbox_object_id(site),
     )
 
-    # ── FASE 3: ESCRITURAS (dependencias y nodo) ─────────────
+    # ── PHASE 3: WRITES (dependencies and node) ──────────────
     payload, caches = _resolve_common_dependencies(
         endpoints, row, payload, caches, config, dry_run
     )
 
-    # Cluster para hipervisores.
+    # Cluster for hypervisors.
     if config.is_cluster_host(machine_type):
         cluster_id, caches.clusters = _resolve_cluster(
             endpoints.clusters,
@@ -3777,12 +3779,12 @@ def sync_device(
             payload["cluster"] = cluster_id
         else:
             log.info(
-                "Hipervisor '%s' sin cluster asignado: la columna '%s' está vacía.",
+                "Hypervisor '%s' without an assigned cluster: the column '%s' is empty.",
                 machine_name,
                 config.csv_columns["cluster_name"].source,
             )
 
-    # Location (Fila).
+    # Location (Row).
     location_id: int | None = None
     location_name = extract_csv_value(row, "rack_location", config)
     if location_name:
@@ -3808,7 +3810,7 @@ def sync_device(
         )
         payload["rack"] = get_netbox_object_id(rack)
 
-    # DeviceType (y su Manufacturer).
+    # DeviceType (and its Manufacturer).
     device_type_id, caches = _resolve_device_type(
         endpoints, device_type_key, device_type_attributes, caches, dry_run
     )
@@ -3833,23 +3835,23 @@ def sync_vm(
     dry_run: bool,
 ) -> tuple[SyncResult, CacheStore]:
     """
-    Orquesta la sincronización completa de una fila clasificada como Virtual Machine.
+    Orchestrates the full synchronization of a row classified as Virtual Machine.
 
-    Decisiones de diseño:
-    - Tres fases, como en `sync_device`: validar sin escribir, resolver identidad
-      (solo lectura) y escribir dependencias y nodo.
-    - Requisitos estrictos (Fail-Fast): En NetBox, toda VM DEBE pertenecer a un Cluster.
-      Se descarta el registro inmediatamente si 'cluster_name' está ausente.
-    - Host Device (Opcional): Se intenta asociar la VM con el hipervisor físico (Device)
-      especificado. Esto permite mapear la topología virtualizada sobre el hardware real.
+    Design decisions:
+    - Three phases, as in `sync_device`: validate without writing, resolve identity
+      (read only) and write dependencies and node.
+    - Strict requirements (Fail-Fast): In NetBox, every VM MUST belong to a Cluster.
+      The record is discarded immediately if 'cluster_name' is absent.
+    - Host Device (Optional): An attempt is made to associate the VM with the specified
+      physical hypervisor (Device). This allows mapping the virtualized topology onto the real hardware.
 
-    Retorna:
-        tuple[SyncResult, CacheStore]: El resultado final y el estado de la caché puramente inyectado.
+    Returns:
+        tuple[SyncResult, CacheStore]: The final result and the purely injected cache state.
     """
-    # ── FASE 1: VALIDACIÓN (sin escrituras) ──────────────────
+    # ── PHASE 1: VALIDATION (no writes) ──────────────────────
     cluster_name = extract_csv_value(row, "cluster_name", config)
     if not cluster_name:
-        raise RowSkipCondition("Falta 'cluster_name'. Requerido para Virtual Machine.")
+        raise RowSkipCondition("Missing 'cluster_name'. Required for Virtual Machine.")
 
     node_cfg = config.node_types.get_config(NodeType.VIRTUAL_MACHINE)
     base = _prepare_base_node(
@@ -3865,7 +3867,7 @@ def sync_vm(
     uuid = base["inventory_uuid"]
     payload = base["payload"]
 
-    # ── FASE 2: IDENTIDAD (solo lectura) ─────────────────────
+    # ── PHASE 2: IDENTITY (read only) ────────────────────────
     existing = _resolve_existing_object(
         endpoints.virtual_machines,
         machine_name,
@@ -3875,12 +3877,12 @@ def sync_vm(
         get_netbox_object_id(site),
     )
 
-    # ── FASE 3: ESCRITURAS (dependencias y nodo) ─────────────
+    # ── PHASE 3: WRITES (dependencies and node) ──────────────
     payload, caches = _resolve_common_dependencies(
         endpoints, row, payload, caches, config, dry_run
     )
 
-    # Cluster (garantizado no vacío por la validación de la fase 1).
+    # Cluster (guaranteed non-empty by the phase 1 validation).
     cluster_id, caches.clusters = _resolve_cluster(
         endpoints.clusters,
         row,
@@ -3893,7 +3895,7 @@ def sync_vm(
     )
     payload["cluster"] = cluster_id
 
-    # Device del hipervisor host (acotado a site y cacheado; solo lectura).
+    # Device of the host hypervisor (scoped to site and cached; read only).
     host_dev_id, caches.host_devices = _resolve_host_device(
         endpoints.devices,
         row,
@@ -3913,25 +3915,25 @@ def sync_vm(
 
 
 # ============================================================
-# PARSEO DE INTERFACES y IPs
+# PARSING OF INTERFACES and IPs
 # ============================================================
 
 
 def _validate_interface_ip(ip_raw: str, name: str) -> str:
-    """Valida que un string sea una dirección IP correcta."""
+    """Validates that a string is a correct IP address."""
     try:
         ipaddress.ip_address(ip_raw)
         return ip_raw
     except ValueError as e:
         raise FieldParseError(
-            f"IP '{ip_raw}' en interfaz '{name}' no es una dirección IP válida."
+            f"IP '{ip_raw}' on interface '{name}' is not a valid IP address."
         ) from e
 
 
 def _split_ip_and_embedded_prefix(ip_raw: str) -> tuple[str, str | None]:
     """
-    Separa una IP de su prefijo embebido (notación CIDR, ej. '10.0.0.5/24').
-    Retorna (ip, prefijo) o (ip, None) si la IP no incluye prefijo.
+    Splits an IP from its embedded prefix (CIDR notation, e.g. '10.0.0.5/24').
+    Returns (ip, prefix) or (ip, None) if the IP does not include a prefix.
     """
     address, separator, prefix = ip_raw.partition("/")
     if not separator:
@@ -3941,12 +3943,12 @@ def _split_ip_and_embedded_prefix(ip_raw: str) -> tuple[str, str | None]:
 
 def _build_interface_cidr(ip_val: str, pfx_val: str, name: str) -> str:
     """
-    Valida IP y 'Red IP' construyendo una dirección CIDR válida.
+    Validates IP and 'IP network' by building a valid CIDR address.
 
-    'Red IP' admite red completa ('192.168.1.0/24', '192.168.1.0/255.255.255.0'),
-    prefijo solo ('24') o máscara sola ('255.255.255.0'). Cuando se entrega la red
-    completa, la IP debe pertenecer a ella; de lo contrario se levanta FieldParseError.
-    Se rechaza el prefijo /0 (ruta por defecto), que no es una red de interfaz.
+    'IP network' accepts a full network ('192.168.1.0/24', '192.168.1.0/255.255.255.0'),
+    a prefix alone ('24') or a mask alone ('255.255.255.0'). When the full network is
+    given, the IP must belong to it; otherwise FieldParseError is raised.
+    The /0 prefix (default route) is rejected, since it is not an interface network.
     """
     try:
         ip_obj = ipaddress.ip_address(ip_val)
@@ -3963,37 +3965,37 @@ def _build_interface_cidr(ip_val: str, pfx_val: str, name: str) -> str:
         interface = ipaddress.ip_interface(f"{ip_obj}/{mask_or_prefix}")
     except ValueError as e:
         raise FieldParseError(
-            f"Prefijo o CIDR inválido '{pfx_val}' para IP '{ip_val}' en interfaz '{name}'."
+            f"Invalid prefix or CIDR '{pfx_val}' for IP '{ip_val}' on interface '{name}'."
         ) from e
 
     if declared_network is not None and ip_obj not in declared_network:
         raise FieldParseError(
-            f"IP '{ip_val}' no pertenece a la 'Red IP' '{pfx_val}' en interfaz '{name}'."
+            f"IP '{ip_val}' does not belong to the 'IP network' '{pfx_val}' on interface '{name}'."
         )
     if interface.network.prefixlen == 0:
         raise FieldParseError(
-            f"Prefijo /0 no permitido para IP '{ip_val}' en interfaz '{name}'."
+            f"Prefix /0 is not allowed for IP '{ip_val}' on interface '{name}'."
         )
     return str(interface)
 
 
 def _ip_host(cidr: str) -> str:
-    """Retorna la dirección de host de un CIDR, sin máscara (ej. '10.0.0.5/24' → '10.0.0.5')."""
+    """Returns the host address of a CIDR, without a mask (e.g. '10.0.0.5/24' → '10.0.0.5')."""
     return str(ipaddress.ip_interface(cidr).ip)
 
 
 def _network_from_cidr(cidr: str) -> str:
-    """Deriva la red canónica (ej. '192.168.1.0/24') a partir de un CIDR de host."""
+    """Derives the canonical network (e.g. '192.168.1.0/24') from a host CIDR."""
     return str(ipaddress.ip_interface(cidr).network)
 
 
 def _sanitize_mac_address(mac_raw: str, name: str) -> str:
-    """Valida y formatea una MAC a su forma estándar (AA:BB:CC:DD:EE:FF)."""
+    """Validates and formats a MAC into its standard form (AA:BB:CC:DD:EE:FF)."""
     cleaned = re.sub(r"[^a-fA-F0-9]", "", mac_raw)
 
     if len(cleaned) != 12:
         raise FieldParseError(
-            f"MAC '{mac_raw}' en interfaz '{name}' no es válida (esperado 12 hex)."
+            f"MAC '{mac_raw}' on interface '{name}' is not valid (expected 12 hex)."
         )
 
     pairs = [cleaned[i : i + 2] for i in range(0, 12, 2)]
@@ -4009,16 +4011,14 @@ def _parse_single_network_interface(
     status_map: dict[str, Any],
     config: NetBoxMappingConfig,
 ) -> NetworkInterfaceData:
-    """Parsea una única interfaz aislando la lógica de validación de IPs."""
+    """Parses a single interface, isolating the IP validation logic."""
     if config.is_empty(name):
-        raise RowValidationError(
-            "El nombre de una interfaz de red no puede estar vacío."
-        )
+        raise RowValidationError("The name of a network interface cannot be empty.")
 
     def get_raw_value_or_none(raw_value: str) -> str | None:
         """
-        Filtra el valor crudo.
-        Retorna el valor original si no está vacío, o None en caso contrario.
+        Filters the raw value.
+        Returns the original value if it is not empty, or None otherwise.
         """
         return raw_value if not config.is_empty(raw_value) else None
 
@@ -4030,7 +4030,7 @@ def _parse_single_network_interface(
     cidr = None
     try:
         if ip_val:
-            # La columna "Red IP" tiene prioridad sobre un prefijo embebido en "IP".
+            # The "IP network" column takes precedence over a prefix embedded in "IP".
             ip_val, embedded_prefix = _split_ip_and_embedded_prefix(ip_val)
             ip_val = _validate_interface_ip(ip_val, name)
             effective_prefix = pfx_val or embedded_prefix
@@ -4038,13 +4038,13 @@ def _parse_single_network_interface(
                 cidr = _build_interface_cidr(ip_val, effective_prefix, name)
             else:
                 log.warning(
-                    "IP '%s' en interfaz '%s' sin 'Red IP' ni prefijo: no se asignará en NetBox.",
+                    "IP '%s' on interface '%s' without 'IP network' or prefix: it will not be assigned in NetBox.",
                     ip_val,
                     name,
                 )
         elif pfx_val:
             log.warning(
-                "'Red IP' '%s' en interfaz '%s' sin 'IP': se descarta (NetBox requiere host).",
+                "'IP network' '%s' on interface '%s' without 'IP': it is discarded (NetBox requires a host).",
                 pfx_val,
                 name,
             )
@@ -4071,45 +4071,45 @@ def _parse_network_interfaces(
     config: NetBoxMappingConfig,
 ) -> list[NetworkInterfaceData]:
     """
-    Parsea las columnas de red del CSV y retorna una lista de interfaces.
-    Lanza RowValidationError si los arrays tienen longitudes distintas.
+    Parses the network columns of the CSV and returns a list of interfaces.
+    Raises RowValidationError if the arrays have different lengths.
 
-    Reglas de validación:
-      - La columna "Interfaces" (names) define la cantidad de interfaces.
-      - Las demás columnas deben tener exactamente la misma cantidad de
-        elementos separados por comas, o estar completamente vacías.
-      - Una columna completamente vacía indica que ninguna interfaz
-        tiene ese dato (ej. todas las IPs son N/A o están en blanco).
-      - Si una columna tiene datos pero su cantidad de elementos difiere
-        de la cantidad de interfaces, la fila se descarta para interfaces
-        (el Device/VM se sincroniza de todas formas).
+    Validation rules:
+      - The "Interfaces" column (names) defines the number of interfaces.
+      - The other columns must have exactly the same number of
+        comma-separated elements, or be completely empty.
+      - A completely empty column means that no interface
+        has that data (e.g. all IPs are N/A or blank).
+      - If a column has data but its number of elements differs
+        from the number of interfaces, the row is discarded for interfaces
+        (the Device/VM is synchronized anyway).
 
-    Columna "Red IP" (prefix):
-      Contiene la red o máscara asociada a cada IP. Se combina con la
-      columna "IP" para construir el CIDR que NetBox requiere en su API.
+    "IP network" column (prefix):
+      It contains the network or mask associated with each IP. It is combined with the
+      "IP" column to build the CIDR that NetBox requires in its API.
 
-      Formatos soportados:
-        - Red/Prefijo:  "136.12.34.128/26"          → se extrae "26"
-        - Red/Máscara:  "192.168.1.0/255.255.255.0" → se extrae "255.255.255.0"
-        - Prefijo solo: "26"                        → se usa directamente
-        - Máscara sola: "255.255.255.0"             → se usa directamente
+      Supported formats:
+        - Network/Prefix: "136.12.34.128/26"          → "26" is extracted
+        - Network/Mask:   "192.168.1.0/255.255.255.0" → "255.255.255.0" is extracted
+        - Prefix alone:   "26"                        → used directly
+        - Mask alone:     "255.255.255.0"             → used directly
 
-      En todos los casos, el script normaliza al formato CIDR canónico
-      antes de enviarlo a NetBox. Cuando se indica la red completa, la IP
-      debe pertenecer a ella (de lo contrario se rechaza la fila de
-      interfaces). A partir del CIDR se deriva además la red (Prefix) que
-      se sincroniza en NetBox antes de asignar la IP.
+      In all cases, the script normalizes to the canonical CIDR format
+      before sending it to NetBox. When the full network is given, the IP
+      must belong to it (otherwise the interfaces row is
+      rejected). From the CIDR the network (Prefix) is also derived, which
+      is synchronized in NetBox before assigning the IP.
     """
 
     def split_col(col_name: str) -> list[str]:
         """
-        Divide una celda CSV separada por comas.
-        Retorna una lista de strings con espacios en blanco removidos.
+        Splits a comma-separated CSV cell.
+        Returns a list of strings with whitespace removed.
         """
         raw = row.get(col_name, "")
         return [v.strip() for v in raw.split(",")] if not config.is_empty(raw) else []
 
-    # Validar nombres
+    # Validate names
     names = split_col(config.csv_columns["iface_names"].source)
     if not names:
         return []
@@ -4123,19 +4123,19 @@ def _parse_network_interfaces(
     for k, lst in cols.items():
         if lst and len(lst) != max_len:
             col_name = config.csv_columns[k].source
-            inconsistencies.append(f"'{col_name}' tiene {len(lst)} elementos")
+            inconsistencies.append(f"'{col_name}' has {len(lst)} elements")
 
     if inconsistencies:
         ifaces_col = config.csv_columns["iface_names"].source
         raise RowValidationError(
-            f"Discrepancia de elementos en red: se declararon {max_len} interfaces en '{ifaces_col}', "
-            f"pero " + ", ".join(inconsistencies) + ". Revisa las comas."
+            f"Network element mismatch: {max_len} interfaces were declared in '{ifaces_col}', "
+            f"but " + ", ".join(inconsistencies) + ". Check the commas."
         )
 
     def fill_if_empty(lst: list[str]) -> list[str]:
         """
-        Asegura que la lista tenga el tamaño requerido si está vacía.
-        Retorna la lista original si tiene elementos, o una lista de strings vacíos de tamaño max_len.
+        Makes sure the list has the required size if it is empty.
+        Returns the original list if it has elements, or a list of empty strings of size max_len.
         """
         return lst if lst else [""] * max_len
 
@@ -4165,21 +4165,21 @@ def parse_row_interfaces(
     config: NetBoxMappingConfig,
 ) -> list[NetworkInterfaceData]:
     """
-    Parsea estructuralmente las columnas de interfaces para la fila actual.
+    Structurally parses the interface columns for the current row.
 
-    Decisiones de diseño:
-    - Visibilidad de Gaps: Si no se detectan interfaces, se lanza una advertencia.
-      Esto indica un posible hueco en la estructura del CSV o un equipo que
-      perderá su telemetría (in-band/out-of-band) en NetBox.
+    Design decisions:
+    - Gap visibility: If no interfaces are detected, a warning is issued.
+      This indicates a possible gap in the structure of the CSV or a device that
+      will lose its telemetry (in-band/out-of-band) in NetBox.
 
-    Retorna:
-        list[NetworkInterfaceData]: Lista de diccionarios validados con datos de red.
+    Returns:
+        list[NetworkInterfaceData]: List of validated dictionaries with network data.
     """
     interfaces = _parse_network_interfaces(row, config)
     if not interfaces:
         ifaces_col = config.csv_columns["iface_names"].source
         log.warning(
-            "SKIP interfaces de '%s': columna '%s' está vacía u omitida.",
+            "SKIP interfaces of '%s': column '%s' is empty or omitted.",
             machine_name,
             ifaces_col,
         )
@@ -4187,12 +4187,12 @@ def parse_row_interfaces(
 
 
 # ============================================================
-# SINCRONIZACIÓN DE INTERFACES
+# INTERFACE SYNCHRONIZATION
 # ============================================================
 
 
 def _get_assigned_object_type(node_type: NodeType) -> str:
-    """Retorna el ContentType asociado a la interfaz de red según el tipo de nodo."""
+    """Returns the ContentType associated with the network interface according to the node type."""
     return (
         "dcim.interface"
         if node_type == NodeType.DEVICE
@@ -4201,7 +4201,7 @@ def _get_assigned_object_type(node_type: NodeType) -> str:
 
 
 def _find_foreign_assignment(records: list[Record]) -> Record | None:
-    """Retorna el primer registro asignado a alguna interfaz, o None si no hay."""
+    """Returns the first record assigned to some interface, or None if there is none."""
     return next(
         (r for r in records if getattr(r, "assigned_object_id", None) is not None),
         None,
@@ -4210,23 +4210,23 @@ def _find_foreign_assignment(records: list[Record]) -> Record | None:
 
 def _describe_assignment(record: NetBoxObject) -> str:
     """
-    Describe a qué interfaz y nodo está asignado un registro (para logs).
+    Describes which interface and node a record is assigned to (for logs).
 
-    Usa el objeto anidado `assigned_object` que NetBox incluye en IPs y MACs; si falta
-    algún dato, degrada al ID para no perder trazabilidad.
+    It uses the nested `assigned_object` object that NetBox includes in IPs and MACs; if
+    any data is missing, it degrades to the ID so traceability is not lost.
     """
     assigned_object = getattr(record, "assigned_object", None)
     iface_name = getattr(assigned_object, "name", None)
     if iface_name is None:
-        return f"objeto ID={getattr(record, 'assigned_object_id', '?')}"
+        return f"object ID={getattr(record, 'assigned_object_id', '?')}"
 
     parent = getattr(assigned_object, "device", None) or getattr(
         assigned_object, "virtual_machine", None
     )
     parent_name = getattr(parent, "name", None)
     if parent_name is None:
-        return f"interfaz '{iface_name}'"
-    return f"interfaz '{iface_name}' del nodo '{parent_name}'"
+        return f"interface '{iface_name}'"
+    return f"interface '{iface_name}' of node '{parent_name}'"
 
 
 def _assign_network_resource(
@@ -4240,37 +4240,37 @@ def _assign_network_resource(
     unique_resource: bool = False,
 ) -> tuple[NetBoxObject, bool]:
     """
-    Centraliza la asignación polimórfica de recursos de red (IP o MAC) a una interfaz.
+    Centralizes the polymorphic assignment of network resources (IP or MAC) to an interface.
 
-    Decisiones de diseño:
-    - Interfaz Polimórfica: Tanto las direcciones IP como las MACs en NetBox se asignan
-      mediante ContentTypes (`assigned_object_type`, `assigned_object_id`).
-    - Reciclaje (Evitar Duplicidad Global): Antes de crear un nuevo recurso, se verifica
-      si ya existe uno libre (huérfano) con el mismo valor, y se reasigna a la interfaz.
-      Esto previene colisiones y uso excesivo de espacio en el IPAM de NetBox.
-    - Recursos únicos (`unique_resource=True`, IPs): NetBox rechaza (HTTP 400) crear un
-      duplicado de una IP ya asignada a otra interfaz, por lo que se detecta con los
-      registros ya consultados y se lanza `ResourceAssignedElsewhere` en lugar de crear.
-      Las MAC pueden compartirse legítimamente y no usan esta regla.
+    Design decisions:
+    - Polymorphic interface: Both IP addresses and MACs in NetBox are assigned
+      through ContentTypes (`assigned_object_type`, `assigned_object_id`).
+    - Recycling (avoid global duplication): Before creating a new resource, it is checked
+      whether a free (orphan) one with the same value already exists, and it is reassigned to the
+      interface. This prevents collisions and excessive use of space in the NetBox IPAM.
+    - Unique resources (`unique_resource=True`, IPs): NetBox rejects (HTTP 400) creating a
+      duplicate of an IP already assigned to another interface, so it is detected with the
+      records already queried and `ResourceAssignedElsewhere` is raised instead of creating.
+      MACs can be legitimately shared and do not use this rule.
 
-    Retorna:
-        tuple[NetBoxObject, bool]: El objeto (IP/MAC) NetBox y un booleano indicando si hubo cambios.
+    Returns:
+        tuple[NetBoxObject, bool]: The NetBox object (IP/MAC) and a boolean indicating whether there were changes.
 
-    Lanza:
-        ResourceAssignedElsewhere: si `unique_resource` y el recurso ocupa otra interfaz.
+    Raises:
+        ResourceAssignedElsewhere: if `unique_resource` and the resource occupies another interface.
     """
     node_type = get_node_type_from_object(iface_obj)
     assigned_type = _get_assigned_object_type(node_type)
     existing_records: list[Record] = list(endpoint.filter(**search_kwargs))
 
-    # 1. Verificar si ya está asignado a esta interfaz
+    # 1. Check whether it is already assigned to this interface
     for record in existing_records:
         current_id = getattr(record, "assigned_object_id", None)
         current_type = getattr(record, "assigned_object_type", None)
         if current_id == iface_obj.id and str(current_type) == assigned_type:
             return record, False
 
-    # 2. Buscar si hay alguno libre para reasignar
+    # 2. Look for a free one to reassign
     unassigned = next(
         (r for r in existing_records if getattr(r, "assigned_object_id", None) is None),
         None,
@@ -4279,7 +4279,7 @@ def _assign_network_resource(
     if unassigned:
         if dry_run:
             log.info(
-                "[DRY-RUN] WOULD UPDATE %s libre %s (asignación a objeto %s)",
+                "[DRY-RUN] WOULD UPDATE free %s %s (assignment to object %s)",
                 resource_name,
                 value_str,
                 iface_obj.id,
@@ -4290,26 +4290,26 @@ def _assign_network_resource(
                 assigned_object_type=assigned_type,
                 **search_kwargs,
             ), True
-        with netbox_error_wrap(f"Error actualizando {resource_name} libre {value_str}"):
+        with netbox_error_wrap(f"Error updating free {resource_name} {value_str}"):
             unassigned.update(
                 {
                     "assigned_object_type": assigned_type,
                     "assigned_object_id": iface_obj.id,
                 }
             )
-            log.info("UPDATED %s libre reasignada: %s", resource_name, value_str)
+            log.info("UPDATED free %s reassigned: %s", resource_name, value_str)
             return unassigned, True
 
-    # 3. Un recurso único asignado a otra interfaz no puede duplicarse
+    # 3. A unique resource assigned to another interface cannot be duplicated
     if unique_resource:
         foreign_record = _find_foreign_assignment(existing_records)
         if foreign_record is not None:
             raise ResourceAssignedElsewhere(foreign_record)
 
-    # 4. Crear nuevo recurso
+    # 4. Create a new resource
     if dry_run:
         log.info(
-            "[DRY-RUN] WOULD CREATE nuevo %s %s (asignada a objeto %s)",
+            "[DRY-RUN] WOULD CREATE new %s %s (assigned to object %s)",
             resource_name,
             value_str,
             iface_obj.id,
@@ -4321,7 +4321,7 @@ def _assign_network_resource(
             **search_kwargs,
         ), True
 
-    with netbox_error_wrap(f"Error creando {resource_name} {value_str}"):
+    with netbox_error_wrap(f"Error creating {resource_name} {value_str}"):
         obj = cast(
             Record,
             endpoint.create(
@@ -4331,7 +4331,7 @@ def _assign_network_resource(
             ),
         )
 
-    log.info("%s CREATED y asignada: %s", resource_name, value_str)
+    log.info("%s CREATED and assigned: %s", resource_name, value_str)
     return obj, True
 
 
@@ -4342,17 +4342,17 @@ def _assign_ip(
     dry_run: bool,
 ) -> tuple[NetBoxObject | None, bool]:
     """
-    Crea o actualiza una IP address en NetBox y la asigna a la interfaz.
+    Creates or updates an IP address in NetBox and assigns it to the interface.
 
-    Decisiones de diseño:
-    - NetBox (ENFORCE_GLOBAL_UNIQUE) no admite la misma IP en dos interfaces, sin
-      importar su estado up/down (ej. un nodo y su réplica). En ese caso la IP se
-      omite con un WARNING que identifica al dueño y gana el primer nodo procesado;
-      no es un error de sincronización.
+    Design decisions:
+    - NetBox (ENFORCE_GLOBAL_UNIQUE) does not allow the same IP on two interfaces, regardless
+      of their up/down status (e.g. a node and its replica). In that case the IP is
+      skipped with a WARNING that identifies the owner and the first processed node wins;
+      it is not a synchronization error.
 
-    Retorna:
-        tuple[NetBoxObject | None, bool]: La IP y si hubo cambios; (None, False) si
-        la IP pertenece a otra interfaz y se omitió.
+    Returns:
+        tuple[NetBoxObject | None, bool]: The IP and whether there were changes; (None, False) if
+        the IP belongs to another interface and was skipped.
     """
     try:
         return _assign_network_resource(
@@ -4367,8 +4367,8 @@ def _assign_ip(
         )
     except ResourceAssignedElsewhere as e:
         log.warning(
-            "IP %s ya está asignada a %s; se omite en la interfaz '%s' "
-            "(NetBox no permite repetir una IP).",
+            "IP %s is already assigned to %s; it is skipped on the interface '%s' "
+            "(NetBox does not allow repeating an IP).",
             cidr,
             _describe_assignment(e.record),
             getattr(iface_obj, "name", "?"),
@@ -4382,7 +4382,7 @@ def _assign_mac(
     iface_obj: NetBoxObject,
     dry_run: bool,
 ) -> tuple[NetBoxObject, bool]:
-    """Crea o actualiza una MAC address en NetBox y la asigna a la interfaz."""
+    """Creates or updates a MAC address in NetBox and assigns it to the interface."""
     return _assign_network_resource(
         endpoint=mac_addresses_endpoint,
         resource_name="MAC",
@@ -4403,10 +4403,10 @@ def _upsert_interface_record(
     dry_run: bool,
 ) -> tuple[NetBoxObject, bool]:
     """
-    Ejecuta la lógica de creación o actualización de una interfaz.
-    Retorna una tupla con (Interfaz, hubo cambios).
+    Executes the creation or update logic of an interface.
+    Returns a tuple with (Interface, whether there were changes).
     """
-    label = f"interfaz '{name}' (objeto {obj_id})"
+    label = f"interface '{name}' (object {obj_id})"
     if not existing_obj:
         return _create_record(iface_endpoint, payload, label, dry_run), True
 
@@ -4422,15 +4422,15 @@ def _sync_single_interface(
     dry_run: bool,
 ) -> tuple[SingleInterfaceResult, NameCache]:
     """
-    Sincroniza una interfaz individual y le asigna su IP y MAC.
-    Retorna una tupla: (SingleInterfaceResult, caché actualizada).
+    Synchronizes an individual interface and assigns it its IP and MAC.
+    Returns a tuple: (SingleInterfaceResult, updated cache).
     """
     name = iface_data["name"]
     payload: NetBoxPayload = {"name": name, "enabled": iface_data["enabled"]}
 
     if get_node_type_from_object(iface_endpoint) == NodeType.DEVICE:
         payload["device"] = obj_id
-        payload["type"] = "other"  # tipo genérico; ajustable
+        payload["type"] = "other"  # generic type; adjustable
     else:
         payload["virtual_machine"] = obj_id
 
@@ -4472,32 +4472,32 @@ def _prune_orphan_interface(
     dry_run: bool,
 ) -> tuple[int, int]:
     """
-    Si el nombre de la interfaz no se encuentra en el CSV, es considerada
-    huérfana y se elimina.
+    If the name of the interface is not found in the CSV, it is considered
+    an orphan and is deleted.
 
-    Retorna:
-        tuple[int, int]: (cantidad de interfaces eliminadas, cantidad de errores)
+    Returns:
+        tuple[int, int]: (number of interfaces deleted, number of errors)
     """
     if name in csv_iface_names:
         return 0, 0
     if dry_run:
-        log.info("[DRY-RUN] WOULD DELETE huérfano de red (interfaz) '%s'", name)
+        log.info("[DRY-RUN] WOULD DELETE network orphan (interface) '%s'", name)
         return 1, 0
     try:
         cast(Record, iface_obj).delete()
-        log.info("DELETED huérfano de red (interfaz): %s", name)
+        log.info("DELETED network orphan (interface): %s", name)
         return 1, 0
     except RequestError as e:
-        log.error("Error eliminando interfaz huérfana '%s': %s", name, e)
+        log.error("Error deleting orphan interface '%s': %s", name, e)
         return 0, 1
 
 
 def _get_ip_role(ip_obj: NetBoxObject) -> str | None:
     """
-    Retorna el rol de una IP de NetBox (ej. 'secondary'), o None si no tiene rol.
+    Returns the role of a NetBox IP (e.g. 'secondary'), or None if it has no role.
 
-    pynetbox expone el rol como un objeto de choice (`.value`); se admite también un
-    string plano para no depender de la forma exacta de la respuesta.
+    pynetbox exposes the role as a choice object (`.value`); a plain string is also
+    accepted so as not to depend on the exact shape of the response.
     """
     role = getattr(ip_obj, "role", None)
     value = getattr(role, "value", role)
@@ -4506,11 +4506,11 @@ def _get_ip_role(ip_obj: NetBoxObject) -> str | None:
 
 def _is_protected_ip(ip_obj: NetBoxObject) -> bool:
     """
-    Indica si una IP debe excluirse de la poda de huérfanos de red.
+    Tells whether an IP must be excluded from the pruning of network orphans.
 
-    El pipeline crea sus IPs sin rol: una IP con rol (secondary, vip, vrrp, loopback,
-    etc.) fue curada a mano en NetBox. Como el CSV admite una sola IP por interfaz,
-    esas IPs nunca aparecen en él y la poda las desasignaría en cada corrida.
+    The pipeline creates its IPs without a role: an IP with a role (secondary, vip, vrrp, loopback,
+    etc.) was curated by hand in NetBox. Since the CSV accepts a single IP per interface,
+    those IPs never appear in it and the pruning would unassign them on every run.
     """
     return _get_ip_role(ip_obj) is not None
 
@@ -4519,8 +4519,8 @@ def _find_protected_ips(
     ip_endpoint: Endpoint, assigned_type: str, iface_id: int
 ) -> list[str] | None:
     """
-    Retorna las direcciones con rol asignado de una interfaz, o None si no se pudo
-    consultar NetBox (el llamador debe tratarlo como "no verificable").
+    Returns the addresses with an assigned role of an interface, or None if NetBox
+    could not be queried (the caller must treat it as "not verifiable").
     """
     try:
         iface_ips = list(
@@ -4529,7 +4529,7 @@ def _find_protected_ips(
             )
         )
     except RequestError as e:
-        log.error("Error consultando las IPs de la interfaz ID=%d: %s", iface_id, e)
+        log.error("Error querying the IPs of the interface ID=%d: %s", iface_id, e)
         return None
     return [
         f"{getattr(ip_obj, 'address', '?')} ({_get_ip_role(ip_obj)})"
@@ -4542,26 +4542,26 @@ def _keep_orphan_interface(
     ip_endpoint: Endpoint, assigned_type: str, name: str, iface_id: int
 ) -> bool:
     """
-    Decide si una interfaz huérfana debe conservarse en lugar de borrarse.
+    Decides whether an orphan interface must be kept instead of deleted.
 
-    Decisiones de diseño:
-    - En NetBox, borrar una interfaz borra en cascada sus IPs: si alguna tiene rol
-      (curada a mano), borrar la interfaz destruiría justamente lo que se protege.
-    - Fail-safe: si no se puede verificar, se conserva la interfaz (borrar es
-      irreversible; conservarla solo posterga la poda a la siguiente corrida).
+    Design decisions:
+    - In NetBox, deleting an interface cascade-deletes its IPs: if any of them has a role
+      (curated by hand), deleting the interface would destroy precisely what is protected.
+    - Fail-safe: if it cannot be verified, the interface is kept (deleting is
+      irreversible; keeping it only postpones the pruning to the next run).
     """
     protected = _find_protected_ips(ip_endpoint, assigned_type, iface_id)
     if protected is None:
         log.warning(
-            "Se conserva la interfaz huérfana '%s': no se pudo verificar si tiene IPs "
-            "con rol asignado.",
+            "The orphan interface '%s' is kept: it could not be verified whether it has IPs "
+            "with an assigned role.",
             name,
         )
         return True
     if protected:
         log.warning(
-            "Se conserva la interfaz huérfana '%s': tiene IPs con rol asignado %s y "
-            "borrarla las eliminaría en cascada.",
+            "The orphan interface '%s' is kept: it has IPs with an assigned role %s and "
+            "deleting it would cascade-delete them.",
             name,
             protected,
         )
@@ -4577,11 +4577,11 @@ def _prune_orphan_ips(
     dry_run: bool,
 ) -> tuple[int, int]:
     """
-    Desasocia IPs que ya no se encuentran en el CSV.
+    Unassigns IPs that are no longer found in the CSV.
 
-    Las IPs con rol asignado se conservan (ver `_is_protected_ip`).
-    Retorna:
-        tuple[int, int]: (cantidad de IPs desasociadas, cantidad de errores)
+    IPs with an assigned role are kept (see `_is_protected_ip`).
+    Returns:
+        tuple[int, int]: (number of IPs unassigned, number of errors)
     """
     p_ips = errors = 0
     try:
@@ -4596,15 +4596,15 @@ def _prune_orphan_ips(
                 continue
             if _is_protected_ip(ip_obj):
                 log.info(
-                    "Se conserva la IP '%s' (rol '%s'): fue asignada manualmente en "
-                    "NetBox y no se desasigna.",
+                    "The IP '%s' (role '%s') is kept: it was assigned manually in "
+                    "NetBox and is not unassigned.",
                     address,
                     _get_ip_role(ip_obj),
                 )
                 continue
             if dry_run:
                 log.info(
-                    "[DRY-RUN] WOULD UNASSIGN huérfano de red (IP) '%s'",
+                    "[DRY-RUN] WOULD UNASSIGN network orphan (IP) '%s'",
                     address,
                 )
                 p_ips += 1
@@ -4612,10 +4612,10 @@ def _prune_orphan_ips(
             cast(Record, ip_obj).update(
                 {"assigned_object_type": None, "assigned_object_id": None}
             )
-            log.info("UNASSIGNED huérfano de red (IP): %s", address)
+            log.info("UNASSIGNED network orphan (IP): %s", address)
             p_ips += 1
     except RequestError as e:
-        log.error("Error buscando/desvinculando IPs huérfanas: %s", e)
+        log.error("Error looking up/unassigning orphan IPs: %s", e)
         errors += 1
     return p_ips, errors
 
@@ -4628,9 +4628,9 @@ def _prune_orphan_macs(
     dry_run: bool,
 ) -> tuple[int, int]:
     """
-    Elimina MACs que ya no se encuentran en el CSV.
-    Retorna:
-        tuple[int, int]: (cantidad de MACs eliminadas, cantidad de errores)
+    Deletes MACs that are no longer found in the CSV.
+    Returns:
+        tuple[int, int]: (number of MACs deleted, number of errors)
     """
     p_macs = errors = 0
     try:
@@ -4645,16 +4645,16 @@ def _prune_orphan_macs(
                 continue
             if dry_run:
                 log.info(
-                    "[DRY-RUN] WOULD DELETE huérfano de red (MAC) '%s'",
+                    "[DRY-RUN] WOULD DELETE network orphan (MAC) '%s'",
                     mac_addr,
                 )
                 p_macs += 1
                 continue
             cast(Record, mac_obj).delete()
-            log.info("DELETED huérfano de red (MAC): %s", mac_addr)
+            log.info("DELETED network orphan (MAC): %s", mac_addr)
             p_macs += 1
     except RequestError as e:
-        log.error("Error buscando/eliminando MACs huérfanas: %s", e)
+        log.error("Error looking up/deleting orphan MACs: %s", e)
         errors += 1
     return p_macs, errors
 
@@ -4669,11 +4669,11 @@ def _prune_network_orphans(
     dry_run: bool,
 ) -> PrunedNetworkMetrics:
     """
-    Elimina (poda) de NetBox las interfaces y MACs huérfanas, y desvincula IPs.
+    Deletes (prunes) from NetBox the orphan interfaces and MACs, and unassigns IPs.
 
-    Las IPs con rol asignado nunca se desasignan, y una interfaz huérfana que aloje
-    alguna se conserva (con sus demás IPs y MACs sujetas a la poda normal).
-    Retorna PrunedNetworkMetrics.
+    IPs with an assigned role are never unassigned, and an orphan interface that hosts
+    any of them is kept (with its other IPs and MACs subject to the normal pruning).
+    Returns PrunedNetworkMetrics.
     """
     errors = p_ifaces = p_ips = p_macs = 0
     assigned_type = _get_assigned_object_type(node_type)
@@ -4681,7 +4681,7 @@ def _prune_network_orphans(
     for name, iface_obj in ifaces_cache.items():
         iface_id = getattr(iface_obj, "id", 0)
 
-        # FASE A: Interfaces (salvo huérfanas que alojan IPs protegidas)
+        # PHASE A: Interfaces (except orphans that host protected IPs)
         keep_interface = name not in csv_iface_names and _keep_orphan_interface(
             endpoints.ip_addresses, assigned_type, name, iface_id
         )
@@ -4697,14 +4697,14 @@ def _prune_network_orphans(
         if iface_id == 0:
             continue
 
-        # FASE B: IPs (Desvincular)
+        # PHASE B: IPs (Unassign)
         del_ips, err_ips = _prune_orphan_ips(
             endpoints.ip_addresses, assigned_type, iface_id, csv_ips, dry_run
         )
         p_ips += del_ips
         errors += err_ips
 
-        # FASE C: MACs (Borrar)
+        # PHASE C: MACs (Delete)
         del_macs, err_macs = _prune_orphan_macs(
             endpoints.mac_addresses, assigned_type, iface_id, csv_macs, dry_run
         )
@@ -4717,7 +4717,7 @@ def _prune_network_orphans(
 def _get_interface_endpoint_and_filter(
     endpoints: NetBoxEndpoints, obj_id: int, node_type: NodeType
 ) -> tuple[Endpoint, dict[str, Any]]:
-    """Determina el endpoint y filtro correcto de interfaces según el tipo de nodo."""
+    """Determines the right interface endpoint and filter according to the node type."""
     if node_type == NodeType.DEVICE:
         return endpoints.device_interfaces, {"device_id": obj_id}
     return endpoints.vm_interfaces, {"virtual_machine_id": obj_id}
@@ -4728,7 +4728,7 @@ def _fetch_interfaces_cache(
     iface_filter: dict[str, Any],
     obj_id: int,
 ) -> NameCache:
-    """Obtiene las interfaces existentes de un nodo desde NetBox."""
+    """Gets the existing interfaces of a node from NetBox."""
     if obj_id == 0:
         return {}
     filtered_ifaces = list(iface_endpoint.filter(**iface_filter))
@@ -4743,8 +4743,8 @@ def _process_interfaces_sync(
     endpoints: NetBoxEndpoints,
     dry_run: bool,
 ) -> tuple[InterfaceSyncResult, NameCache]:
-    """Ejecuta la sincronización de una lista de interfaces y recopila IPs asignadas.
-    Retorna una tupla: (InterfaceSyncResult, caché actualizada)."""
+    """Executes the synchronization of a list of interfaces and collects assigned IPs.
+    Returns a tuple: (InterfaceSyncResult, updated cache)."""
     errors = 0
     ipv4_candidates: list[Ipv4Candidate] = []
     any_changes = False
@@ -4769,7 +4769,7 @@ def _process_interfaces_sync(
                         Ipv4Candidate(int(getattr(ip_obj, "id", 0)), iface_obj, mac_obj)
                     )
         except NetBoxApiError as e:
-            log.error("ERROR de API sincronizando interfaz: %s", e)
+            log.error("API ERROR synchronizing interface: %s", e)
             errors += 1
 
     return InterfaceSyncResult(errors, ipv4_candidates, any_changes), ifaces_cache
@@ -4782,7 +4782,7 @@ def _log_interface_deltas(
     prune_network_orphans: bool,
     renamed: int,
 ) -> None:
-    """Calcula y registra los deltas de las interfaces antes de sincronizar."""
+    """Computes and logs the deltas of the interfaces before synchronizing."""
     csv_names = {iface["name"] for iface in interfaces}
     cache_names = set(ifaces_cache.keys())
     to_create = csv_names - cache_names
@@ -4790,8 +4790,8 @@ def _log_interface_deltas(
     to_prune = cache_names - csv_names if prune_network_orphans else set()
 
     log.debug(
-        "Deltas de interfaces (obj_id=%s) -> Crear: %d | Actualizar: %d "
-        "(renombradas: %d) | Eliminar: %d",
+        "Interface deltas (obj_id=%s) -> Create: %d | Update: %d "
+        "(renamed: %d) | Delete: %d",
         obj_id,
         len(to_create),
         len(to_update),
@@ -4801,7 +4801,7 @@ def _log_interface_deltas(
 
 
 # ============================================================
-# DETECCIÓN DE RENOMBRES DE INTERFACES
+# DETECTION OF INTERFACE RENAMES
 # ============================================================
 
 
@@ -4812,12 +4812,12 @@ def _fetch_orphan_fingerprints(
     orphans: dict[str, NetBoxObject],
 ) -> dict[str, InterfaceFingerprint]:
     """
-    Obtiene de NetBox la identidad de red (IPs y MACs asignadas) de las interfaces huérfanas.
+    Gets from NetBox the network identity (assigned IPs and MACs) of the orphan interfaces.
 
-    Decisiones de diseño:
-    - Dos consultas por nodo (IPs y MACs filtradas por `device_id`/`virtual_machine_id`),
-      agrupadas localmente por interfaz: costo constante en lugar de una consulta por interfaz.
-    - Solo se invoca cuando el nodo tiene a la vez interfaces huérfanas y nuevas.
+    Design decisions:
+    - Two queries per node (IPs and MACs filtered by `device_id`/`virtual_machine_id`),
+      grouped locally by interface: constant cost instead of one query per interface.
+    - It is only invoked when the node has both orphan and new interfaces at once.
     """
     node_filter = (
         {"device_id": obj_id}
@@ -4847,7 +4847,7 @@ def _fetch_orphan_fingerprints(
 
 
 def _csv_interface_fingerprint(iface: NetworkInterfaceData) -> InterfaceFingerprint:
-    """Construye la identidad de red (IP host y MAC) de una interfaz del CSV."""
+    """Builds the network identity (host IP and MAC) of a CSV interface."""
     cidr = iface["cidr"]
     mac = iface["mac"]
     return InterfaceFingerprint(
@@ -4859,7 +4859,7 @@ def _csv_interface_fingerprint(iface: NetworkInterfaceData) -> InterfaceFingerpr
 def _csv_interface_fingerprints(
     interfaces: list[NetworkInterfaceData], names: set[str]
 ) -> dict[str, InterfaceFingerprint]:
-    """Construye la identidad de red de las interfaces del CSV indicadas en `names`."""
+    """Builds the network identity of the CSV interfaces listed in `names`."""
     return {
         iface["name"]: _csv_interface_fingerprint(iface)
         for iface in interfaces
@@ -4871,11 +4871,11 @@ def _unique_signal_owners(
     fingerprints: dict[str, InterfaceFingerprint],
 ) -> dict[str, str]:
     """
-    Indexa cada señal de identidad (IP host o MAC) a la única interfaz que la posee.
+    Indexes each identity signal (host IP or MAC) to the only interface that owns it.
 
-    Las señales presentes en más de una interfaz (ej. la MAC compartida por un bond y
-    sus miembros, o por subinterfaces VLAN) se descartan: no identifican a ninguna.
-    Retorna {señal: nombre_interfaz}; las señales se prefijan con su tipo.
+    Signals present in more than one interface (e.g. the MAC shared by a bond and
+    its members, or by VLAN subinterfaces) are discarded: they identify none.
+    Returns {signal: interface_name}; signals are prefixed with their type.
     """
     owners: dict[str, set[str]] = {}
     for name, fingerprint in fingerprints.items():
@@ -4890,12 +4890,12 @@ def _unique_signal_owners(
 
 
 def _warn_ambiguous_renames(side_label: str, candidates: dict[str, set[str]]) -> None:
-    """Advierte una sola vez por cada interfaz cuyas señales apuntan a varias interfaces."""
+    """Warns only once for each interface whose signals point to several interfaces."""
     for name, matches in sorted(candidates.items()):
         if len(matches) > 1:
             log.warning(
-                "Renombre ambiguo: la interfaz %s '%s' coincide con %s. "
-                "No se renombra; revise el inventario maestro.",
+                "Ambiguous rename: the %s interface '%s' matches %s. "
+                "It is not renamed; review the master inventory.",
                 side_label,
                 name,
                 sorted(matches),
@@ -4907,22 +4907,22 @@ def detect_interface_renames(
     newcomers: dict[str, InterfaceFingerprint],
 ) -> list[InterfaceRename]:
     """
-    Detecta interfaces que cambiaron de nombre comparando su identidad de red.
+    Detects interfaces that changed their name by comparing their network identity.
 
-    Decisiones de diseño:
-    - `orphans` son interfaces que existen en NetBox pero no en el CSV; `newcomers`, las
-      que están en el CSV pero no en NetBox. Un renombre conserva la IP y/o la MAC.
-    - Solo cuentan las señales únicas en cada lado (ver `_unique_signal_owners`).
-    - La pareja debe ser 1:1: cada huérfana con una sola candidata y viceversa. Si las
-      señales apuntan a interfaces distintas, no se renombra (se advierte): adivinar
-      podría asignar la identidad de una interfaz a otra.
+    Design decisions:
+    - `orphans` are interfaces that exist in NetBox but not in the CSV; `newcomers`, those
+      that are in the CSV but not in NetBox. A rename keeps the IP and/or the MAC.
+    - Only the signals unique on each side count (see `_unique_signal_owners`).
+    - The pair must be 1:1: each orphan with a single candidate and vice versa. If the
+      signals point to different interfaces, it is not renamed (a warning is issued): guessing
+      could assign the identity of one interface to another.
 
-    Retorna los renombres aceptados, ordenados por nombre anterior.
+    Returns the accepted renames, sorted by previous name.
     """
     orphan_owner = _unique_signal_owners(orphans)
     newcomer_owner = _unique_signal_owners(newcomers)
 
-    # Señales compartidas por exactamente una huérfana y una nueva.
+    # Signals shared by exactly one orphan and one new interface.
     evidence: dict[tuple[str, str], list[str]] = {}
     for signal, orphan_name in orphan_owner.items():
         newcomer_name = newcomer_owner.get(signal)
@@ -4935,8 +4935,8 @@ def detect_interface_renames(
         candidates_by_orphan.setdefault(orphan_name, set()).add(newcomer_name)
         candidates_by_newcomer.setdefault(newcomer_name, set()).add(orphan_name)
 
-    _warn_ambiguous_renames("existente", candidates_by_orphan)
-    _warn_ambiguous_renames("nueva", candidates_by_newcomer)
+    _warn_ambiguous_renames("existing", candidates_by_orphan)
+    _warn_ambiguous_renames("new", candidates_by_newcomer)
 
     return [
         InterfaceRename(orphan_name, newcomer_name, ", ".join(sorted(signals)))
@@ -4954,10 +4954,10 @@ def _resolve_interface_renames(
     ifaces_cache: NameCache,
 ) -> list[InterfaceRename]:
     """
-    Detecta los renombres de interfaces de un nodo existente en NetBox.
+    Detects the interface renames of a node that exists in NetBox.
 
-    Solo consulta NetBox cuando hay a la vez interfaces huérfanas y nuevas, de modo que
-    un nodo sin cambios de nombre no agrega peticiones.
+    It only queries NetBox when there are both orphan and new interfaces at once, so that
+    a node without name changes adds no requests.
     """
     csv_names = {iface["name"] for iface in interfaces}
     orphan_names = ifaces_cache.keys() - csv_names
@@ -4973,7 +4973,7 @@ def _resolve_interface_renames(
     renames = detect_interface_renames(orphan_fingerprints, newcomer_fingerprints)
     for rename in renames:
         log.info(
-            "Renombre de interfaz detectado en objeto %s: '%s' -> '%s' (coincidencia: %s).",
+            "Interface rename detected in object %s: '%s' -> '%s' (match: %s).",
             obj_id,
             rename.old_name,
             rename.new_name,
@@ -4986,10 +4986,10 @@ def rekey_interfaces_cache(
     cache: NameCache, renames: list[InterfaceRename]
 ) -> NameCache:
     """
-    Retorna una caché nueva donde cada interfaz renombrada queda bajo su nombre nuevo.
+    Returns a new cache where each renamed interface sits under its new name.
 
-    Al re-indexar, el upsert de la interfaz encuentra el objeto existente y emite un
-    único PATCH con el nombre nuevo: se conservan su ID, IPs, MACs, cables e historial.
+    When re-indexing, the upsert of the interface finds the existing object and issues a
+    single PATCH with the new name: its ID, IPs, MACs, cables and history are kept.
     """
     new_name_by_old = {rename.old_name: rename.new_name for rename in renames}
     return {new_name_by_old.get(name, name): obj for name, obj in cache.items()}
@@ -5002,8 +5002,8 @@ def _sync_interfaces_for_object(
     interfaces: list[NetworkInterfaceData],
     args: argparse.Namespace,
 ) -> InterfaceSyncResult:
-    """Sincroniza interfaces y sus IPs para un Device o VM.
-    Retorna: InterfaceSyncResult."""
+    """Synchronizes interfaces and their IPs for a Device or VM.
+    Returns: InterfaceSyncResult."""
     iface_endpoint, iface_filter = _get_interface_endpoint_and_filter(
         endpoints, obj_id, node_type
     )
@@ -5055,8 +5055,8 @@ def _assign_primary_resource(
     resource_type_label: str,
 ) -> bool:
     """
-    Helper genérico para asignar recursos primarios (IP primaria, MAC primaria).
-    Retorna True si se asignó exitosamente (o se simuló en dry-run), False de lo contrario.
+    Generic helper to assign primary resources (primary IP, primary MAC).
+    Returns True if it was assigned successfully (or simulated in dry-run), False otherwise.
     """
     current_primary = getattr(target_obj, field_name, None)
     current_primary_id = (
@@ -5068,7 +5068,7 @@ def _assign_primary_resource(
 
     if dry_run:
         log.info(
-            "[DRY-RUN] WOULD UPDATE %s %s a %s",
+            "[DRY-RUN] WOULD UPDATE %s %s to %s",
             resource_type_label,
             resource_val,
             log_context,
@@ -5078,16 +5078,14 @@ def _assign_primary_resource(
     try:
         cast(Record, target_obj).update({field_name: resource_id})
         log.info(
-            "%s asignada a %s: %s",
+            "%s assigned to %s: %s",
             resource_type_label.capitalize(),
             log_context,
             resource_val,
         )
         return True
     except RequestError as e:
-        log.error(
-            "Error al actualizar %s en %s: %s", resource_type_label, log_context, e
-        )
+        log.error("Error updating %s on %s: %s", resource_type_label, log_context, e)
         return False
 
 
@@ -5098,17 +5096,17 @@ def _assign_primary_ipv4(
     dry_run: bool,
 ) -> bool:
     """
-    Define la dirección IPv4 indicada como IP primaria (primary_ip4) del dispositivo/VM.
-    Retorna True si se asignó exitosamente (o se simuló en dry-run), False de lo contrario.
+    Sets the given IPv4 address as the primary IP (primary_ip4) of the device/VM.
+    Returns True if it was assigned successfully (or simulated in dry-run), False otherwise.
     """
     return _assign_primary_resource(
         target_obj=main_obj,
         field_name="primary_ip4",
         resource_id=primary_id,
         resource_val=f"(ID={primary_id})",
-        log_context=f"nodo '{machine_name}'",
+        log_context=f"node '{machine_name}'",
         dry_run=dry_run,
-        resource_type_label="IP primaria",
+        resource_type_label="primary IP",
     )
 
 
@@ -5118,8 +5116,8 @@ def _assign_primary_mac(
     dry_run: bool,
 ) -> bool:
     """
-    Asigna la MAC como primaria en la interfaz si aún no lo está.
-    Retorna True si se asignó exitosamente (o se simuló en dry-run), False de lo contrario.
+    Assigns the MAC as primary on the interface if it is not already.
+    Returns True if it was assigned successfully (or simulated in dry-run), False otherwise.
     """
     if not mac_obj:
         return False
@@ -5133,9 +5131,9 @@ def _assign_primary_mac(
         field_name="primary_mac_address",
         resource_id=mac_id,
         resource_val=mac_addr,
-        log_context=f"interfaz '{iface_name}'",
+        log_context=f"interface '{iface_name}'",
         dry_run=dry_run,
-        resource_type_label="MAC primaria",
+        resource_type_label="primary MAC",
     )
 
 
@@ -5149,15 +5147,15 @@ def process_interfaces_and_ips(
     machine_name: str,
 ) -> tuple[int, bool]:
     """
-    Orquesta la sincronización de interfaces hijas y gestiona la asignación de redes primarias.
+    Orchestrates the synchronization of child interfaces and manages the assignment of primary networks.
 
-    Decisiones de diseño:
-    - Asignación Primaria Segura: Si (y solo si) existe un único candidato IPv4/MAC válido
-      para todo el nodo, se le asigna de forma automática como IP/MAC primaria del dispositivo.
-      Si hay múltiples, NetBox exige resolución manual para evitar ambigüedades destructivas.
+    Design decisions:
+    - Safe primary assignment: If (and only if) there is a single valid IPv4/MAC candidate
+      for the whole node, it is automatically assigned as the primary IP/MAC of the device.
+      If there are several, NetBox requires manual resolution to avoid destructive ambiguities.
 
-    Retorna:
-        tuple[int, bool]: Una tupla con (cantidad_de_errores, boolean_hubo_cambios_reales).
+    Returns:
+        tuple[int, bool]: A tuple with (number_of_errors, boolean_there_were_real_changes).
     """
     iface_errors, ipv4_candidates, ifaces_changed = _sync_interfaces_for_object(
         endpoints,
@@ -5195,23 +5193,23 @@ def _classify_rows(
     counts: SyncCounts,
 ) -> tuple[ClassifiedRows, SyncCounts]:
     """
-    Clasifica las filas del CSV separando dispositivos físicos (Devices)
-    de máquinas virtuales (VMs).
+    Classifies the CSV rows, separating physical devices (Devices)
+    from virtual machines (VMs).
 
-    Decisiones de diseño:
-    - Orden de Dependencia: En NetBox, una VM pertenece a un Cluster, el cual
-      suele depender de un Host Device. Para evitar el fallo de dependencias
-      circulares o rotas, garantizamos que todo el hardware físico (Devices)
-      se sincronice estrictamente en una fase anterior a las VMs.
-    - Tolerancia a Fallos: Atrapa errores de validación (ej. falta de OS)
-      al vuelo, logueando el error y escalando el contador sin quebrar el pipeline.
-    - Las filas descartadas no se devuelven: no participan de las fases de
-      sincronización ni, en `main`, del conteo de unicidad de identidades.
-    - `line_numbers` trae la línea física de cada fila en el archivo (no su índice),
-      para que los logs apunten al lugar correcto aun con celdas multilínea.
+    Design decisions:
+    - Dependency order: In NetBox, a VM belongs to a Cluster, which
+      usually depends on a Host Device. To avoid the failure of circular
+      or broken dependencies, we guarantee that all the physical hardware (Devices)
+      is synchronized strictly in a phase prior to the VMs.
+    - Fault tolerance: It catches validation errors (e.g. missing OS)
+      on the fly, logging the error and bumping the counter without breaking the pipeline.
+    - Discarded rows are not returned: they take no part in the synchronization
+      phases nor, in `main`, in the identity uniqueness count.
+    - `line_numbers` carries the physical line of each row in the file (not its index),
+      so that the logs point to the right place even with multiline cells.
 
-    Retorna:
-        tuple[ClassifiedRows, SyncCounts]: Las filas separadas y los contadores mutados.
+    Returns:
+        tuple[ClassifiedRows, SyncCounts]: The separated rows and the mutated counters.
     """
     device_rows: list[NumberedRow] = []
     vm_rows: list[NumberedRow] = []
@@ -5225,13 +5223,13 @@ def _classify_rows(
                 vm_rows.append(NumberedRow(row_num, row))
         except RowValidationError as e:
             machine_name = (
-                extract_csv_value(row, "machine_name", config) or f"línea {row_num}"
+                extract_csv_value(row, "machine_name", config) or f"line {row_num}"
             )
-            log.error("ERROR línea %d ('%s'): %s", row_num, machine_name, e)
+            log.error("ERROR line %d ('%s'): %s", row_num, machine_name, e)
             counts[SyncStatus.ERROR] += 1
 
     log.info(
-        "Clasificación: %d device(s), %d VM(s), %d error(es) de tipo.",
+        "Classification: %d device(s), %d VM(s), %d type error(s).",
         len(device_rows),
         len(vm_rows),
         counts[SyncStatus.ERROR],
@@ -5255,18 +5253,18 @@ def _process_node_sync(
     dry_run: bool,
 ) -> tuple[SyncResult, CacheStore]:
     """
-    Actúa como despachador (dispatcher) polimórfico para sincronizar nodos (Device o VM).
+    Acts as a polymorphic dispatcher to synchronize nodes (Device or VM).
 
-    Decisiones de diseño:
-    - Abstracción: Oculta la complejidad de las diferentes jerarquías requeridas por
-      físicos y virtuales al pipeline principal.
-    - Propagación de Caché: En caso de crear/actualizar un Device, se guarda inmediatamente
-      su ID en `caches.host_devices`. Así, si una VM subsecuente en el mismo CSV lo
-      declara como su hipervisor, evitamos un viaje de red costoso (API call) inyectando
-      directamente el ID cacheado.
+    Design decisions:
+    - Abstraction: It hides from the main pipeline the complexity of the different
+      hierarchies required by physical and virtual nodes.
+    - Cache propagation: When a Device is created/updated, its ID is immediately stored
+      in `caches.host_devices`. This way, if a subsequent VM in the same CSV
+      declares it as its hypervisor, we avoid a costly network trip (API call) by injecting
+      the cached ID directly.
 
-    Retorna:
-        tuple[SyncResult, CacheStore]: El resultado final y la caché propagada.
+    Returns:
+        tuple[SyncResult, CacheStore]: The final result and the propagated cache.
     """
     if node_type == NodeType.DEVICE:
         sync_res, caches = sync_device(
@@ -5315,22 +5313,22 @@ def _sync_row(
     args: argparse.Namespace,
 ) -> tuple[SyncCounts, CacheStore]:
     """
-    Unidad de trabajo (Unit of Work) para procesar de forma atómica una fila completa del CSV.
+    Unit of Work to atomically process a whole row of the CSV.
 
-    Decisiones de diseño:
-    - Tolerancia a Fallos (Fault Tolerance): Captura proactivamente todas las excepciones
-      de dominio (Skip, Error de API, Validación) garantizando que un nodo corrupto no
-      quiebre todo el pipeline ETL, permitiendo que el resto de filas se procesen.
-    - `row_num` es la línea real del CSV donde empieza la fila.
-    - Escalada de Estado: Si el objeto padre (Device/VM) no sufrió cambios (UNCHANGED),
-      pero alguna de sus interfaces hijas sí fue creada o actualizada, se escala el
-      estado final del nodo a UPDATED para que los reportes de ejecución reflejen
-      el cambio global de la entidad.
+    Design decisions:
+    - Fault tolerance: It proactively catches all the domain
+      exceptions (Skip, API Error, Validation), guaranteeing that a corrupt node does not
+      break the whole ETL pipeline, allowing the rest of the rows to be processed.
+    - `row_num` is the real line of the CSV where the row starts.
+    - Status escalation: If the parent object (Device/VM) had no changes (UNCHANGED),
+      but any of its child interfaces was created or updated, the final status
+      of the node is escalated to UPDATED so that the execution reports reflect
+      the global change of the entity.
 
-    Retorna:
-        tuple[SyncCounts, CacheStore]: El acumulador de métricas mutado y la caché propagada.
+    Returns:
+        tuple[SyncCounts, CacheStore]: The mutated metrics accumulator and the propagated cache.
     """
-    machine_name = extract_csv_value(row, "machine_name", config) or f"línea {row_num}"
+    machine_name = extract_csv_value(row, "machine_name", config) or f"line {row_num}"
 
     try:
         sync_res, caches = _process_node_sync(
@@ -5350,19 +5348,19 @@ def _sync_row(
         result, obj_id, main_obj = sync_res
     except ConfigValidationError as e:
         raise ConfigValidationError(
-            f"Error de configuración en línea {row_num}: {e}"
+            f"Configuration error on line {row_num}: {e}"
         ) from e
     except RowSkipCondition as e:
-        log.warning("SKIP línea %d: %s", row_num, e)
+        log.warning("SKIP line %d: %s", row_num, e)
         counts[SyncStatus.SKIPPED] += 1
         return counts, caches
     except (NetBoxApiError, RowValidationError, RequestError) as e:
-        log.error("ERROR de API o validación en línea %d: %s", row_num, e)
+        log.error("API or validation ERROR on line %d: %s", row_num, e)
         counts[SyncStatus.ERROR] += 1
         return counts, caches
     except Exception:
         log.exception(
-            "ERROR inesperado al procesar línea %d ('%s')",
+            "Unexpected ERROR while processing line %d ('%s')",
             row_num,
             machine_name,
         )
@@ -5371,29 +5369,29 @@ def _sync_row(
 
     counts[result] += 1
 
-    # ── Validar ID para interfaces (Fail-Fast) ────────────
+    # ── Validate ID for interfaces (Fail-Fast) ────────────
     if not obj_id:
         if not args.dry_run:
-            log.warning("SKIP interfaces de '%s': el objeto no tiene ID.", machine_name)
+            log.warning("SKIP interfaces of '%s': the object has no ID.", machine_name)
         return counts, caches
 
-    # ── Parsear interfaces ────────────────────────────────
+    # ── Parse interfaces ──────────────────────────────────
     try:
         interfaces = parse_row_interfaces(row, machine_name, config)
     except RowValidationError as e:
         log.error(
-            "Error de validación en interfaces de '%s': %s. Se omitirán.",
+            "Validation error in interfaces of '%s': %s. They will be skipped.",
             machine_name,
             e,
         )
         counts[SyncStatus.ERROR] += 1
         return counts, caches
     except Exception:
-        log.exception("ERROR inesperado al parsear interfaces de '%s'", machine_name)
+        log.exception("Unexpected ERROR while parsing interfaces of '%s'", machine_name)
         counts[SyncStatus.ERROR] += 1
         return counts, caches
 
-    # ── Sincronizar interfaces del objeto ─────────────────
+    # ── Synchronize the interfaces of the object ──────────
     try:
         iface_errors, any_changes = process_interfaces_and_ips(
             endpoints,
@@ -5413,7 +5411,7 @@ def _sync_row(
 
     except Exception:
         log.exception(
-            "ERROR inesperado al sincronizar interfaces de '%s'", machine_name
+            "Unexpected ERROR while synchronizing interfaces of '%s'", machine_name
         )
         counts[SyncStatus.ERROR] += 1
 
@@ -5426,22 +5424,22 @@ def _print_summary_and_exit(
     dry_run: bool,
 ) -> NoReturn:
     """
-    Imprime el resumen de la operación y finaliza la ejecución.
-    Finaliza con sys.exit().
+    Prints the summary of the operation and ends the execution.
+    Ends with sys.exit().
     """
     summary = (
         "\n" + "=" * 50 + "\n"
-        "Resumen de exportación a NetBox\n" + "=" * 50 + "\n"
-        f"  Total filas procesadas : {total_rows}\n"
-        f"  Creados                : {counts[SyncStatus.CREATED]}\n"
-        f"  Actualizados           : {counts[SyncStatus.UPDATED]}\n"
-        f"  Sin cambios            : {counts[SyncStatus.UNCHANGED]}\n"
-        f"  Omitidos (SKIP)        : {counts[SyncStatus.SKIPPED]}\n"
-        f"  Errores                : {counts[SyncStatus.ERROR]}\n" + "=" * 50
+        "NetBox export summary\n" + "=" * 50 + "\n"
+        f"  Total rows processed   : {total_rows}\n"
+        f"  Created                : {counts[SyncStatus.CREATED]}\n"
+        f"  Updated                : {counts[SyncStatus.UPDATED]}\n"
+        f"  Unchanged              : {counts[SyncStatus.UNCHANGED]}\n"
+        f"  Skipped (SKIP)         : {counts[SyncStatus.SKIPPED]}\n"
+        f"  Errors                 : {counts[SyncStatus.ERROR]}\n" + "=" * 50
     )
 
     if dry_run:
-        summary += "\n(Modo DRY-RUN: no se realizaron cambios en NetBox)"
+        summary += "\n(DRY-RUN mode: no changes were made in NetBox)"
 
     log.info(summary)
 
@@ -5450,37 +5448,37 @@ def _print_summary_and_exit(
 
 def main() -> None:
     """
-    Punto de entrada principal para la sincronización del inventario con NetBox.
+    Main entry point for the synchronization of the inventory with NetBox.
     """
     parser = argparse.ArgumentParser(
-        description="Exporta merged_inventory.csv a NetBox 4.6+"
+        description="Exports merged_inventory.csv to NetBox 4.6+"
     )
     parser.add_argument(
         "csv",
         type=Path,
-        help="Ruta al CSV fusionado (merged_inventory.csv).",
+        help="Path to the merged CSV (merged_inventory.csv).",
     )
     parser.add_argument(
         "mapping",
         type=Path,
         nargs="?",
         default=None,
-        help="Ruta a netbox_mapping.yaml (por defecto: config/netbox_mapping.yaml).",
+        help="Path to netbox_mapping.yaml (default: config/netbox_mapping.yaml).",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Muestra las operaciones sin modificar NetBox.",
+        help="Shows the operations without modifying NetBox.",
     )
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Activa logs de nivel DEBUG.",
+        help="Enables DEBUG level logs.",
     )
     parser.add_argument(
         "--prune-network-orphans",
         action="store_true",
-        help="Elimina las interfaces de NetBox que ya no existan en el CSV para ese nodo.",
+        help="Deletes the NetBox interfaces that no longer exist in the CSV for that node.",
     )
 
     args = parser.parse_args()
@@ -5489,37 +5487,37 @@ def main() -> None:
         log.setLevel(logging.DEBUG)
 
     if args.dry_run:
-        log.info("Modo DRY-RUN activado. No se modificará NetBox.")
+        log.info("DRY-RUN mode enabled. NetBox will not be modified.")
 
-    # ── Cargar variables de entorno desde .env si existe ────
+    # ── Load environment variables from .env if it exists ───
     load_dotenv()
 
-    # ── Cargar configuración ─────────────────────────────────
+    # ── Load configuration ───────────────────────────────────
     mapping_path = resolve_mapping_path(args.mapping)
     config: NetBoxMappingConfig = load_config(mapping_path)
 
-    # ── Leer y Validar CSV (Fail-Fast) ───────────────────────
+    # ── Read and Validate CSV (Fail-Fast) ────────────────────
     csv_data = read_and_validate_csv(args.csv, config)
 
-    # ── Cargar credenciales ──────────────────────────────────
+    # ── Load credentials ─────────────────────────────────────
     url, token, verify_ssl = load_env()
 
-    # ── Conectar ─────────────────────────────────────────────
+    # ── Connect ──────────────────────────────────────────────
     nb: Api = build_nb_client(url, token, verify_ssl)
 
-    # ── Validar endpoints requeridos ─────────────────────────
+    # ── Validate required endpoints ──────────────────────────
     endpoints: NetBoxEndpoints = build_netbox_endpoints(nb)
 
-    # ── Garantizar custom fields ─────────────────────────────
+    # ── Ensure custom fields ─────────────────────────────────
     ensure_custom_fields(endpoints, config, args.dry_run)
 
-    # ── Garantizar taxonomía global ──────────────────────────
+    # ── Ensure global taxonomy ───────────────────────────────
     site: NetBoxObject = ensure_site(endpoints.sites, config.site, args.dry_run)
 
-    # ── Inicializar caches ───────────────────────────────────
+    # ── Initialize caches ────────────────────────────────────
     caches: CacheStore = CacheStore()
 
-    # ── Contadores ───────────────────────────────────────────
+    # ── Counters ─────────────────────────────────────────────
     counts: SyncCounts = {
         SyncStatus.CREATED: 0,
         SyncStatus.UPDATED: 0,
@@ -5528,27 +5526,27 @@ def main() -> None:
         SyncStatus.ERROR: 0,
     }
 
-    # Los registros con estructura inválida ya se descartaron al leer el CSV
-    # y deben reflejarse en el resumen y en el código de salida.
+    # Records with an invalid structure were already discarded when reading the CSV
+    # and must be reflected in the summary and in the exit code.
     counts[SyncStatus.ERROR] += csv_data.rejected_rows
 
-    # ── Clasificar filas por tipo de nodo ─────────────────────
+    # ── Classify rows by node type ────────────────────────────
     classified_rows, counts = _classify_rows(
         csv_data.rows, csv_data.line_numbers, config, counts
     )
     device_rows = classified_rows.device_rows
     vm_rows = classified_rows.vm_rows
 
-    # ── Conteo global de identidades (nombre y UUID) ─────────
-    # Usado para validar unicidad antes de permitir actualizaciones sobre
-    # objetos existentes. Se calcula solo sobre las filas clasificadas.
+    # ── Global identity count (name and UUID) ────────────────
+    # Used to validate uniqueness before allowing updates on
+    # existing objects. It is computed only over the classified rows.
     classified_only = [numbered.row for numbered in (*device_rows, *vm_rows)]
     csv_counts = CsvIdentityCounts(
         names=count_machine_names(classified_only, config),
         uuids=count_inventory_uuids(classified_only, config),
     )
 
-    # ── Pre-escaneo: asociar clústeres con su tecnología ─────
+    # ── Pre-scan: associate clusters with their technology ───
     device_rows_only = [numbered.row for numbered in device_rows]
     cluster_type_map = precompute_cluster_type_map(device_rows_only, config)
     fallback_cluster_type, caches.cluster_types = ensure_dynamic_cluster_types(
@@ -5559,16 +5557,16 @@ def main() -> None:
         args.dry_run,
     )
 
-    # ── Pre-escaneo: atributos de DeviceType consolidados por modelo ──
+    # ── Pre-scan: DeviceType attributes consolidated per model ──
     device_type_attrs = precompute_device_type_attributes(device_rows, config)
 
-    # ── Garantizar taxonomía local ──────────────────────────
+    # ── Ensure local taxonomy ───────────────────────────────
     _, caches.device_roles = ensure_all_device_roles(
         endpoints, config.device_roles, caches.device_roles, args.dry_run
     )
 
-    # ── Fase 1: Sincronizar Devices ──────────────────────────
-    log.info("── Fase 1: Sincronizando %d Device(s) ──", len(device_rows))
+    # ── Phase 1: Synchronize Devices ─────────────────────────
+    log.info("── Phase 1: Synchronizing %d Device(s) ──", len(device_rows))
     for row_num, row in device_rows:
         counts, caches = _sync_row(
             row_num,
@@ -5586,8 +5584,8 @@ def main() -> None:
             args,
         )
 
-    # ── Fase 2: Sincronizar VMs ──────────────────────────────
-    log.info("── Fase 2: Sincronizando %d VM(s) ──", len(vm_rows))
+    # ── Phase 2: Synchronize VMs ─────────────────────────────
+    log.info("── Phase 2: Synchronizing %d VM(s) ──", len(vm_rows))
     for row_num, row in vm_rows:
         counts, caches = _sync_row(
             row_num,
@@ -5605,7 +5603,7 @@ def main() -> None:
             args,
         )
 
-    # ── Resumen ──────────────────────────────────────────────
+    # ── Summary ──────────────────────────────────────────────
     _print_summary_and_exit(len(csv_data.rows), counts, args.dry_run)
 
 
@@ -5613,8 +5611,8 @@ if __name__ == "__main__":
     try:
         main()
     except ConfigValidationError as e:
-        log.critical("ERROR DE CONFIGURACIÓN. ABORTANDO PIPELINE: %s", e)
+        log.critical("CONFIGURATION ERROR. ABORTING PIPELINE: %s", e)
         sys.exit(1)
     except NetBoxApiError as e:
-        log.critical("ERROR DE API. ABORTANDO PIPELINE: %s", e)
+        log.critical("API ERROR. ABORTING PIPELINE: %s", e)
         sys.exit(1)

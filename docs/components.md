@@ -16,7 +16,7 @@ Runs every stage end to end and stops at the first one that exits with a non-zer
 | **Outputs** | All intermediate artifacts in `output/`; optionally `output/<master>_updated.<ext>` |
 | **Sequence** | parse → prepare → merge → export `--dry-run` → confirmation → export → (`--update-master`) |
 | **Isolation** | Each stage runs as `python -m inventory_pipeline.<module>` with the same interpreter. Stages exit through `sys.exit()` and the exporter configures logging globally, so a subprocess keeps every stage identical to a manual run and makes its exit code the only success signal |
-| **Confirmation** | Interactive `[s/N]` prompt after the dry-run; `--yes` skips it. Without a terminal and without `--yes` it aborts before the first stage instead of guessing |
+| **Confirmation** | Interactive `[y/N]` prompt after the dry-run; `--yes` skips it. Without a terminal and without `--yes` it aborts before the first stage instead of guessing |
 | **Exit codes** | `0` completed or declined, `1` orchestrator error, code of the first failed stage, `130` on Ctrl+C |
 
 See [Usage & Configuration](usage_and_config.md#orchestrated-run-recommended) for the options.

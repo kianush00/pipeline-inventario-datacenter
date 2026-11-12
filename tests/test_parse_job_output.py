@@ -1,14 +1,40 @@
+import re
 import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from inventory_pipeline.base_inventory import load_rundeck_header_list
 from inventory_pipeline.parse_job_output import csv_field, main, parse_key_value_field
+from inventory_pipeline.paths import DEFAULT_HEADER_LIST_PATH, PROJECT_ROOT
+
+COLLECTOR_SCRIPT = PROJECT_ROOT / "collectors" / "asset_information.sh"
+
+
+class TestCollectorContract:
+    """Validates that the Rundeck collector and the parser agree on the keys."""
+
+    def test_collector_output_keys_match_header_list(self) -> None:
+        """A key emitted by the collector but missing from rundeck_header_list.txt is
+        fatal for the parser, and a column the collector no longer emits is silently
+        filled with N/A: both lists must name exactly the same columns."""
+        script = COLLECTOR_SCRIPT.read_text(encoding="utf-8")
+        keys_block = re.search(
+            r"^OUTPUT_KEYS=\(\r?\n(.*?)^\)", script, re.MULTILINE | re.DOTALL
+        )
+        assert keys_block is not None, "OUTPUT_KEYS array not found in the collector"
+
+        collector_keys = re.findall(r'"([^"]*)"', keys_block.group(1))
+        header_names = [
+            name for name, _flag in load_rundeck_header_list(DEFAULT_HEADER_LIST_PATH)
+        ]
+
+        assert sorted(collector_keys) == sorted(header_names)
 
 
 class TestCsvField:
-    """Valida la conversión a formato CSV y el escape de comillas."""
+    """Validates the conversion to CSV format and quote escaping."""
 
     @pytest.mark.parametrize(
         "value, expected",
@@ -17,7 +43,7 @@ class TestCsvField:
             ("", '""'),
             (" ", '" "'),
             ("N/A", '"N/A"'),
-            # Escape de comillas dobles internas
+            # Escaping of inner double quotes
             ('say "hi"', '"say ""hi"""'),
             ('""', '""""""'),
             ('"already_quoted"', '"""already_quoted"""'),
@@ -28,7 +54,7 @@ class TestCsvField:
 
 
 class TestParseKeyValueField:
-    """Valida el parseo de campos en formato CLAVE="VALOR"."""
+    """Validates the parsing of fields in KEY="VALUE" format."""
 
     def test_parse_valid_field(self) -> None:
         assert parse_key_value_field('IP="10.0.0.1"') == ("IP", "10.0.0.1")
@@ -53,19 +79,19 @@ class TestParseKeyValueField:
         assert parse_key_value_field("IP=") is None
 
     def test_parse_key_with_spaces(self) -> None:
-        # El parser actual no hace strip de la clave
-        # Esto significa que los espacios son tomados literalmente.
-        # Puede ser considerado un edge case de comportamiento actual.
+        # The current parser does not strip the key
+        # This means that spaces are taken literally.
+        # It can be considered an edge case of the current behavior.
         assert parse_key_value_field(' MY_KEY ="123"') == (" MY_KEY ", "123")
 
     def test_parse_value_with_internal_quotes(self) -> None:
-        # Si el string arranca y termina con comillas, strip_quotes se las saca.
-        # El resto queda intacto.
+        # If the string starts and ends with quotes, strip_quotes removes them.
+        # The rest is left untouched.
         assert parse_key_value_field('DESC="Server "01""') == ("DESC", 'Server "01"')
 
 
 class TestParseJobOutputMain:
-    """Valida el flujo de integración principal (main)."""
+    """Validates the main integration flow (main)."""
 
     @pytest.fixture
     def setup_files(self, tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -78,11 +104,11 @@ class TestParseJobOutputMain:
 
     def test_main_happy_path(self, setup_files: tuple[Path, Path, Path]) -> None:
         input_log, output_csv, header_list = setup_files
-        # Agregamos una línea basura que debe ser ignorada.
+        # We add a garbage line that must be ignored.
         input_log.write_text(
             "Starting job...\n"
             'UUID="123",IP="10.0.0.1",MAC="aa:bb"\n'
-            'UUID="456",IP="10.0.0.2",NOTES="hello"\n'  # NOTES flag 0, se descarta
+            'UUID="456",IP="10.0.0.2",NOTES="hello"\n'  # NOTES flag 0, discarded
             "Done.\n"
         )
 
@@ -104,7 +130,7 @@ class TestParseJobOutputMain:
         self, setup_files: tuple[Path, Path, Path]
     ) -> None:
         input_log, output_csv, header_list = setup_files
-        # BAD_KEY no está en rundeck_header_list
+        # BAD_KEY is not in rundeck_header_list
         input_log.write_text('UUID="123",IP="10.0.0.1",BAD_KEY="uh oh"\n')
 
         with (
@@ -121,7 +147,7 @@ class TestParseJobOutputMain:
         self, setup_files: tuple[Path, Path, Path]
     ) -> None:
         input_log, output_csv, header_list = setup_files
-        # IP declarada dos veces en la misma línea
+        # IP declared twice on the same line
         input_log.write_text('UUID="123",IP="10.0.0.1",IP="10.0.0.2"\n')
 
         with (
@@ -138,8 +164,8 @@ class TestParseJobOutputMain:
         self, setup_files: tuple[Path, Path, Path]
     ) -> None:
         input_log, output_csv, header_list = setup_files
-        # Línea con al menos un key válido (UUID), pero tiene un campo corrupto
-        input_log.write_text('UUID="123",CORRUPTO,IP="10.0.0.1"\n')
+        # Line with at least one valid key (UUID), but it has a corrupt field
+        input_log.write_text('UUID="123",CORRUPT,IP="10.0.0.1"\n')
 
         with (
             patch.object(
@@ -194,7 +220,7 @@ class TestParseJobOutputMain:
         self, setup_files: tuple[Path, Path, Path]
     ) -> None:
         input_log, output_csv, header_list = setup_files
-        # Forzar un error fatal durante el procesamiento (ej. clave inválida)
+        # Force a fatal error during processing (e.g. invalid key)
         input_log.write_text('UUID="123",BAD_KEY="uh oh"\\n')
 
         with (
@@ -207,8 +233,8 @@ class TestParseJobOutputMain:
         ):
             main()
 
-        # El archivo de salida final no debe haber sido creado (ya que falló antes de moverlo)
+        # The final output file must not have been created (since it failed before moving it)
         assert not output_csv.exists()
-        # Verificar que no existen archivos temporales huérfanos en el directorio
+        # Verify that no orphan temporary files exist in the directory
         tmp_files = list(output_csv.parent.glob(f".{output_csv.name}.*.tmp"))
         assert len(tmp_files) == 0
